@@ -1,0 +1,6 @@
+# 数据源
+Pro_proc_data/
+data_events/
+# 数据结果
+learn_batch/
+learn/sub-*/
