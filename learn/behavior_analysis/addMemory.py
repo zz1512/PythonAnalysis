@@ -2,7 +2,7 @@ import os
 import glob
 import pandas as pd
 # ========= run7的行为分析：数据预处理，增加一列memory，作为是否记忆标识 =========
-base_dir = r"/data_events"  # 根目录
+base_dir = r"../../data_events"  # 根目录
 fileList = []
 # 遍历 sub-01 到 sub-28
 for i in range(1, 29):

@@ -20,7 +20,7 @@ from nilearn.glm.first_level import FirstLevelModel, make_first_level_design_mat
 # 参数区（请按实际情况修改）
 # =========================
 SUBJECTS = [f"sub-{i:02d}" for i in range(1, 29)]  # sub-01 ... sub-28
-RUNS = [3]  # 如需多 run，写成 [1,2,3]
+RUNS = [4]  # 如需多 run，写成 [1,2,3]
 TR_FALLBACK = 2.0
 
 # 数据路径模板（按你的命名来）

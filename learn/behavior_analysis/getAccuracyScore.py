@@ -15,7 +15,7 @@ Cohen's dz = 0.813
 Shapiro 正态性（差值）：W = 0.9508, p = 0.224628  (p>0.05 则差值近似正态)
 """
 # ========= 配置区（按你的实际情况改这几项） =========
-DATA_DIR = r"/data_events"  # 28个文件所在的目录
+DATA_DIR = r"../../data_events"  # 28个文件所在的目录
 FILE_PATTERN = "*run-7_events.tsv"                    # 通配符，例：'*events.tsv' 或 '*events.csv'；默认两者都行
 DV_COL = "memory"                           # 你的记忆效果指标列名，比如 'accuracy' 或 'memory_score' 或 'rt'
 YY_SET = {"yyw", "yyew"}

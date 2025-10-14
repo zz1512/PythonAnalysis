@@ -15,9 +15,9 @@ import pandas as pd
 
 # ===== 路径参数（按你的环境）=====
 FIRST_LEVEL_ROOT = Path(r"H:\PythonAnalysis\learn_batch")     # 你的一阶输出根目录
-RUN_ID = 3                                                     # run3
+RUN_ID = 4                                                     # run3
 CON_INDEX = 1                                                  # 对应 con_0001（yy - kj）
-SECOND_LEVEL_DIR = Path(r"H:\PythonAnalysis\learn_batch\2nd_level\yy_vs_kj")     # 与 MATLAB 一致
+SECOND_LEVEL_DIR = Path(r"H:\PythonAnalysis\learn_batch\2nd_level\run4\yy_vs_kj")     # 与 MATLAB 一致
 SECOND_LEVEL_DIR.mkdir(parents=True, exist_ok=True)
 
 # ===== 收集所有 con_0001.nii.gz 路径 =====
