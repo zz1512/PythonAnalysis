@@ -1,5 +1,11 @@
-# 這個留一法效果不如k折
+import logging
 import numpy as np
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 import pandas as pd
 from pathlib import Path
 from nilearn import image
@@ -27,12 +33,12 @@ CONTRASTS = [
 
 
 def log(message):
-    print(f"[MVPA] {message}", flush=True)
+    logging.info(f"[MVPA] {message}")
 
 
 def load_roi_masks(roi_dir):
     """加载预生成的ROI掩模"""
-    log("加载ROI掩模...")
+    logging.info("加载ROI掩模...")
     roi_masks = {}
 
     # 查找所有ROI文件
@@ -43,16 +49,16 @@ def load_roi_masks(roi_dir):
         try:
             roi_mask = image.load_img(str(roi_file))
             roi_masks[roi_name] = roi_mask
-            log(f"加载ROI: {roi_name}")
+            logging.info(f"加载ROI: {roi_name}")
         except Exception as e:
-            log(f"加载ROI失败 {roi_file}: {e}")
+            logging.error(f"加载ROI失败 {roi_file}: {e}")
 
     if not roi_masks:
-        log("错误: 没有找到可用的ROI掩模文件")
-        log(f"请确保ROI目录包含ROI_*.nii.gz文件: {roi_dir}")
+        logging.error("错误: 没有找到可用的ROI掩模文件")
+        logging.error(f"请确保ROI目录包含ROI_*.nii.gz文件: {roi_dir}")
         return None
 
-    log(f"成功加载 {len(roi_masks)} 个ROI掩模")
+    logging.info(f"成功加载 {len(roi_masks)} 个ROI掩模")
     return roi_masks
 
 
@@ -61,13 +67,13 @@ def load_lss_trial_data(subject, run):
     lss_dir = LSS_ROOT / subject / f"run-{run}_LSS"
 
     if not lss_dir.exists():
-        log(f"LSS目录不存在: {lss_dir}")
+        logging.error(f"LSS目录不存在: {lss_dir}")
         return None, None
 
     # 加载trial信息
     trial_map_path = lss_dir / "trial_map.csv"
     if not trial_map_path.exists():
-        log(f"trial_map.csv不存在: {trial_map_path}")
+        logging.error(f"trial_map.csv不存在: {trial_map_path}")
         return None, None
 
     trial_info = pd.read_csv(trial_map_path)
@@ -82,14 +88,14 @@ def load_lss_trial_data(subject, run):
             beta_images.append(str(beta_path))
             valid_trials.append(trial)
         else:
-            log(f"Beta图像缺失: {beta_path}")
+            logging.warning(f"Beta图像缺失: {beta_path}")
 
     if len(beta_images) == 0:
-        log(f"没有找到有效的beta图像: {subject}")
+        logging.error(f"没有找到有效的beta图像: {subject}")
         return None, None
 
     valid_trials_df = pd.DataFrame(valid_trials)
-    log(f"加载 {subject}: {len(beta_images)}个trial")
+    logging.info(f"加载 {subject}: {len(beta_images)}个trial")
 
     return beta_images, valid_trials_df
 
@@ -110,12 +116,12 @@ def extract_roi_timeseries(functional_imgs, roi_mask_path, confounds=None):
 
         # 提取时间序列
         timeseries = masker.fit_transform(functional_imgs, confounds=confounds)
-        log(f"提取时间序列形状: {timeseries.shape}")
+        logging.info(f"提取时间序列形状: {timeseries.shape}")
 
         return timeseries, masker
 
     except Exception as e:
-        log(f"提取ROI时间序列失败: {e}")
+        logging.error(f"提取ROI时间序列失败: {e}")
         return None, None
 
 
@@ -159,7 +165,7 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2):
     cond2_trials = trial_info[trial_info['trial_condition'].str.contains(cond2, case=False, na=False)]
 
     if len(cond1_trials) < 3 or len(cond2_trials) < 3:
-        log(f"条件 {cond1} vs {cond2}: 样本数不足 ({len(cond1_trials)} vs {len(cond2_trials)})")
+        logging.warning(f"条件 {cond1} vs {cond2}: 样本数不足 ({len(cond1_trials)} vs {len(cond2_trials)})")
         return None, None, None
 
     # 准备数据和标签
@@ -192,7 +198,7 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2):
             })
 
     if len(X_indices) < 6:  # 每个条件至少3个样本
-        log(f"有效样本数不足: {len(X_indices)}")
+        logging.warning(f"有效样本数不足: {len(X_indices)}")
         return None, None, None
 
     # 选择对应的beta图像
@@ -203,7 +209,7 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2):
 
 def analyze_single_subject_roi(subject, run, contrasts, roi_masks):
     """分析单个被试的ROI MVPA"""
-    log(f"开始分析 {subject}")
+    logging.info(f"开始分析 {subject}")
 
     # 加载数据
     beta_images, trial_info = load_lss_trial_data(subject, run)
@@ -213,7 +219,7 @@ def analyze_single_subject_roi(subject, run, contrasts, roi_masks):
     results = {}
 
     for contrast_name, cond1, cond2 in contrasts:
-        log(f"  {subject}: {cond1} vs {cond2}")
+        logging.info(f"  {subject}: {cond1} vs {cond2}")
 
         # 准备分类数据
         selected_betas, labels, trial_details = prepare_classification_data(
@@ -227,7 +233,7 @@ def analyze_single_subject_roi(subject, run, contrasts, roi_masks):
 
         # 在每个ROI上进行分析
         for roi_name, roi_mask in roi_masks.items():
-            log(f"    ROI: {roi_name}")
+            logging.info(f"    ROI: {roi_name}")
 
             # 提取ROI时间序列
             X, masker = extract_roi_timeseries(selected_betas, roi_mask)
@@ -258,7 +264,7 @@ def analyze_single_subject_roi(subject, run, contrasts, roi_masks):
 
 def run_group_roi_analysis(subjects, run, contrasts, roi_masks):
     """运行组水平ROI分析"""
-    log("开始组水平ROI分析")
+    logging.info("开始组水平ROI分析")
 
     # 分析每个被试
     all_subject_results = {}
@@ -270,14 +276,14 @@ def run_group_roi_analysis(subjects, run, contrasts, roi_masks):
         if subject_results is not None:
             all_subject_results[subject] = subject_results
         else:
-            log(f"跳过被试 {subject}: 数据加载失败")
+            logging.warning(f"跳过被试 {subject}: 数据加载失败")
 
     return all_subject_results
 
 
 def save_and_analyze_group_results(all_results, contrasts):
     """保存和分析组水平结果"""
-    log("保存和分析组水平结果")
+    logging.info("保存和分析组水平结果")
 
     # 收集所有结果
     group_data = []
@@ -312,7 +318,7 @@ def save_and_analyze_group_results(all_results, contrasts):
 
 def perform_group_statistics(group_df, contrasts):
     """执行组水平统计检验"""
-    log("执行组水平统计检验")
+    logging.info("执行组水平统计检验")
 
     stats_results = []
 
@@ -344,21 +350,21 @@ def perform_group_statistics(group_df, contrasts):
     # 打印显著结果
     significant_results = stats_df[stats_df['p_value'] < 0.05]
     if not significant_results.empty:
-        log("\n显著结果:")
+        logging.info("\n显著结果:")
         for _, result in significant_results.iterrows():
-            log(f"  {result['contrast']} - {result['roi']}: "
+            logging.info(f"  {result['contrast']} - {result['roi']}: "
                 f"accuracy = {result['mean_accuracy']:.3f}, "
                 f"t({result['n_subjects'] - 1}) = {result['t_statistic']:.3f}, "
                 f"p = {result['p_value']:.3f}, d = {result['cohens_d']:.3f}")
     else:
-        log("\n无显著结果")
+        logging.info("\n无显著结果")
 
     return stats_df
 
 
 def create_group_visualizations(group_df, contrasts):
     """创建组水平可视化"""
-    log("创建可视化")
+    logging.info("创建可视化")
 
     try:
         # 1. 各ROI分类准确率热图
@@ -405,15 +411,15 @@ def create_group_visualizations(group_df, contrasts):
                 plt.savefig(RESULTS_DIR / f"accuracy_{contrast_name}.png", dpi=300, bbox_inches='tight')
                 plt.close()
 
-        log("可视化完成")
+        logging.info("可视化完成")
 
     except Exception as e:
-        log(f"可视化失败: {e}")
+        logging.error(f"可视化失败: {e}")
 
 
 # ========== 主执行函数 ==========
 def main():
-    log("开始隐喻ROI MVPA分析 (使用留一法)")
+    logging.info("开始隐喻ROI MVPA分析 (使用留一法)")
 
     # 加载ROI掩模
     roi_masks = load_roi_masks(ROI_DIR)
@@ -424,18 +430,18 @@ def main():
     all_results = run_group_roi_analysis(SUBJECTS, RUNS[0], CONTRASTS, roi_masks)
 
     if all_results is None or len(all_results) == 0:
-        log("错误: 没有获得任何分析结果")
+        logging.error("错误: 没有获得任何分析结果")
         return
 
     # 保存和分析结果
     group_df = save_and_analyze_group_results(all_results, CONTRASTS)
 
-    log(f"\nMVPA分析完成!")
-    log(f"结果保存在: {RESULTS_DIR}")
-    log(f"分析被试数: {len(all_results)}")
-    log(f"ROI数量: {len(roi_masks)}")
-    log(f"对比数量: {len(CONTRASTS)}")
-    log(f"交叉验证方法: 留一法 (Leave-One-Out)")
+    logging.info(f"\nMVPA分析完成!")
+    logging.info(f"结果保存在: {RESULTS_DIR}")
+    logging.info(f"分析被试数: {len(all_results)}")
+    logging.info(f"ROI数量: {len(roi_masks)}")
+    logging.info(f"对比数量: {len(CONTRASTS)}")
+    logging.info(f"交叉验证方法: 留一法 (Leave-One-Out)")
 
 
 if __name__ == "__main__":

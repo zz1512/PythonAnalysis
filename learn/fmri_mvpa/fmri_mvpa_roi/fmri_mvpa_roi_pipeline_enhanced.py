@@ -21,6 +21,9 @@ import json
 from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ========== 配置类 ==========
 class MVPAConfig:
@@ -83,15 +86,13 @@ class MVPAConfig:
 # ========== 日志和内存管理 ==========
 def log(message, config=None):
     """增强的日志函数"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_message = f"[{timestamp}] [MVPA] {message}"
-    print(log_message, flush=True)
+    logging.info(message)
     
     # 可选：保存到日志文件
     if config and hasattr(config, 'results_dir'):
         log_file = config.results_dir / "analysis.log"
         with open(log_file, 'a', encoding='utf-8') as f:
-            f.write(log_message + "\n")
+            f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [MVPA] {message}\n")
 
 def memory_cleanup():
     """内存清理"""
@@ -859,12 +860,12 @@ def main():
     
     if results is not None:
         group_df, stats_df = results
-        print("\n=== 分析完成 ===")
-        print(f"总测试数: {len(stats_df)}")
-        print(f"显著结果数 (校正后): {len(stats_df[stats_df['significant_corrected']])}")
-        print(f"详细报告: {config.results_dir / 'analysis_report.html'}")
+        logging.info("\n=== 分析完成 ===")
+        logging.info(f"总测试数: {len(stats_df)}")
+        logging.info(f"显著结果数 (校正后): {len(stats_df[stats_df['significant_corrected']])}")
+        logging.info(f"详细报告: {config.results_dir / 'analysis_report.html'}")
     else:
-        print("分析失败")
+        logging.error("分析失败")
 
 if __name__ == "__main__":
     main()

@@ -1,7 +1,11 @@
-# example_multi_run_analysis.py
-# 演示如何使用多run合并分析功能
-
+import logging
 from fmri_mvpa_roi_pipeline_enhanced import MVPAConfig, run_group_roi_analysis_enhanced
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 from pathlib import Path
 
 def run_multi_run_example():
@@ -30,13 +34,13 @@ def run_multi_run_example():
         ('metaphor_vs_space', 'yy', 'kj'),  # 隐喻 vs 空间
     ]
     
-    print("=== 多run合并MVPA分析配置 ===")
-    print(f"被试: {config.subjects}")
-    print(f"合并的runs: {config.runs}")
-    print(f"对比条件: {config.contrasts}")
-    print(f"结果目录: {config.results_dir}")
-    print(f"预期每个被试总trial数: ~140 (70 per run × 2 runs)")
-    print()
+    logging.info("=== 多run合并MVPA分析配置 ===")
+    logging.info(f"被试: {config.subjects}")
+    logging.info(f"合并的runs: {config.runs}")
+    logging.info(f"对比条件: {config.contrasts}")
+    logging.info(f"结果目录: {config.results_dir}")
+    logging.info(f"预期每个被试总trial数: ~140 (70 per run × 2 runs)")
+    logging.info("")
     
     # 运行分析
     try:
@@ -44,30 +48,30 @@ def run_multi_run_example():
         
         if results is not None:
             group_df, stats_df = results
-            print("\n=== 分析完成 ===")
-            print(f"总测试数: {len(stats_df)}")
-            print(f"显著结果数 (校正后): {len(stats_df[stats_df['significant_corrected']])}")
-            print(f"详细报告: {config.results_dir / 'analysis_report.html'}")
+            logging.info("\n=== 分析完成 ===")
+            logging.info(f"总测试数: {len(stats_df)}")
+            logging.info(f"显著结果数 (校正后): {len(stats_df[stats_df['significant_corrected']])}")
+            logging.info(f"详细报告: {config.results_dir / 'analysis_report.html'}")
             
             # 显示一些关键统计信息
-            print("\n=== 数据统计 ===")
+            logging.info("\n=== 数据统计 ===")
             subjects_analyzed = group_df['subject'].nunique()
-            print(f"成功分析的被试数: {subjects_analyzed}")
+            logging.info(f"成功分析的被试数: {subjects_analyzed}")
             
             # 显示每个被试的trial数量（如果有的话）
             if 'n_samples' in group_df.columns:
                 sample_counts = group_df.groupby('subject')['n_samples'].first()
-                print("\n每个被试的trial数量:")
+                logging.info("\n每个被试的trial数量:")
                 for subject, n_samples in sample_counts.items():
-                    print(f"  {subject}: {n_samples} trials")
+                    logging.info(f"  {subject}: {n_samples} trials")
             
             return True
         else:
-            print("分析失败")
+            logging.error("分析失败")
             return False
             
     except Exception as e:
-        print(f"分析过程中出现错误: {e}")
+        logging.error(f"分析过程中出现错误: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -77,20 +81,20 @@ def check_data_availability():
     config = MVPAConfig()
     config.runs = [3, 4]
     
-    print("=== 检查数据可用性 ===")
+    logging.info("=== 检查数据可用性 ===")
     
     for subject in config.subjects:
-        print(f"\n检查 {subject}:")
+        logging.info(f"\n检查 {subject}:")
         for run in config.runs:
             lss_dir = config.lss_root / subject / f"run-{run}_LSS"
             trial_map_path = lss_dir / "trial_map.csv"
             
             if lss_dir.exists():
-                print(f"  ✓ run-{run} 目录存在: {lss_dir}")
+                logging.info(f"  ✓ run-{run} 目录存在: {lss_dir}")
                 if trial_map_path.exists():
                     import pandas as pd
                     trial_info = pd.read_csv(trial_map_path)
-                    print(f"    ✓ trial_map.csv 存在，包含 {len(trial_info)} 个trial")
+                    logging.info(f"    ✓ trial_map.csv 存在，包含 {len(trial_info)} 个trial")
                     
                     # 检查beta文件
                     beta_count = 0
@@ -98,33 +102,33 @@ def check_data_availability():
                         beta_path = lss_dir / f"beta_trial_{trial['trial_index']:03d}.nii.gz"
                         if beta_path.exists():
                             beta_count += 1
-                    print(f"    ✓ 找到 {beta_count}/{len(trial_info)} 个beta文件")
+                    logging.info(f"    ✓ 找到 {beta_count}/{len(trial_info)} 个beta文件")
                     
                     # 显示条件统计
                     if 'trial_condition' in trial_info.columns:
                         condition_counts = trial_info['trial_condition'].value_counts()
-                        print(f"    条件分布: {dict(condition_counts)}")
+                        logging.info(f"    条件分布: {dict(condition_counts)}")
                 else:
-                    print(f"    ✗ trial_map.csv 不存在")
+                    logging.warning(f"    ✗ trial_map.csv 不存在")
             else:
-                print(f"  ✗ run-{run} 目录不存在: {lss_dir}")
+                logging.warning(f"  ✗ run-{run} 目录不存在: {lss_dir}")
 
 if __name__ == "__main__":
-    print("fMRI MVPA 多run合并分析示例")
-    print("=" * 50)
+    logging.info("fMRI MVPA 多run合并分析示例")
+    logging.info("=" * 50)
     
     # 首先检查数据可用性
     check_data_availability()
     
-    print("\n" + "=" * 50)
+    logging.info("\n" + "=" * 50)
     
     # 询问是否继续运行分析
     response = input("\n是否继续运行多run合并分析? (y/n): ")
     if response.lower() in ['y', 'yes', '是']:
         success = run_multi_run_example()
         if success:
-            print("\n分析成功完成！")
+            logging.info("\n分析成功完成！")
         else:
-            print("\n分析失败，请检查数据和配置。")
+            logging.error("\n分析失败，请检查数据和配置。")
     else:
-        print("\n分析已取消。")
+        logging.info("\n分析已取消。")

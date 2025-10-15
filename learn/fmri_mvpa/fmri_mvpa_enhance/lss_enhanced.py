@@ -23,12 +23,20 @@ import warnings
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 import time
+import logging
 
 # 添加父目录到路径
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from .global_config import GlobalConfig, LSSConfig
 from .error_handling import ErrorHandler, ErrorContext, retry_on_failure, DataValidator
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # 设置环境变量优化
 os.environ['MKL_NUM_THREADS'] = '1'
@@ -620,10 +628,10 @@ if __name__ == "__main__":
     config.lss.event_template = "/path/to/events/sub-{subject}/func/sub-{subject}_task-metaphor_run-{run:02d}_events.tsv"
     config.lss.output_root = "./test_lss_output"
     
-    print("增强版LSS分析配置:")
-    print(config.get_config_summary())
+    logging.info("增强版LSS分析配置:")
+    logging.info(config.get_config_summary())
     
     # analyzer = LSSAnalysisEnhanced(config)
     # results = analyzer.run_analysis()
     
-    print("\n增强版LSS分析模块测试完成")
+    logging.info("\n增强版LSS分析模块测试完成")

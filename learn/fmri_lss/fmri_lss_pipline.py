@@ -12,7 +12,7 @@ from nilearn import image
 from nilearn.glm.first_level import FirstLevelModel
 
 # ========== 基本配置 ==========
-SUBJECTS = [f"sub-{i:02d}" for i in range(2, 29)]
+SUBJECTS = [f"sub-{i:02d}" for i in range(1, 29)]
 RUNS = [3]
 TR_FALLBACK = 2.0
 N_JOBS_GLM = 2         # GLM内部并行；CPU紧张可改为1

@@ -11,6 +11,9 @@ from sklearn.pipeline import Pipeline
 from scipy import stats
 import matplotlib.pyplot as plt
 import seaborn as sns
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ========== 配置参数 ==========
 SUBJECTS = [f"sub-{i:02d}" for i in range(1, 5)]
@@ -27,7 +30,7 @@ CONTRASTS = [
 
 
 def log(message):
-    print(f"[MVPA] {message}", flush=True)
+    logging.info(message)
 
 
 def load_roi_masks(roi_dir):
@@ -45,11 +48,11 @@ def load_roi_masks(roi_dir):
             roi_masks[roi_name] = roi_mask
             log(f"加载ROI: {roi_name}")
         except Exception as e:
-            log(f"加载ROI失败 {roi_file}: {e}")
+            logging.error(f"加载ROI失败 {roi_file}: {e}")
 
     if not roi_masks:
-        log("错误: 没有找到可用的ROI掩模文件")
-        log(f"请确保ROI目录包含ROI_*.nii.gz文件: {roi_dir}")
+        logging.error("错误: 没有找到可用的ROI掩模文件")
+        logging.error(f"请确保ROI目录包含ROI_*.nii.gz文件: {roi_dir}")
         return None
 
     log(f"成功加载 {len(roi_masks)} 个ROI掩模")
@@ -61,13 +64,13 @@ def load_lss_trial_data(subject, run):
     lss_dir = LSS_ROOT / subject / f"run-{run}_LSS"
 
     if not lss_dir.exists():
-        log(f"LSS目录不存在: {lss_dir}")
+        logging.error(f"LSS目录不存在: {lss_dir}")
         return None, None
 
     # 加载trial信息
     trial_map_path = lss_dir / "trial_map.csv"
     if not trial_map_path.exists():
-        log(f"trial_map.csv不存在: {trial_map_path}")
+        logging.error(f"trial_map.csv不存在: {trial_map_path}")
         return None, None
 
     trial_info = pd.read_csv(trial_map_path)
@@ -82,10 +85,10 @@ def load_lss_trial_data(subject, run):
             beta_images.append(str(beta_path))
             valid_trials.append(trial)
         else:
-            log(f"Beta图像缺失: {beta_path}")
+            logging.warning(f"Beta图像缺失: {beta_path}")
 
     if len(beta_images) == 0:
-        log(f"没有找到有效的beta图像: {subject}")
+        logging.error(f"没有找到有效的beta图像: {subject}")
         return None, None
 
     valid_trials_df = pd.DataFrame(valid_trials)
@@ -207,6 +210,7 @@ def analyze_single_subject_roi(subject, run, contrasts, roi_masks):
     # 加载数据
     beta_images, trial_info = load_lss_trial_data(subject, run)
     if beta_images is None:
+        logging.error(f"被试 {subject} 的LSS数据加载失败")
         return None
 
     results = {}
@@ -269,7 +273,7 @@ def run_group_roi_analysis(subjects, run, contrasts, roi_masks):
         if subject_results is not None:
             all_subject_results[subject] = subject_results
         else:
-            log(f"跳过被试 {subject}: 数据加载失败")
+            logging.warning(f"跳过被试 {subject}: 数据加载失败")
 
     return all_subject_results
 
@@ -342,14 +346,14 @@ def perform_group_statistics(group_df, contrasts):
     # 打印显著结果
     significant_results = stats_df[stats_df['p_value'] < 0.05]
     if not significant_results.empty:
-        log("\n显著结果:")
+        logging.info("\n显著结果:")
         for _, result in significant_results.iterrows():
-            log(f"  {result['contrast']} - {result['roi']}: "
+            logging.info(f"  {result['contrast']} - {result['roi']}: "
                 f"accuracy = {result['mean_accuracy']:.3f}, "
                 f"t({result['n_subjects'] - 1}) = {result['t_statistic']:.3f}, "
                 f"p = {result['p_value']:.3f}, d = {result['cohens_d']:.3f}")
     else:
-        log("\n无显著结果")
+        logging.info("\n无显著结果")
 
     return stats_df
 
@@ -401,12 +405,12 @@ def create_group_visualizations(group_df, contrasts):
                 plt.legend()
                 plt.tight_layout()
                 plt.savefig(RESULTS_DIR / f"accuracy_{contrast_name}.png", dpi=300, bbox_inches='tight')
-                plt.close()
+        plt.close()
 
-        log("可视化完成")
+        logging.info("可视化完成")
 
     except Exception as e:
-        log(f"可视化失败: {e}")
+        logging.error(f"可视化失败: {e}")
 
 
 # ========== 主执行函数 ==========
@@ -422,17 +426,17 @@ def main():
     all_results = run_group_roi_analysis(SUBJECTS, RUNS[0], CONTRASTS, roi_masks)
 
     if all_results is None or len(all_results) == 0:
-        log("错误: 没有获得任何分析结果")
+        logging.error("错误: 没有获得任何分析结果")
         return
 
     # 保存和分析结果
     group_df = save_and_analyze_group_results(all_results, CONTRASTS)
 
-    log(f"\nMVPA分析完成!")
-    log(f"结果保存在: {RESULTS_DIR}")
-    log(f"分析被试数: {len(all_results)}")
-    log(f"ROI数量: {len(roi_masks)}")
-    log(f"对比数量: {len(CONTRASTS)}")
+    logging.info(f"\nMVPA分析完成!")
+    logging.info(f"结果保存在: {RESULTS_DIR}")
+    logging.info(f"分析被试数: {len(all_results)}")
+    logging.info(f"ROI数量: {len(roi_masks)}")
+    logging.info(f"对比数量: {len(CONTRASTS)}")
 
 
 if __name__ == "__main__":

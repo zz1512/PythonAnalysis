@@ -3,6 +3,9 @@ from pathlib import Path
 from nilearn import image, datasets
 from nilearn.plotting import plot_roi
 import matplotlib.pyplot as plt
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ========== 配置参数 ==========
 ROI_OUTPUT_DIR = Path(r"H:\PythonAnalysis\learn_mvpa\ROI_masks")
@@ -40,30 +43,30 @@ ROI_DEFINITIONS = {
 
 
 def log(message):
-    print(f"[ROI Creation] {message}", flush=True)
+    logging.info(message)
 
 
 def fetch_ho_atlas():
     """获取Harvard-Oxford图谱"""
-    log("加载Harvard-Oxford皮质图谱...")
+    logging.info("加载Harvard-Oxford皮质图谱...")
     try:
         # 获取Harvard-Oxford皮质概率图谱
         ho_atlas = datasets.fetch_atlas_harvard_oxford('cort-maxprob-thr25-2mm')
 
-        log(f"HO图谱文件: {ho_atlas.maps}")
-        log(f"HO标签数量: {len(ho_atlas.labels)}")
+        logging.info(f"HO图谱文件: {ho_atlas.maps}")
+        logging.info(f"HO标签数量: {len(ho_atlas.labels)}")
 
         # 加载图谱图像
         atlas_img = image.load_img(ho_atlas.maps)
         atlas_data = atlas_img.get_fdata()
 
-        log(f"HO图谱形状: {atlas_img.shape}")
-        log(f"HO数据范围: [{np.min(atlas_data)}, {np.max(atlas_data)}]")
-        log(f"HO数据唯一值: {np.unique(atlas_data)}")
+        logging.info(f"HO图谱形状: {atlas_img.shape}")
+        logging.info(f"HO数据范围: [{np.min(atlas_data)}, {np.max(atlas_data)}]")
+        logging.info(f"HO数据唯一值: {np.unique(atlas_data)}")
 
         return ho_atlas, atlas_img
     except Exception as e:
-        log(f"加载Harvard-Oxford图谱失败: {e}")
+        logging.error(f"加载Harvard-Oxford图谱失败: {e}")
         return None, None
 
 
@@ -73,7 +76,7 @@ def create_roi_mask_ho(roi_name, roi_def, ho_atlas, atlas_img):
         label_name = roi_def['label']
         target_index = roi_def['index']
 
-        log(f"创建ROI: {roi_name} ({label_name}, 索引: {target_index})")
+        logging.info(f"创建ROI: {roi_name} ({label_name}, 索引: {target_index})")
 
         # 获取图谱数据
         atlas_data = atlas_img.get_fdata()
@@ -82,10 +85,10 @@ def create_roi_mask_ho(roi_name, roi_def, ho_atlas, atlas_img):
         roi_data = (atlas_data == target_index).astype(np.int32)
         voxel_count = np.sum(roi_data)
 
-        log(f"初始体素数: {voxel_count}")
+        logging.info(f"初始体素数: {voxel_count}")
 
         if voxel_count == 0:
-            log(f"警告: ROI '{roi_name}' 初始体素数为0!")
+            logging.warning(f"警告: ROI '{roi_name}' 初始体素数为0!")
             return None
 
         # 分离左右半球
@@ -102,47 +105,47 @@ def create_roi_mask_ho(roi_name, roi_def, ho_atlas, atlas_img):
         if roi_name.endswith('_L'):
             # 左半球：x < 0
             hemisphere_mask = x_coords < 0
-            log("选择左半球")
+            logging.info("选择左半球")
         elif roi_name.endswith('_R'):
             # 右半球：x > 0
             hemisphere_mask = x_coords > 0
-            log("选择右半球")
+            logging.info("选择右半球")
         else:
             # 双侧
             hemisphere_mask = np.ones_like(roi_data, dtype=bool)
-            log("选择双侧")
+            logging.info("选择双侧")
 
         # 应用半球掩模
         roi_data_hemisphere = roi_data * hemisphere_mask
         final_voxel_count = np.sum(roi_data_hemisphere)
 
-        log(f"应用半球分离后体素数: {final_voxel_count}")
+        logging.info(f"应用半球分离后体素数: {final_voxel_count}")
 
         if final_voxel_count == 0:
-            log(f"警告: 应用半球分离后ROI '{roi_name}' 体素数为0!")
+            logging.warning(f"警告: 应用半球分离后ROI '{roi_name}' 体素数为0!")
             return None
 
         # 创建新的图像
         roi_img = image.new_img_like(atlas_img, roi_data_hemisphere)
 
-        log(f"成功创建ROI: {roi_name} - 最终体素数: {final_voxel_count}")
+        logging.info(f"成功创建ROI: {roi_name} - 最终体素数: {final_voxel_count}")
         return roi_img
 
     except Exception as e:
-        log(f"创建ROI失败 {roi_name}: {e}")
+        logging.error(f"创建ROI失败 {roi_name}: {e}")
         import traceback
-        log(traceback.format_exc())
+        logging.error(traceback.format_exc())
         return None
 
 
 def create_all_roi_masks():
     """创建所有ROI掩模"""
-    log("开始创建ROI掩模...")
+    logging.info("开始创建ROI掩模...")
 
     # 加载Harvard-Oxford图谱
     ho_atlas, atlas_img = fetch_ho_atlas()
     if ho_atlas is None:
-        log("无法加载Harvard-Oxford图谱，终止程序")
+        logging.error("无法加载Harvard-Oxford图谱，终止程序")
         return {}
 
     created_masks = {}
@@ -166,7 +169,7 @@ def create_all_roi_masks():
                 'n_voxels': n_voxels,
                 'status': '成功'
             })
-            log(f"保存ROI: {roi_name} -> {output_path} ({n_voxels}个体素)")
+            logging.info(f"保存ROI: {roi_name} -> {output_path} ({n_voxels}个体素)")
         else:
             creation_report.append({
                 'roi_name': roi_name,
@@ -174,7 +177,7 @@ def create_all_roi_masks():
                 'n_voxels': 0,
                 'status': '失败'
             })
-            log(f"失败: {roi_name}")
+            logging.error(f"失败: {roi_name}")
 
     # 保存创建报告
     import pandas as pd
@@ -201,9 +204,9 @@ def create_all_roi_masks():
     with open(ROI_OUTPUT_DIR / "roi_config.json", 'w') as f:
         json.dump(roi_config, f, indent=2, ensure_ascii=False)
 
-    log(f"\nROI掩模创建完成!")
-    log(f"成功创建: {len(created_masks)}/{len(ROI_DEFINITIONS)} 个ROI")
-    log(f"输出目录: {ROI_OUTPUT_DIR}")
+    logging.info(f"\nROI掩模创建完成!")
+    logging.info(f"成功创建: {len(created_masks)}/{len(ROI_DEFINITIONS)} 个ROI")
+    logging.info(f"输出目录: {ROI_OUTPUT_DIR}")
 
     return created_masks
 
@@ -211,7 +214,7 @@ def create_all_roi_masks():
 def visualize_roi_masks(roi_masks):
     """可视化创建的ROI掩模"""
     try:
-        log("生成ROI可视化...")
+        logging.info("生成ROI可视化...")
 
         # 为每个ROI生成单独的图像
         for roi_name, mask_path in roi_masks.items():
@@ -235,10 +238,10 @@ def visualize_roi_masks(roi_masks):
                 plt.savefig(ROI_OUTPUT_DIR / f"ROI_{roi_name}_visualization.png",
                             dpi=150, bbox_inches='tight')
                 plt.close()
-                log(f"生成可视化: {roi_name}")
+                logging.info(f"生成可视化: {roi_name}")
 
             except Exception as e:
-                log(f"可视化 {roi_name} 失败: {e}")
+                logging.error(f"可视化 {roi_name} 失败: {e}")
 
         # 创建所有ROI的叠加图
         if len(roi_masks) > 0:
@@ -251,14 +254,14 @@ def visualize_roi_masks(roi_masks):
                     output_file=ROI_OUTPUT_DIR / "all_rois_overlay.png",
                     cmap='Set3'
                 )
-                log("生成所有ROI叠加图")
+                logging.info("生成所有ROI叠加图")
             except Exception as e:
-                log(f"创建叠加图失败: {e}")
+                logging.error(f"创建叠加图失败: {e}")
 
-        log("ROI可视化完成")
+        logging.info("ROI可视化完成")
 
     except Exception as e:
-        log(f"可视化失败: {e}")
+        logging.error(f"可视化失败: {e}")
 
 
 def check_roi_quality(roi_masks):
@@ -284,10 +287,10 @@ def check_roi_quality(roi_masks):
         })
 
         status = "✓" if n_voxels >= 50 else "⚠"
-        log(f"{status} {roi_name}: {n_voxels} 体素, {volume_mm3:.2f} mm³")
+        logging.info(f"{status} {roi_name}: {n_voxels} 体素, {volume_mm3:.2f} mm³")
 
         if n_voxels < 10:
-            log(f"警告: {roi_name} 体素数量较少，可能影响后续分析")
+            logging.warning(f"警告: {roi_name} 体素数量较少，可能影响后续分析")
 
     # 保存质量报告
     import pandas as pd
@@ -306,9 +309,9 @@ if __name__ == "__main__":
         check_roi_quality(created_masks)
         visualize_roi_masks(created_masks)
     else:
-        log("没有成功创建任何ROI掩模")
+        logging.error("没有成功创建任何ROI掩模")
 
-    print(f"\nROI掩模创建流程完成!")
+    logging.info(f"\nROI掩模创建流程完成!")
     print(f"请检查目录: {ROI_OUTPUT_DIR}")
     if created_masks:
         print(f"成功创建的ROI: {list(created_masks.keys())}")
