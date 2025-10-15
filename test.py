@@ -1,120 +1,129 @@
-from nilearn import image, plotting
-from nilearn.datasets import fetch_language_localizer_demo_dataset
-from nilearn.glm.first_level import FirstLevelModel,make_first_level_design_matrix
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-from nilearn.plotting import plot_design_matrix
-from numpy import array
-from glob import glob
 import os
-from nilearn.datasets import fetch_icbm152_brain_gm_mask
-from nilearn.image import resample_to_img
-from os import mkdir, path, getcwd
-import nibabel as nib
-subjects = ['24','25','26','27','28']
+import glob
 
-sessions = ['1', '2', '3', '4','5','6','7']
+# 指定目录路径
+directory = r"H:\PythonAnalysis\learn_mvpa\full_roi_mask"
 
-data_dir = 'H:\\metaphor\\Pro_proc_data\\'
-
-out_dir = 'H:\\metaphor\\LSS\\data_true_memory\\'
-
-suffix = 'space-MNI152NLin6Asym_res-2_desc-preproc_bold'
-
-events_dir = 'H:\\metaphor\\events_true_memory\\'
-
-fmri_img = 'H:\\metaphor\\Pro_proc_data\\sub-01\\run1\\sub-01_task-yy_run-1_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii'
-icbm_mask = fetch_icbm152_brain_gm_mask()
-mask = resample_to_img(icbm_mask, fmri_img,interpolation='nearest')
-#mask.to_filename('H:\\metaphor\\LSS\\gm.nii')
-
-def lss_transformer(df, row_number):
-    """Label one trial for one LSS model.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        BIDS-compliant events file information.
-    row_number : int
-        Row number in the DataFrame.
-        This indexes the trial that will be isolated.
-
-    Returns
-    -------
-    df : pandas.DataFrame
-        Update events information, with the select trial's trial type isolated.
-    trial_name : str
-        Name of the isolated trial's trial type.
-    """
-    df = df.copy()
-
-    # Determine which number trial it is *within the condition*
-    trial_condition = df.loc[row_number, "trial_type"]
-    #trial_type_series = df["trial_type"]
-    #trial_type_series = trial_type_series.loc[
-    #    trial_type_series == trial_condition
-    #]
-    #trial_type_list = trial_type_series.index.tolist()
-    #trial_number = trial_type_list.index(row_number)
-    # 選擇第row_number的pic_num
-    pic_num = df.loc[row_number, "pic_num"]
-    memory_condition = df.loc[row_number, "memory3"]
-    # We use a unique delimiter here (``__``) that shouldn't be in the
-    # original condition names.
-    # Technically, all you need is for the requested trial to have a unique
-    # 'trial_type' *within* the dataframe, rather than across models.
-    # However, we may want to have meaningful 'trial_type's (e.g., 'Left_001')
-    # across models, so that you could track individual trials across models.
-    trial_name = f"{trial_condition}__{pic_num}__{memory_condition}"
-    df.loc[row_number, "trial_type"] = trial_name
-    return df, trial_name
+# 要保留的文件名关键词
+keep_keywords = [
+    "2_Lingual_Gyrus_sphere.nii",
+    "3_Angular_Gyrus_sphere.nii",
+    "19_Background_sphere.nii",
+    "20_Insular_Cortex_sphere.nii",
+    "31_Lateral_Occipital_Cortex_superior_division_sphere.nii",
+    "29_Background_sphere.nii",
+    "14_Background_sphere.nii",
+    "10_Precuneous_Cortex_sphere.nii",
+    "4_Precuneous_Cortex_sphere.nii"
+]
 
 
-for i, sub in enumerate(subjects):
-    for j, ses in enumerate(sessions):
-        if not os.path.exists(f'{out_dir}sub-{sub}\\run-{ses}'):
-            os.makedirs(f'{out_dir}sub-{sub}\\run-{ses}')
+def cleanup_files():
+    # 切换到指定目录
+    original_dir = os.getcwd()
+    try:
+        os.chdir(directory)
 
-        fmri_img = f'{data_dir}sub-{sub}\\run{ses}\\sub-{sub}_task-yy_run-{ses}_{suffix}.nii'
-        confounds = pd.read_csv(
-            f'{data_dir}sub-{sub}\\multi_reg\\sub-{sub}_task-yy_run-{ses}_desc-confounds_timeseries.tsv',
-            delimiter='\t')
-        events = pd.read_table(f'{events_dir}sub-{sub}\\sub-{sub}_run-{ses}_events.txt')
+        # 查找所有以 cluster_ 开头的文件
+        files_to_process = glob.glob("*.nii.gz")
 
-        # Selecting columns of interest
+        if not files_to_process:
+            print(f"在目录 {directory} 中没有找到以 'cluster_' 开头的文件")
+            return
 
-        confound_glm = confounds[
-            ['white_matter', 'global_signal', 'framewise_displacement', 'trans_x', 'trans_y', 'trans_z', 'rot_x',
-             'rot_y', 'rot_z']].replace(np.nan, 0)
-        # icbm_mask = fetch_icbm152_2009()
-        icbm_mask = fetch_icbm152_brain_gm_mask()
-        mask = resample_to_img(icbm_mask, fmri_img,
-                               interpolation='nearest')
-        # mask = resample_to_img(mask, fmri_img)
-        lss_glm = FirstLevelModel(t_r=2, noise_model='ar1', drift_model='cosine', high_pass=0.008, hrf_model='glover',
-                                  mask_img=mask)
+        deleted_count = 0
+        kept_count = 0
 
-        # Loop through the trials of interest and transform the DataFrame for LSS
-        # lss_beta_maps = {cond: [] for cond in events_df["trial_type"].unique()}
-        lss_design_matrices = []
+        for file_path in files_to_process:
+            if os.path.isfile(file_path):
+                # 检查文件名是否包含任何要保留的关键词
+                should_keep = any(keyword in file_path for keyword in keep_keywords)
 
-        for i_trial in range(events.shape[0]):
-            lss_events_df, trial_condition = lss_transformer(events, i_trial)
+                if not should_keep:
+                    print(f"删除文件: {file_path}")
+                    os.remove(file_path)
+                    deleted_count += 1
+                else:
+                    print(f"保留文件: {file_path}")
+                    kept_count += 1
 
-            # Compute and collect beta maps
-            # lss_glm = FirstLevelModel(**glm_parameters)
-            lss_glm.fit(fmri_img, lss_events_df, confounds=confound_glm)
+        print(f"\n操作完成！")
+        print(f"删除文件数: {deleted_count}")
+        print(f"保留文件数: {kept_count}")
+        print(f"处理文件总数: {len(files_to_process)}")
 
-            # We will save the design matrices across trials to show them later
-            lss_design_matrices.append(lss_glm.design_matrices_[0])
+    except FileNotFoundError:
+        print(f"错误：目录 {directory} 不存在")
+    except PermissionError:
+        print(f"错误：没有权限访问目录 {directory}")
+    except Exception as e:
+        print(f"发生错误: {str(e)}")
+    finally:
+        # 切换回原始目录
+        os.chdir(original_dir)
 
-            map = lss_glm.compute_contrast(
-                trial_condition,
-                output_type="z_score",
-            )
 
-            # Drop the trial number from the condition name to get the original name
-            # condition_name = trial_condition.split("__")[0]
-            # lss_beta_maps[condition_name].append(beta_map)
-            nib.save(map, f'{out_dir}sub-{sub}\\run-{ses}\\{trial_condition}_z_map.nii')
+# 安全预览模式 - 先显示将要删除的文件，不实际删除
+def preview_cleanup():
+    original_dir = os.getcwd()
+    try:
+        os.chdir(directory)
+
+        files_to_process = glob.glob("*.nii.gz")
+
+        if not files_to_process:
+            print(f"在目录 {directory} 中没有找到以 'cluster_' 开头的文件")
+            return
+
+        print("预览模式 - 以下文件将被删除:")
+        print("=" * 50)
+
+        to_delete = []
+        to_keep = []
+
+        for file_path in files_to_process:
+            if os.path.isfile(file_path):
+                should_keep = any(keyword in file_path for keyword in keep_keywords)
+
+                if not should_keep:
+                    to_delete.append(file_path)
+                    print(f"[删除] {file_path}")
+                else:
+                    to_keep.append(file_path)
+                    print(f"[保留] {file_path}")
+
+        print("=" * 50)
+        print(f"总计: {len(to_delete)} 个文件将被删除, {len(to_keep)} 个文件将被保留")
+
+        if to_delete:
+            response = input("\n确认执行删除操作？(y/N): ")
+            if response.lower() == 'y':
+                cleanup_files()
+            else:
+                print("操作已取消")
+
+    except Exception as e:
+        print(f"发生错误: {str(e)}")
+    finally:
+        os.chdir(original_dir)
+
+
+if __name__ == "__main__":
+    print("文件清理脚本")
+    print(f"目标目录: {directory}")
+    print("保留包含以下关键词的文件:")
+    for keyword in keep_keywords:
+        print(f"  - {keyword}")
+
+    print("\n选择模式:")
+    print("1. 预览模式 (推荐)")
+    print("2. 直接执行删除")
+
+    choice = input("请输入选择 (1 或 2): ").strip()
+
+    if choice == "1":
+        preview_cleanup()
+    elif choice == "2":
+        cleanup_files()
+    else:
+        print("无效选择，退出程序")
