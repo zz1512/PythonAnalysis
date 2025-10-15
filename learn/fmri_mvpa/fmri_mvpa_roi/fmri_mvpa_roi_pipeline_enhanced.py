@@ -7,7 +7,7 @@ from pathlib import Path
 from nilearn import image
 from nilearn.maskers import NiftiMasker
 from sklearn.svm import SVC
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from scipy import stats
@@ -28,23 +28,27 @@ class MVPAConfig:
     def __init__(self):
         # 基本参数
         self.subjects = [f"sub-{i:02d}" for i in range(1, 5)]
-        self.runs = [3, 4]  # 支持多个run
+        self.runs = [3]  # 支持多个run
         self.lss_root = Path(r"H:\PythonAnalysis\learn_LSS")
         self.roi_dir = Path(r"H:\PythonAnalysis\learn_mvpa\full_roi_mask")
         self.results_dir = Path(r"H:\PythonAnalysis\learn_mvpa\metaphor_ROI_MVPA_enhanced")
         
         # 分类器参数
         self.svm_params = {
-            'kernel': 'linear',
-            'C': 1.0,
             'random_state': 42
         }
         
-        # 交叉验证参数
+        # 参数网格搜索配置
+        self.svm_param_grid = {
+            'C': [0.1, 1.0, 10.0],  # 可选的C值
+            'kernel': ['linear']     # 保持线性核
+        }
+        
+        # 交叉验证参数，小样本可用3，大样本使用5
         self.cv_folds = 5
         self.cv_random_state = 42
         
-        # 置换检验参数
+        # 置换检验参数，对于严格的统计推断，n_permutations可以增加到1000
         self.n_permutations = 100
         self.permutation_random_state = 42
         
@@ -199,10 +203,8 @@ def extract_roi_timeseries_optimized(functional_imgs, roi_mask_path, config, con
     try:
         masker = NiftiMasker(
             mask_img=roi_mask_path,
-            standardize=True,
-            detrend=True,
-            high_pass=1/128,
-            t_r=2.0,
+            standardize=True, 
+            detrend=False,
             memory=config.memory_cache,
             memory_level=config.memory_level
         )
@@ -230,10 +232,13 @@ def extract_roi_timeseries_optimized(functional_imgs, roi_mask_path, config, con
 # ========== 分类分析函数 ==========
 def run_roi_classification_enhanced(X, y, config):
     """增强的ROI分类分析"""
+    # 创建基础分类器
+    base_svm = SVC(random_state=config.svm_params['random_state'])
+    
     # 创建分类pipeline
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('svm', SVC(**config.svm_params))
+        ('svm', base_svm)
     ])
     
     # 交叉验证
@@ -242,14 +247,30 @@ def run_roi_classification_enhanced(X, y, config):
         shuffle=True, 
         random_state=config.cv_random_state
     )
-    cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
     
-    # 置换检验
+    # 参数网格搜索
+    param_grid = {'svm__' + key: value for key, value in config.svm_param_grid.items()}
+    grid_search = GridSearchCV(
+        pipeline, 
+        param_grid, 
+        cv=cv, 
+        scoring='accuracy', 
+        n_jobs=1  # 避免嵌套并行
+    )
+    
+    # 拟合网格搜索
+    grid_search.fit(X, y)
+    
+    # 使用最佳参数进行交叉验证
+    best_pipeline = grid_search.best_estimator_
+    cv_scores = cross_val_score(best_pipeline, X, y, cv=cv, scoring='accuracy')
+    
+    # 置换检验（使用最佳参数）
     np.random.seed(config.permutation_random_state)
     null_distribution = []
     for _ in range(config.n_permutations):
         y_perm = np.random.permutation(y)
-        perm_scores = cross_val_score(pipeline, X, y_perm, cv=cv, scoring='accuracy')
+        perm_scores = cross_val_score(best_pipeline, X, y_perm, cv=cv, scoring='accuracy')
         null_distribution.append(np.mean(perm_scores))
     
     # 计算p值
@@ -263,7 +284,9 @@ def run_roi_classification_enhanced(X, y, config):
         'null_distribution': null_distribution,
         'chance_level': 0.5,
         'n_features': X.shape[1],
-        'n_samples': X.shape[0]
+        'n_samples': X.shape[0],
+        'best_params': grid_search.best_params_,
+        'best_score': grid_search.best_score_
     }
 
 def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
@@ -492,7 +515,15 @@ def create_enhanced_visualizations(group_df, stats_df, config):
     
     try:
         # 设置绘图风格
-        plt.style.use('seaborn-v0_8')
+        try:
+            plt.style.use('seaborn-v0_8')
+        except OSError:
+            # 如果seaborn-v0_8不可用，尝试其他样式
+            try:
+                plt.style.use('seaborn')
+            except OSError:
+                plt.style.use('default')
+                log("警告：使用默认matplotlib样式，因为seaborn样式不可用", config)
         sns.set_palette("husl")
         
         # 1. ROI分类准确率热图（带显著性标记）
@@ -649,8 +680,8 @@ def generate_html_report(group_df, stats_df, config):
             <div class="metric"><strong>Permutations:</strong> {config.n_permutations}</div>
             <div class="metric"><strong>Correction Method:</strong> {config.correction_method}</div>
             <div class="metric"><strong>Alpha Level:</strong> {config.alpha_level}</div>
-            <div class="metric"><strong>SVM Kernel:</strong> {config.svm_params['kernel']}</div>
-            <div class="metric"><strong>SVM C:</strong> {config.svm_params['C']}</div>
+            <div class="metric"><strong>SVM Kernel:</strong> {', '.join(config.svm_param_grid['kernel'])}</div>
+            <div class="metric"><strong>SVM C:</strong> {', '.join(map(str, config.svm_param_grid['C']))}</div>
         </div>
         
         <div class="section">
@@ -792,7 +823,9 @@ def run_group_roi_analysis_enhanced(config):
                     'n_trials_cond2': roi_result['n_trials_cond2'],
                     'n_voxels': roi_result['n_voxels'],
                     'n_features': roi_result['n_features'],
-                    'n_samples': roi_result['n_samples']
+                    'n_samples': roi_result['n_samples'],
+                    'best_params': str(roi_result.get('best_params', {})),
+                    'best_score': roi_result.get('best_score', np.nan)
                 })
     
     group_df = pd.DataFrame(group_data)
