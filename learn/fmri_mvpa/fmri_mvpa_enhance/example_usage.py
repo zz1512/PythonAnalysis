@@ -1,338 +1,409 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-增强版MVPA流水线使用示例
-展示如何使用各个增强模块进行fMRI数据分析
+Example Usage of Enhanced MVPA Pipeline v2.0
+增强版MVPA流水线使用示例 - 最新版本
+
+展示如何使用集成了最新LSS、ROI和MVPA优化算法的增强版流水线
 """
 
-import os
 import sys
 from pathlib import Path
+import warnings
+import json
 
-# 添加模块路径
+# 添加项目路径
 sys.path.append(str(Path(__file__).parent))
 
-# 导入增强模块
-from enhanced_pipeline import EnhancedMVPAPipeline, create_enhanced_pipeline, run_quick_analysis
+from enhanced_pipeline import EnhancedMVPAPipeline
 from global_config import GlobalConfig
-from lss_enhanced import LSSAnalysisEnhanced
-from quality_control import run_comprehensive_quality_check
-from visualization import create_comprehensive_visualization_report
+from lss_optimized import run_optimized_lss_analysis
+from roi_mask_creator import create_standard_rois
+from mvpa_enhanced import run_enhanced_mvpa_analysis
 
-def example_1_basic_usage():
-    """示例1: 基本使用方法"""
-    print("=== 示例1: 基本使用方法 ===")
+warnings.filterwarnings('ignore')
+
+def example_enhanced_pipeline_v2():
+    """增强版流水线v2.0完整示例"""
+    print("=== 增强版MVPA流水线 v2.0 完整示例 ===")
+    
+    # 创建默认配置
+    config = GlobalConfig.create_default_config()
+    
+    # 可选：自定义配置参数
+    config.lss.subjects = [f"sub-{i:02d}" for i in range(1, 6)]  # 5个被试
+    config.lss.runs = [3, 4]  # 使用run 3和4
+    config.mvpa.contrasts = [
+        ("face_vs_house", "face", "house"),
+        ("face_vs_object", "face", "object"),
+        ("house_vs_object", "house", "object")
+    ]
     
     # 创建增强版流水线
-    pipeline = create_enhanced_pipeline(
-        output_dir="./example_results_basic",
-        enable_cache=True,
-        enable_quality_control=True,
-        enable_visualization=True,
-        n_jobs=2  # 使用2个CPU核心
-    )
-    
-    # 定义分析参数
-    subjects = ["sub-01", "sub-02", "sub-03"]
-    runs = ["run-1", "run-2"]
+    pipeline = EnhancedMVPAPipeline(config=config)
     
     try:
-        # 运行完整分析
-        results = pipeline.run_complete_analysis(
-            subjects=subjects,
-            runs=runs,
-            skip_lss=False,  # 运行LSS分析
-            skip_roi=True,   # 跳过ROI创建（需要额外配置）
-            skip_mvpa=True   # 跳过MVPA分析（需要LSS结果）
+        # 运行完整的增强版分析
+        results = pipeline.run_complete_analysis_enhanced(
+            subjects=config.lss.subjects,
+            runs=config.lss.runs,
+            contrasts=config.mvpa.contrasts,
+            create_rois=True,
+            enable_quality_control=True,
+            enable_visualization=True
         )
         
-        # 查看分析状态
-        status = pipeline.get_analysis_status()
-        print(f"分析状态: {status}")
+        # 打印结果摘要
+        print("\n=== 分析结果摘要 ===")
+        print(f"LSS分析: {results['lss_results'].get('summary', {})}")
+        print(f"ROI创建: {len(results['roi_results'].get('created_rois', []))} 个ROI")
+        print(f"MVPA分析: {results['mvpa_results'].get('summary', {})}")
+        print(f"总耗时: {results['analysis_info']['total_duration']}")
         
-        print("基本分析完成！")
+        return results
         
     except Exception as e:
-        print(f"分析过程中出现错误: {str(e)}")
+        print(f"分析失败: {e}")
+        return None
     
     finally:
-        # 清理资源
         pipeline.cleanup()
 
-def example_2_custom_config():
-    """示例2: 使用自定义配置"""
-    print("\n=== 示例2: 使用自定义配置 ===")
+def example_individual_components():
+    """单独组件使用示例"""
+    print("\n=== 单独组件使用示例 ===")
+    
+    config = GlobalConfig.create_default_config()
+    
+    # 1. 单独使用优化版LSS分析
+    print("\n1. 优化版LSS分析")
+    try:
+        lss_results = run_optimized_lss_analysis(
+            config=config.lss,
+            subjects=config.lss.subjects[:2],  # 只分析前2个被试
+            runs=config.lss.runs
+        )
+        print(f"LSS分析完成: {lss_results.get('summary', {})}")
+    except Exception as e:
+        print(f"LSS分析失败: {e}")
+    
+    # 2. 单独使用ROI创建器
+    print("\n2. ROI mask创建")
+    try:
+        roi_results = create_standard_rois(
+            config=config.roi,
+            roi_types=['sphere', 'anatomical']
+        )
+        print(f"ROI创建完成: {len(roi_results.get('created_rois', []))} 个ROI")
+    except Exception as e:
+        print(f"ROI创建失败: {e}")
+    
+    # 3. 单独使用增强版MVPA分析
+    print("\n3. 增强版MVPA分析")
+    try:
+        mvpa_results = run_enhanced_mvpa_analysis(config)
+        print(f"MVPA分析完成: {mvpa_results.get('summary', {})}")
+    except Exception as e:
+        print(f"MVPA分析失败: {e}")
+
+def example_custom_configuration():
+    """自定义配置示例"""
+    print("\n=== 自定义配置示例 ===")
     
     # 创建自定义配置
     config = GlobalConfig.create_default_config()
     
-    # 修改LSS配置
-    config.lss_config.data_dir = "/path/to/your/data"  # 替换为实际数据路径
-    config.lss_config.subjects = ["sub-01", "sub-02"]
-    config.lss_config.runs = ["run-1"]
-    config.lss_config.tr = 2.0
-    config.lss_config.smoothing_fwhm = 6.0
-    config.lss_config.n_jobs = 4
+    # LSS配置自定义
+    config.lss.subjects = ["sub-01", "sub-02", "sub-03"]
+    config.lss.runs = [1, 2, 3, 4]
+    config.lss.n_jobs_glm = 4  # 增加GLM并行数
+    config.lss.standardize = True
+    config.lss.use_precomputed_mask = False
     
-    # 修改MVPA配置
-    config.mvpa_config.svm_params['C'] = 0.1
-    config.mvpa_config.cv_params['cv_folds'] = 3
-    config.mvpa_config.permutation_params['n_permutations'] = 500
+    # ROI配置自定义
+    config.roi.sphere_coords = [(0, 0, 0), (20, -20, 10), (-20, -20, 10)]  # 自定义球形ROI坐标
+    config.roi.sphere_radius = 8  # 8mm半径
+    config.roi.create_anatomical_rois = True
+    config.roi.create_activation_rois = True
     
-    # 保存配置
-    config_path = "./custom_config.json"
-    config.save_config(config_path)
-    print(f"自定义配置已保存到: {config_path}")
+    # MVPA配置自定义
+    config.mvpa.cv_folds = 10  # 10折交叉验证
+    config.mvpa.n_permutations = 1000  # 1000次置换检验
+    config.mvpa.correction_method = 'bonferroni'  # 使用Bonferroni校正
+    config.mvpa.n_jobs = 8  # 8个并行进程
     
-    # 使用自定义配置创建流水线
-    pipeline = EnhancedMVPAPipeline(
-        config_path=config_path,
-        output_dir="./example_results_custom",
-        enable_cache=True,
-        enable_quality_control=True,
-        enable_visualization=True
-    )
+    # 保存自定义配置
+    config_file = "./custom_config_v2.json"
+    config.save_config(config_file)
+    print(f"自定义配置已保存: {config_file}")
     
-    print("使用自定义配置的流水线已创建")
-    
-    # 清理
-    pipeline.cleanup()
-
-def example_3_lss_only():
-    """示例3: 仅运行LSS分析"""
-    print("\n=== 示例3: 仅运行LSS分析 ===")
-    
-    # 创建LSS配置
-    from global_config import LSSConfig
-    
-    lss_config = LSSConfig(
-        data_dir="/path/to/your/data",  # 替换为实际数据路径
-        output_dir="./lss_only_results",
-        subjects=["sub-01"],
-        runs=["run-1"],
-        task_name="metaphor",
-        tr=2.0,
-        smoothing_fwhm=6.0,
-        n_jobs=2
-    )
-    
-    # 创建LSS分析器
-    lss_analyzer = LSSAnalysisEnhanced(
-        config=lss_config,
-        n_jobs=2
-    )
+    # 使用自定义配置运行分析
+    pipeline = EnhancedMVPAPipeline(config=config)
     
     try:
-        # 运行LSS分析
-        print("开始LSS分析...")
-        results = lss_analyzer.run_group_lss_analysis(
-            subjects=lss_config.subjects,
-            runs=lss_config.runs
-        )
-        
-        print(f"LSS分析完成，处理了 {len(results)} 个被试")
-        
-    except Exception as e:
-        print(f"LSS分析出现错误: {str(e)}")
-
-def example_4_quality_control():
-    """示例4: 数据质量控制"""
-    print("\n=== 示例4: 数据质量控制 ===")
-    
-    # 示例数据文件路径（需要替换为实际路径）
-    func_file = "/path/to/sub-01/func/sub-01_run-1_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
-    
-    if os.path.exists(func_file):
-        try:
-            # 运行质量控制检查
-            quality_results = run_comprehensive_quality_check(
-                func_file=func_file,
-                output_dir="./quality_control_results",
-                subject_id="sub-01",
-                run_id="run-1"
-            )
-            
-            print("质量控制检查完成")
-            print(f"质量评级: {quality_results.get('quality_rating', 'Unknown')}")
-            print(f"平均SNR: {quality_results.get('mean_snr', 'N/A')}")
-            print(f"平均tSNR: {quality_results.get('mean_tsnr', 'N/A')}")
-            
-        except Exception as e:
-            print(f"质量控制检查出现错误: {str(e)}")
-    else:
-        print(f"数据文件不存在: {func_file}")
-        print("请替换为实际的数据文件路径")
-
-def example_5_visualization():
-    """示例5: 结果可视化"""
-    print("\n=== 示例5: 结果可视化 ===")
-    
-    # 创建示例MVPA结果数据
-    example_results = {
-        'roi_results': {
-            'left_IFG': {
-                'accuracy': 0.75,
-                'permutation_pvalue': 0.001,
-                'cv_scores': [0.7, 0.8, 0.75, 0.72, 0.78]
-            },
-            'right_IFG': {
-                'accuracy': 0.68,
-                'permutation_pvalue': 0.023,
-                'cv_scores': [0.65, 0.7, 0.68, 0.66, 0.71]
-            },
-            'left_MTG': {
-                'accuracy': 0.82,
-                'permutation_pvalue': 0.0001,
-                'cv_scores': [0.8, 0.85, 0.82, 0.81, 0.84]
-            },
-            'right_MTG': {
-                'accuracy': 0.55,
-                'permutation_pvalue': 0.234,
-                'cv_scores': [0.5, 0.6, 0.55, 0.52, 0.58]
-            }
-        }
-    }
-    
-    # 创建示例质量数据
-    example_quality = {
-        'sub-01': {
-            'run-1': {
-                'mean_snr': 45.2,
-                'mean_tsnr': 78.5,
-                'mean_fd': 0.12,
-                'quality_rating': 'Good'
-            },
-            'run-2': {
-                'mean_snr': 42.8,
-                'mean_tsnr': 75.3,
-                'mean_fd': 0.15,
-                'quality_rating': 'Good'
-            }
-        },
-        'sub-02': {
-            'run-1': {
-                'mean_snr': 38.9,
-                'mean_tsnr': 68.2,
-                'mean_fd': 0.28,
-                'quality_rating': 'Fair'
-            }
-        }
-    }
-    
-    try:
-        # 生成综合可视化报告
-        viz_results = create_comprehensive_visualization_report(
-            analysis_results=example_results,
-            quality_data=example_quality,
-            config=None,
-            output_dir="./visualization_results"
-        )
-        
-        print("可视化报告生成完成")
-        print("生成的文件:")
-        for name, path in viz_results.items():
-            print(f"  {name}: {path}")
-            
-    except Exception as e:
-        print(f"可视化生成出现错误: {str(e)}")
-
-def example_6_quick_analysis():
-    """示例6: 快速分析"""
-    print("\n=== 示例6: 快速分析 ===")
-    
-    try:
-        # 使用快速分析函数
-        results = run_quick_analysis(
-            data_dir="/path/to/your/data",  # 替换为实际数据路径
-            subjects=["sub-01"],
-            runs=["run-1"],
-            output_dir="./quick_analysis_results",
-            enable_cache=True,
+        results = pipeline.run_complete_analysis_enhanced(
             enable_quality_control=True,
-            enable_visualization=True,
-            n_jobs=2
+            enable_visualization=True
         )
-        
-        print("快速分析完成")
-        print(f"结果摘要: {results.get('results_summary', {})}")
-        
+        print("自定义配置分析完成")
+        return results
     except Exception as e:
-        print(f"快速分析出现错误: {str(e)}")
+        print(f"自定义配置分析失败: {e}")
+        return None
+    finally:
+        pipeline.cleanup()
 
-def example_7_step_by_step():
-    """示例7: 分步骤运行分析"""
-    print("\n=== 示例7: 分步骤运行分析 ===")
+def example_performance_optimization():
+    """性能优化示例"""
+    print("\n=== 性能优化示例 ===")
     
-    # 创建流水线
-    pipeline = create_enhanced_pipeline(
-        output_dir="./step_by_step_results",
-        enable_cache=True,
-        n_jobs=2
-    )
+    config = GlobalConfig.create_default_config()
     
-    subjects = ["sub-01"]
-    runs = ["run-1"]
+    # 启用所有性能优化选项
+    config.lss.use_optimized_glm = True
+    config.lss.enable_parallel_subjects = True
+    config.lss.enable_parallel_runs = True
+    config.lss.memory_efficient = True
+    
+    config.mvpa.use_parallel = True
+    config.mvpa.memory_cache = True
+    config.mvpa.batch_size = 100  # 增大批处理大小
+    
+    # 设置环境变量优化
+    import os
+    os.environ['OMP_NUM_THREADS'] = '4'
+    os.environ['MKL_NUM_THREADS'] = '4'
+    os.environ['NUMEXPR_NUM_THREADS'] = '4'
+    
+    pipeline = EnhancedMVPAPipeline(config=config)
     
     try:
-        # 步骤1: 仅运行LSS分析
-        print("步骤1: 运行LSS分析")
-        lss_results = pipeline.run_lss_analysis(subjects, runs)
-        print(f"LSS分析完成: {len(lss_results)} 个被试")
+        # 监控性能
+        import time
+        start_time = time.time()
         
-        # 步骤2: 运行质量控制
-        print("\n步骤2: 运行质量控制")
-        quality_results = pipeline.run_quality_control(subjects, runs)
-        print(f"质量控制完成: {len(quality_results)} 个被试")
+        results = pipeline.run_complete_analysis_enhanced()
         
-        # 步骤3: 生成可视化
-        print("\n步骤3: 生成可视化")
-        if pipeline.enable_visualization:
-            viz_results = pipeline.generate_visualizations_and_reports()
-            print(f"可视化完成: {len(viz_results)} 个文件")
+        end_time = time.time()
+        total_time = end_time - start_time
         
-        # 保存结果
-        pipeline.save_final_results()
-        print("\n所有步骤完成，结果已保存")
+        print(f"\n性能统计:")
+        print(f"总耗时: {total_time:.2f} 秒")
+        print(f"性能详情: {results.get('performance_stats', {})}")
+        
+        return results
         
     except Exception as e:
-        print(f"分步骤分析出现错误: {str(e)}")
+        print(f"性能优化分析失败: {e}")
+        return None
+    finally:
+        pipeline.cleanup()
+
+def example_error_recovery():
+    """错误恢复示例"""
+    print("\n=== 错误恢复示例 ===")
+    
+    config = GlobalConfig.create_default_config()
+    
+    # 故意设置一些可能导致错误的参数
+    config.lss.subjects = ["sub-999"]  # 不存在的被试
+    
+    pipeline = EnhancedMVPAPipeline(config=config)
+    
+    try:
+        # 尝试运行分析，预期会失败
+        results = pipeline.run_complete_analysis_enhanced()
+        
+    except Exception as e:
+        print(f"捕获到预期错误: {e}")
+        
+        # 检查错误统计
+        error_stats = pipeline.performance_stats.get('errors', [])
+        print(f"错误数量: {len(error_stats)}")
+        
+        # 尝试恢复：使用有效的被试ID
+        print("\n尝试错误恢复...")
+        config.lss.subjects = ["sub-01", "sub-02"]  # 使用有效的被试ID
+        
+        try:
+            # 重新运行分析
+            recovery_results = pipeline.run_complete_analysis_enhanced()
+            print("错误恢复成功！")
+            return recovery_results
+        except Exception as recovery_error:
+            print(f"错误恢复失败: {recovery_error}")
+            return None
     
     finally:
         pipeline.cleanup()
 
+def example_batch_processing():
+    """批处理示例"""
+    print("\n=== 批处理示例 ===")
+    
+    # 定义多个分析配置
+    analysis_configs = [
+        {
+            'name': 'analysis_1',
+            'subjects': ['sub-01', 'sub-02'],
+            'runs': [1, 2],
+            'contrasts': [('face_vs_house', 'face', 'house')]
+        },
+        {
+            'name': 'analysis_2', 
+            'subjects': ['sub-03', 'sub-04'],
+            'runs': [3, 4],
+            'contrasts': [('face_vs_object', 'face', 'object')]
+        }
+    ]
+    
+    all_results = {}
+    
+    for analysis_config in analysis_configs:
+        print(f"\n运行分析: {analysis_config['name']}")
+        
+        # 创建配置
+        config = GlobalConfig.create_default_config()
+        config.lss.subjects = analysis_config['subjects']
+        config.lss.runs = analysis_config['runs']
+        config.mvpa.contrasts = analysis_config['contrasts']
+        
+        # 创建流水线
+        pipeline = EnhancedMVPAPipeline(config=config)
+        
+        try:
+            results = pipeline.run_complete_analysis_enhanced(
+                create_rois=False,  # 只在第一次创建ROI
+                enable_quality_control=True,
+                enable_visualization=True
+            )
+            
+            all_results[analysis_config['name']] = results
+            print(f"分析 {analysis_config['name']} 完成")
+            
+        except Exception as e:
+            print(f"分析 {analysis_config['name']} 失败: {e}")
+            all_results[analysis_config['name']] = {'error': str(e)}
+        
+        finally:
+            pipeline.cleanup()
+    
+    # 保存批处理结果
+    batch_results_file = "./batch_analysis_results.json"
+    with open(batch_results_file, 'w', encoding='utf-8') as f:
+        json.dump(all_results, f, indent=2, ensure_ascii=False, default=str)
+    
+    print(f"\n批处理结果已保存: {batch_results_file}")
+    return all_results
+
+def example_configuration_comparison():
+    """配置比较示例"""
+    print("\n=== 配置比较示例 ===")
+    
+    # 创建两种不同的配置
+    config_standard = GlobalConfig.create_default_config()
+    config_optimized = GlobalConfig.create_default_config()
+    
+    # 优化配置
+    config_optimized.lss.n_jobs_glm = 8
+    config_optimized.lss.enable_parallel_subjects = True
+    config_optimized.mvpa.n_jobs = 8
+    config_optimized.mvpa.use_parallel = True
+    
+    configs = {
+        'standard': config_standard,
+        'optimized': config_optimized
+    }
+    
+    comparison_results = {}
+    
+    for config_name, config in configs.items():
+        print(f"\n测试配置: {config_name}")
+        
+        pipeline = EnhancedMVPAPipeline(config=config)
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            results = pipeline.run_complete_analysis_enhanced(
+                subjects=config.lss.subjects[:2],  # 只用2个被试进行比较
+                create_rois=False,
+                enable_quality_control=False,
+                enable_visualization=False
+            )
+            
+            end_time = time.time()
+            
+            comparison_results[config_name] = {
+                'duration': end_time - start_time,
+                'success': True,
+                'performance_stats': results.get('performance_stats', {})
+            }
+            
+            print(f"配置 {config_name} 完成，耗时: {end_time - start_time:.2f} 秒")
+            
+        except Exception as e:
+            comparison_results[config_name] = {
+                'duration': None,
+                'success': False,
+                'error': str(e)
+            }
+            print(f"配置 {config_name} 失败: {e}")
+        
+        finally:
+            pipeline.cleanup()
+    
+    # 打印比较结果
+    print("\n=== 配置比较结果 ===")
+    for config_name, result in comparison_results.items():
+        if result['success']:
+            print(f"{config_name}: {result['duration']:.2f} 秒")
+        else:
+            print(f"{config_name}: 失败 - {result['error']}")
+    
+    return comparison_results
+
 def main():
-    """主函数：运行所有示例"""
-    print("增强版MVPA流水线使用示例")
-    print("=" * 50)
+    """主函数"""
+    print("Enhanced MVPA Pipeline v2.0 使用示例")
+    print("=" * 60)
     
-    # 注意：在实际使用前，请确保：
-    # 1. 替换示例中的数据路径为实际路径
-    # 2. 确保数据格式符合BIDS标准
-    # 3. 安装所有必要的依赖包
-    
-    print("\n注意：这些示例使用模拟数据路径")
-    print("在实际使用前，请替换为您的真实数据路径")
-    print("\n可用的示例:")
-    print("1. example_1_basic_usage() - 基本使用方法")
-    print("2. example_2_custom_config() - 自定义配置")
-    print("3. example_3_lss_only() - 仅LSS分析")
-    print("4. example_4_quality_control() - 质量控制")
-    print("5. example_5_visualization() - 结果可视化")
-    print("6. example_6_quick_analysis() - 快速分析")
-    print("7. example_7_step_by_step() - 分步骤分析")
-    
-    # 运行不需要真实数据的示例
+    # 运行各种示例
     try:
-        example_2_custom_config()  # 配置创建
-        example_5_visualization()  # 可视化（使用模拟数据）
+        # 1. 完整流水线示例
+        example_enhanced_pipeline_v2()
+        
+        # 2. 单独组件示例
+        example_individual_components()
+        
+        # 3. 自定义配置示例
+        example_custom_configuration()
+        
+        # 4. 性能优化示例
+        example_performance_optimization()
+        
+        # 5. 错误恢复示例
+        example_error_recovery()
+        
+        # 6. 批处理示例
+        example_batch_processing()
+        
+        # 7. 配置比较示例
+        example_configuration_comparison()
+        
     except Exception as e:
-        print(f"运行示例时出现错误: {str(e)}")
+        print(f"示例执行过程中出现错误: {e}")
     
-    print("\n示例演示完成！")
-    print("要运行完整分析，请：")
-    print("1. 准备符合BIDS格式的fMRI数据")
-    print("2. 修改配置文件中的数据路径")
-    print("3. 运行相应的示例函数")
+    print("\n=" * 60)
+    print("所有示例执行完成！")
+    print("\n使用说明:")
+    print("1. 确保数据路径配置正确")
+    print("2. 根据实际需求调整配置参数")
+    print("3. 检查输出目录中的结果文件")
+    print("4. 查看生成的HTML报告获取详细结果")
+    print("5. 使用性能优化配置提高分析速度")
+    print("6. 利用错误恢复机制处理异常情况")
 
 if __name__ == "__main__":
     main()

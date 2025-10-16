@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+Enhanced MVPA Pipeline - 增强版 v2.0
 增强版MVPA分析流水线
-整合所有优化模块，提供统一的分析接口
+
+集成最新的LSS分析、ROI mask创建、MVPA分析、质量控制和可视化
+基于最新优化算法，提供完整的fMRI MVPA分析解决方案
 """
 
 import os
 import sys
 import json
 import time
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -24,13 +28,23 @@ from .global_config import GlobalConfig, LSSConfig, ROIConfig, MVPAConfig
 from .error_handling import ErrorHandler, ErrorContext, MVPAError
 from .data_flow import MVPAPipeline, DataCache, create_lss_analysis_step, create_roi_analysis_step, create_mvpa_analysis_step
 from .lss_enhanced import LSSAnalysisEnhanced
+from .lss_optimized import OptimizedLSSAnalyzer
+from .roi_mask_creator import OptimizedROIMaskCreator
+from .mvpa_enhanced import EnhancedMVPAAnalyzer
 from .quality_control import PerformanceMonitor, DataQualityAssessor, QualityReporter, run_comprehensive_quality_check
 from .visualization import MVPAVisualizer, ReportGenerator, create_comprehensive_visualization_report
 
+warnings.filterwarnings('ignore')
+
 class EnhancedMVPAPipeline:
-    """增强版MVPA分析流水线"""
+    """增强版MVPA分析流水线 v2.0
+    
+    集成最新的LSS分析、ROI mask创建、MVPA分析功能
+    提供完整的端到端fMRI MVPA分析解决方案
+    """
     
     def __init__(self, config_path: Optional[str] = None, 
+                 config: Optional[GlobalConfig] = None,
                  output_dir: str = "./enhanced_mvpa_results",
                  enable_cache: bool = True,
                  enable_quality_control: bool = True,
@@ -43,6 +57,8 @@ class EnhancedMVPAPipeline:
         -----------
         config_path : str, optional
             配置文件路径
+        config : GlobalConfig, optional
+            配置对象
         output_dir : str
             输出目录
         enable_cache : bool
@@ -57,8 +73,10 @@ class EnhancedMVPAPipeline:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 初始化配置
-        if config_path and os.path.exists(config_path):
+        # 加载配置
+        if config is not None:
+            self.config = config
+        elif config_path and os.path.exists(config_path):
             self.config = GlobalConfig.load_config(config_path)
         else:
             self.config = GlobalConfig.create_default_config()
@@ -66,6 +84,9 @@ class EnhancedMVPAPipeline:
             default_config_path = self.output_dir / "default_config.json"
             self.config.save_config(str(default_config_path))
             print(f"已创建默认配置文件: {default_config_path}")
+        
+        # 验证配置
+        self.config.validate_paths()
         
         # 更新输出目录
         self.config.lss_config.output_dir = str(self.output_dir / "lss_results")
@@ -76,23 +97,53 @@ class EnhancedMVPAPipeline:
         self.config.create_output_directories()
         
         # 初始化组件
-        self.error_handler = ErrorHandler(
-            log_file=str(self.output_dir / "pipeline.log"),
-            enable_checkpoints=True
-        )
+        self._initialize_components()
         
         self.enable_cache = enable_cache
         self.enable_quality_control = enable_quality_control
         self.enable_visualization = enable_visualization
         self.n_jobs = n_jobs
         
-        # 初始化缓存
+        # 初始化流水线
+        self.pipeline = MVPAPipeline(
+            cache=self.cache,
+            error_handler=self.error_handler
+        )
+    
+    def _initialize_components(self):
+        """初始化增强版组件"""
+        # 错误处理器
+        self.error_handler = ErrorHandler(
+            log_file=str(self.output_dir / "pipeline.log"),
+            enable_checkpoints=True
+        )
+        
+        # 数据缓存
         if self.enable_cache:
             self.cache = DataCache(cache_dir=str(self.output_dir / "cache"))
         else:
             self.cache = None
         
-        # 初始化性能监控
+        # 优化版LSS分析器
+        self.lss_analyzer = OptimizedLSSAnalyzer(
+            config=self.config.lss_config,
+            error_handler=self.error_handler,
+            n_jobs=self.n_jobs
+        )
+        
+        # ROI mask创建器
+        self.roi_creator = OptimizedROIMaskCreator(
+            config=self.config.roi_config,
+            error_handler=self.error_handler
+        )
+        
+        # 增强版MVPA分析器
+        self.mvpa_analyzer = EnhancedMVPAAnalyzer(
+            config=self.config.mvpa_config,
+            error_handler=self.error_handler
+        )
+        
+        # 性能监控器
         if self.enable_quality_control:
             self.performance_monitor = PerformanceMonitor(
                 output_dir=str(self.output_dir / "performance")
@@ -102,7 +153,7 @@ class EnhancedMVPAPipeline:
                 output_dir=str(self.output_dir / "quality_reports")
             )
         
-        # 初始化可视化
+        # 可视化组件
         if self.enable_visualization:
             self.visualizer = MVPAVisualizer(
                 output_dir=str(self.output_dir / "visualizations"),
@@ -112,12 +163,87 @@ class EnhancedMVPAPipeline:
                 output_dir=str(self.output_dir / "reports"),
                 error_handler=self.error_handler
             )
+    
+    def log(self, message: str):
+        """增强的日志函数"""
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [PIPELINE] {message}")
         
-        # 初始化流水线
-        self.pipeline = MVPAPipeline(
-            cache=self.cache,
-            error_handler=self.error_handler
-        )
+        # 保存到日志文件
+        log_file = Path(self.config.lss_config.output_dir).parent / "pipeline.log"
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [PIPELINE] {message}\n")
+    
+    def run_comprehensive_quality_control(self, lss_results: Dict, mvpa_results: Dict) -> Dict[str, Any]:
+        """运行综合质量控制"""
+        try:
+            quality_results = {
+                'data_quality': self.quality_assessor.assess_data_quality(lss_results),
+                'performance_metrics': self.performance_monitor.get_performance_summary(),
+                'validation_results': self.validate_analysis_results(mvpa_results)
+            }
+            return quality_results
+        except Exception as e:
+            self.log(f"质量控制失败: {e}")
+            return {'error': str(e)}
+    
+    def validate_analysis_results(self, mvpa_results: Dict) -> Dict[str, Any]:
+        """验证分析结果"""
+        validation = {
+            'has_results': len(mvpa_results.get('group_results', [])) > 0,
+            'has_statistics': mvpa_results.get('statistical_results') is not None,
+            'significant_findings': 0
+        }
+        
+        if 'statistical_results' in mvpa_results:
+            stats_df = mvpa_results['statistical_results']
+            if hasattr(stats_df, 'shape'):
+                validation['significant_findings'] = len(stats_df[stats_df.get('significant', False) == True])
+        
+        return validation
+    
+    def create_comprehensive_report(self, lss_results: Dict, roi_results: Dict, 
+                                  mvpa_results: Dict, quality_results: Dict) -> Dict[str, Any]:
+        """创建综合报告"""
+        try:
+            report_results = {
+                'summary_report': self.generate_summary_report(lss_results, roi_results, mvpa_results),
+                'visualizations': self.create_analysis_visualizations(mvpa_results),
+                'html_report': mvpa_results.get('html_report', ''),
+                'quality_report': quality_results
+            }
+            return report_results
+        except Exception as e:
+            self.log(f"报告生成失败: {e}")
+            return {'error': str(e)}
+    
+    def generate_summary_report(self, lss_results: Dict, roi_results: Dict, mvpa_results: Dict) -> str:
+        """生成摘要报告"""
+        summary = f"""
+增强版MVPA分析摘要报告
+{'='*50}
+
+LSS分析结果:
+- 成功被试: {lss_results.get('successful_subjects', 0)}
+- 总试验数: {lss_results.get('total_trials', 0)}
+
+ROI创建结果:
+- 创建的ROI数量: {len(roi_results.get('created_rois', []))}
+
+MVPA分析结果:
+- 分析的ROI数量: {len(mvpa_results.get('group_results', []))}
+- 显著结果数量: {mvpa_results.get('summary', {}).get('significant_results', 0)}
+
+分析完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+        return summary
+    
+    def create_analysis_visualizations(self, mvpa_results: Dict) -> Dict[str, str]:
+        """创建分析可视化"""
+        try:
+            return mvpa_results.get('visualizations', {})
+        except Exception as e:
+            self.log(f"可视化创建失败: {e}")
+            return {}
         
         # 分析结果存储
         self.results = {
@@ -127,6 +253,15 @@ class EnhancedMVPAPipeline:
             'quality_results': {},
             'performance_results': {},
             'visualization_results': {}
+        }
+        
+        # 性能监控
+        self.performance_stats = {
+            'pipeline_start_time': None,
+            'pipeline_end_time': None,
+            'stage_times': {},
+            'memory_usage': [],
+            'errors': []
         }
         
         print(f"增强版MVPA流水线已初始化")
@@ -142,6 +277,146 @@ class EnhancedMVPAPipeline:
                             skip_roi: bool = False,
                             skip_mvpa: bool = False) -> Dict[str, Any]:
         """运行完整的MVPA分析流程"""
+    
+    def run_complete_analysis_enhanced(self, subjects: Optional[List[str]] = None, 
+                                      runs: Optional[List[int]] = None,
+                                      contrasts: Optional[List[Tuple[str, str, str]]] = None,
+                                      create_rois: bool = True,
+                                      enable_quality_control: bool = True,
+                                      enable_visualization: bool = True) -> Dict[str, Any]:
+        """运行完整的增强版MVPA分析流水线
+        
+        Parameters:
+        -----------
+        subjects : List[str], optional
+            被试列表
+        runs : List[int], optional
+            run列表
+        contrasts : List[Tuple[str, str, str]], optional
+            对比列表 [(name, cond1, cond2), ...]
+        create_rois : bool
+            是否创建ROI masks
+        enable_quality_control : bool
+            是否启用质量控制
+        enable_visualization : bool
+            是否启用可视化
+            
+        Returns:
+        --------
+        Dict[str, Any]
+            完整分析结果
+        """
+        self.performance_stats['pipeline_start_time'] = datetime.now()
+        
+        try:
+            # 使用默认参数
+            if subjects is None:
+                subjects = self.config.lss_config.subjects
+            if runs is None:
+                runs = self.config.lss_config.runs
+            if contrasts is None:
+                contrasts = self.config.mvpa_config.contrasts
+            
+            print(f"\n{'='*60}")
+            print(f"开始增强版MVPA分析流水线 v2.0")
+            print(f"被试数量: {len(subjects)}")
+            print(f"Run数量: {len(runs)}")
+            print(f"对比数量: {len(contrasts)}")
+            print(f"{'='*60}\n")
+            
+            # 阶段1: LSS分析
+            stage_start = datetime.now()
+            print("阶段 1/5: 优化版LSS分析")
+            lss_results = self.lss_analyzer.run_group_lss_analysis(subjects, runs)
+            self.performance_stats['stage_times']['lss'] = (datetime.now() - stage_start).total_seconds()
+            
+            # 阶段2: ROI mask创建
+            if create_rois:
+                stage_start = datetime.now()
+                print("\n阶段 2/5: ROI mask创建")
+                roi_results = self.roi_creator.create_all_roi_masks()
+                self.performance_stats['stage_times']['roi_creation'] = (datetime.now() - stage_start).total_seconds()
+            else:
+                roi_results = {'message': 'ROI创建已跳过'}
+                self.performance_stats['stage_times']['roi_creation'] = 0
+            
+            # 阶段3: MVPA分析
+            stage_start = datetime.now()
+            print("\n阶段 3/5: 增强版MVPA分析")
+            mvpa_results = self.mvpa_analyzer.run_group_analysis(subjects=subjects)
+            self.performance_stats['stage_times']['mvpa'] = (datetime.now() - stage_start).total_seconds()
+            
+            # 阶段4: 质量控制
+            if enable_quality_control:
+                stage_start = datetime.now()
+                print("\n阶段 4/5: 质量控制")
+                quality_results = self.run_quality_control(subjects, runs)
+                self.performance_stats['stage_times']['quality_control'] = (datetime.now() - stage_start).total_seconds()
+            else:
+                quality_results = {'message': '质量控制已跳过'}
+                self.performance_stats['stage_times']['quality_control'] = 0
+            
+            # 阶段5: 可视化和报告
+            if enable_visualization:
+                stage_start = datetime.now()
+                print("\n阶段 5/5: 可视化和报告生成")
+                visualization_results = self.generate_visualizations_and_reports()
+                self.performance_stats['stage_times']['visualization'] = (datetime.now() - stage_start).total_seconds()
+            else:
+                visualization_results = {'message': '可视化已跳过'}
+                self.performance_stats['stage_times']['visualization'] = 0
+            
+            self.performance_stats['pipeline_end_time'] = datetime.now()
+            
+            # 整合结果
+            complete_results = {
+                'lss_results': lss_results,
+                'roi_results': roi_results,
+                'mvpa_results': mvpa_results,
+                'quality_results': quality_results,
+                'visualization_results': visualization_results,
+                'performance_stats': self.performance_stats,
+                'analysis_info': {
+                    'subjects': subjects,
+                    'runs': runs,
+                    'contrasts': contrasts,
+                    'pipeline_version': '2.0',
+                    'config_version': getattr(self.config, 'version', '1.0'),
+                    'start_time': self.performance_stats['pipeline_start_time'].isoformat(),
+                    'end_time': self.performance_stats['pipeline_end_time'].isoformat(),
+                    'total_duration': str(self.performance_stats['pipeline_end_time'] - self.performance_stats['pipeline_start_time'])
+                }
+            }
+            
+            # 保存完整结果
+            results_file = self.output_dir / "complete_analysis_results_v2.json"
+            with open(results_file, 'w', encoding='utf-8') as f:
+                json.dump(complete_results, f, indent=2, ensure_ascii=False, default=str)
+            
+            # 保存配置快照
+            config_file = self.output_dir / "analysis_config_v2.json"
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(asdict(self.config), f, indent=2, ensure_ascii=False, default=str)
+            
+            total_time = (self.performance_stats['pipeline_end_time'] - self.performance_stats['pipeline_start_time']).total_seconds()
+            
+            print(f"\n{'='*60}")
+            print(f"增强版MVPA分析流水线完成")
+            print(f"总耗时: {total_time:.2f} 秒")
+            print(f"结果已保存至: {results_file}")
+            print(f"配置已保存至: {config_file}")
+            print(f"{'='*60}")
+            
+            return complete_results
+            
+        except Exception as e:
+            self.performance_stats['errors'].append({
+                'stage': 'complete_analysis',
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            })
+            print(f"完整分析流水线失败: {e}")
+            raise
         try:
             with ErrorContext("完整MVPA分析", self.error_handler, "pipeline"):
                 start_time = time.time()
@@ -220,15 +495,8 @@ class EnhancedMVPAPipeline:
         """运行LSS分析"""
         try:
             with ErrorContext("LSS分析", self.error_handler, "lss"):
-                # 创建LSS分析器
-                lss_analyzer = LSSAnalysisEnhanced(
-                    config=self.config.lss_config,
-                    error_handler=self.error_handler,
-                    n_jobs=self.n_jobs
-                )
-                
-                # 运行分析
-                results = lss_analyzer.run_group_lss_analysis(
+                # 使用优化版LSS分析器
+                results = self.lss_analyzer.run_group_lss_analysis(
                     subjects=subjects,
                     runs=runs
                 )
@@ -243,10 +511,9 @@ class EnhancedMVPAPipeline:
         """运行ROI分析"""
         try:
             with ErrorContext("ROI分析", self.error_handler, "roi"):
-                # 这里可以集成ROI创建逻辑
-                # 目前返回空结果，实际使用时需要集成create_optimized_roi_masks.py
-                print("ROI分析功能待集成")
-                return {}
+                # 使用优化版ROI创建器
+                results = self.roi_creator.create_all_roi_masks()
+                return results
                 
         except Exception as e:
             self.error_handler.log_error(e, "ROI分析", "roi")
@@ -256,10 +523,9 @@ class EnhancedMVPAPipeline:
         """运行MVPA分析"""
         try:
             with ErrorContext("MVPA分析", self.error_handler, "mvpa"):
-                # 这里可以集成MVPA分析逻辑
-                # 目前返回空结果，实际使用时需要集成fmri_mvpa_roi_pipeline_enhanced.py
-                print("MVPA分析功能待集成")
-                return {}
+                # 使用增强版MVPA分析器
+                results = self.mvpa_analyzer.run_group_analysis(subjects=subjects)
+                return results
                 
         except Exception as e:
             self.error_handler.log_error(e, "MVPA分析", "mvpa")
@@ -419,11 +685,20 @@ class EnhancedMVPAPipeline:
     def cleanup(self):
         """清理资源"""
         try:
-            if self.cache:
+            if hasattr(self, 'cache') and self.cache:
                 self.cache.cleanup()
             
             if self.enable_quality_control and hasattr(self, 'performance_monitor'):
                 self.performance_monitor.stop_monitoring()
+            
+            if hasattr(self, 'lss_analyzer'):
+                self.lss_analyzer.cleanup()
+            
+            if hasattr(self, 'roi_creator'):
+                self.roi_creator.cleanup()
+            
+            if hasattr(self, 'mvpa_analyzer'):
+                self.mvpa_analyzer.cleanup()
             
             print("流水线资源清理完成")
             

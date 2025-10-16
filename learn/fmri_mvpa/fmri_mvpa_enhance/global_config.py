@@ -1,60 +1,87 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-全局配置管理模块
+全局配置管理模块 - 增强版
 统一管理MVPA分析流程中的所有配置参数
+集成最新的优化算法和性能改进
 """
 
 import os
 import json
 import yaml
 from pathlib import Path
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Optional, Union
+from dataclasses import dataclass, asdict, field
+from typing import List, Dict, Optional, Union, Tuple
 import warnings
+import psutil
+from multiprocessing import cpu_count
 
 @dataclass
 class LSSConfig:
-    """LSS分析配置"""
+    """LSS分析配置 - 增强版"""
     # 基本参数
-    subjects: List[str] = None
-    runs: List[int] = None
+    subjects: List[str] = field(default_factory=lambda: [f"sub-{i:02d}" for i in range(1, 29)])
+    runs: List[int] = field(default_factory=lambda: [3, 4])
     tr_fallback: float = 2.0
-    n_jobs_glm: int = 4
+    n_jobs_glm: int = 2
+    n_jobs_parallel: int = 4
     lss_collapse_by_cond: bool = True
     
-    # 路径配置
-    fmri_template: str = ""
-    event_template: str = ""
-    motion_template: str = ""
-    output_root: str = ""
+    # 路径配置模板
+    fmri_template: str = "../../Pro_proc_data/{sub}/run{run}/smooth{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
+    event_template: str = "../../data_events/{sub}/{sub}_run-{run}_events.tsv"
+    motion_template: str = "../../Pro_proc_data/{sub}/multi_reg/{sub}_task-yy_run-{run}_desc-confounds_timeseries.tsv"
+    output_root: str = "../../learn_LSS"
     
     # 质量控制
     max_motion_mm: float = 3.0
     min_signal_quality: float = 0.8
     auto_tr_detection: bool = True
+    use_precomputed_mask: bool = True
     
     # 性能优化
     parallel_subjects: bool = True
     parallel_runs: bool = True
     memory_limit_gb: float = 8.0
     cache_intermediate: bool = True
+    standardize: bool = False
+    
+    # 环境变量优化
+    mkl_num_threads: str = "1"
+    openblas_num_threads: str = "1"
+    numexpr_num_threads: str = "1"
+    omp_num_threads: str = "1"
     
     def __post_init__(self):
-        if self.subjects is None:
-            self.subjects = []
-        if self.runs is None:
-            self.runs = [1, 2, 3]
+        # 自动优化参数
+        self._optimize_parameters()
+        
+    def _optimize_parameters(self):
+        """根据系统资源自动优化参数"""
+        available_memory_gb = psutil.virtual_memory().available / (1024**3)
+        cpu_cores = cpu_count()
+        
+        if available_memory_gb > 16:
+            self.n_jobs_glm = min(cpu_cores, 8)
+            self.n_jobs_parallel = min(cpu_cores // 2, 6)
+        elif available_memory_gb > 8:
+            self.n_jobs_glm = min(cpu_cores // 2, 4)
+            self.n_jobs_parallel = min(cpu_cores // 3, 4)
+        else:
+            self.n_jobs_glm = 1
+            self.n_jobs_parallel = 2
 
 @dataclass
 class ROIConfig:
-    """ROI生成配置"""
+    """ROI生成配置 - 增强版"""
     # 基本参数
     clusters_file: Optional[str] = None
-    output_dir: Optional[str] = None
+    output_dir: str = "../../learn_mvpa/optimized_roi_masks"
+    activation_table_path: Optional[str] = None
     
     # 球形ROI配置
     sphere_radius: float = 8.0
+    sphere_radius_mm: float = 8.0  # 兼容性别名
     min_voxels_sphere: int = 50
     
     # 解剖ROI配置
@@ -76,25 +103,44 @@ class ROIConfig:
     overlap_threshold: float = 0.8
     apply_hemisphere_separation: bool = True
     
+    # Harvard-Oxford模板配置
+    ho_template: Optional[str] = None
+    
+    # 文件路径
+    mask_info_file: str = ""
+    quality_report_file: str = ""
+    
     # 可视化配置
     plot_dpi: int = 150
-    plot_figsize: tuple = (15, 10)
+    plot_figsize: Tuple[int, int] = (15, 10)
     colormap: str = 'hot'
+    
+    def __post_init__(self):
+        # 生成文件路径
+        if not self.mask_info_file:
+            self.mask_info_file = os.path.join(self.output_dir, 'mask_information.csv')
+        if not self.quality_report_file:
+            self.quality_report_file = os.path.join(self.output_dir, 'roi_quality_report.csv')
 
 @dataclass
 class MVPAConfig:
-    """MVPA分析配置"""
+    """MVPA分析配置 - 增强版"""
     # 基本参数
-    subjects: List[str] = None
-    runs: List[int] = None
-    contrasts: Dict[str, List[str]] = None
+    subjects: List[str] = field(default_factory=lambda: [f"sub-{i:02d}" for i in range(1, 5)])
+    runs: List[int] = field(default_factory=lambda: [3])
+    contrasts: List[Tuple[str, str, str]] = field(default_factory=lambda: [('metaphor_vs_space', 'yy', 'kj')])
     
     # 路径配置
-    lss_dir: str = ""
-    roi_dir: str = ""
-    results_dir: str = ""
+    lss_root: str = "../../../learn_LSS"
+    roi_dir: str = "../../../learn_mvpa/full_roi_mask"
+    results_dir: str = "../../../learn_mvpa/metaphor_ROI_MVPA_enhanced"
     
     # 分类器参数
+    svm_params: Dict[str, Union[int, str]] = field(default_factory=lambda: {'random_state': 42})
+    svm_param_grid: Dict[str, List] = field(default_factory=lambda: {
+        'C': [0.1, 1.0, 10.0],
+        'kernel': ['linear']
+    })
     svm_c: float = 1.0
     svm_kernel: str = 'linear'
     svm_gamma: str = 'scale'
@@ -105,31 +151,45 @@ class MVPAConfig:
     cv_random_state: int = 42
     
     # 置换检验参数
-    n_permutations: int = 1000
+    n_permutations: int = 100  # 减少到100以提高速度
     permutation_random_state: int = 42
     
-    # 多重比较校正
+    # 多重比较校正参数
     alpha_level: float = 0.05
-    correction_method: str = 'fdr_bh'
+    correction_method: str = 'fdr_bh'  # 'fdr_bh', 'bonferroni', 'holm'
     
-    # 并行处理
-    n_jobs: int = -1
+    # 并行处理参数
+    n_jobs: int = field(default_factory=lambda: min(4, cpu_count() - 1))
     parallel_backend: str = 'loky'
+    use_parallel: bool = True
     
-    # 内存管理
+    # 内存管理参数
     memory_limit_gb: float = 16.0
-    batch_size: int = 10
+    batch_size: int = 50
+    memory_cache: str = 'nilearn_cache'
+    memory_level: int = 1
     
     def __post_init__(self):
-        if self.subjects is None:
-            self.subjects = []
-        if self.runs is None:
-            self.runs = [1, 2, 3]
-        if self.contrasts is None:
-            self.contrasts = {}
+        # 创建结果目录
+        Path(self.results_dir).mkdir(parents=True, exist_ok=True)
+        
+        # 自动优化并行参数
+        available_memory_gb = psutil.virtual_memory().available / (1024**3)
+        if available_memory_gb < 8:
+            self.n_jobs = min(2, cpu_count() - 1)
+            self.use_parallel = False
+        elif available_memory_gb < 16:
+            self.n_jobs = min(4, cpu_count() - 1)
+        
+    def save_config(self, filepath: str):
+        """保存配置到JSON文件"""
+        config_dict = {k: str(v) if isinstance(v, Path) else v 
+                      for k, v in asdict(self).items()}
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(config_dict, f, indent=2, ensure_ascii=False)
 
 class GlobalConfig:
-    """全局配置管理器"""
+    """全局配置管理器 - 增强版"""
     
     def __init__(self, config_file: Optional[str] = None):
         self.config_file = config_file
@@ -139,18 +199,37 @@ class GlobalConfig:
         
         # 全局设置
         self.project_name = "MVPA_Enhanced"
-        self.version = "1.0.0"
+        self.version = "2.0.0"
         self.debug_mode = False
         self.log_level = "INFO"
+        self.random_seed = 42
         
         # 路径设置
         self.base_dir = Path.cwd()
         self.data_dir = self.base_dir / "data"
         self.output_dir = self.base_dir / "results"
         self.log_dir = self.base_dir / "logs"
+        self.cache_dir = self.base_dir / "cache"
+        self.temp_dir = self.base_dir / "temp"
+        
+        # 性能监控
+        self.enable_performance_monitoring = True
+        self.enable_memory_profiling = True
         
         if config_file and os.path.exists(config_file):
             self.load_config(config_file)
+    
+    @classmethod
+    def create_default_config(cls) -> 'GlobalConfig':
+        """创建默认配置"""
+        return cls()
+        
+    @classmethod
+    def load_from_file(cls, config_file: str) -> 'GlobalConfig':
+        """从文件加载配置"""
+        config = cls()
+        config.load_config(config_file)
+        return config
     
     def load_config(self, config_file: str):
         """从文件加载配置"""
@@ -247,21 +326,39 @@ class GlobalConfig:
         print("配置验证通过")
         return True
     
-    def create_directories(self):
-        """创建必要的目录"""
+    def create_output_directories(self):
+        """创建必要的输出目录"""
         directories = [
-            self.data_dir,
             self.output_dir,
             self.log_dir,
-            Path(self.lss.output_root) if self.lss.output_root else None,
-            Path(self.roi.output_dir) if self.roi.output_dir else None,
-            Path(self.mvpa.results_dir) if self.mvpa.results_dir else None
+            self.cache_dir,
+            self.temp_dir,
+            Path(self.lss.output_root),
+            Path(self.roi.output_dir),
+            Path(self.mvpa.results_dir)
         ]
         
         for directory in directories:
             if directory:
                 directory.mkdir(parents=True, exist_ok=True)
-                print(f"目录已创建: {directory}")
+                
+    def validate_paths(self) -> List[str]:
+        """验证路径配置"""
+        errors = []
+        
+        # 检查LSS路径模板
+        if not self.lss.fmri_template:
+            errors.append("LSS fMRI模板路径未设置")
+        if not self.lss.event_template:
+            errors.append("LSS事件模板路径未设置")
+            
+        # 检查MVPA路径
+        if not Path(self.mvpa.lss_root).exists():
+            errors.append(f"LSS结果目录不存在: {self.mvpa.lss_root}")
+        if not Path(self.mvpa.roi_dir).exists():
+            errors.append(f"ROI目录不存在: {self.mvpa.roi_dir}")
+            
+        return errors
     
     def get_config_summary(self) -> str:
         """获取配置摘要"""
