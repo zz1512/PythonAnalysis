@@ -18,9 +18,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # ========== 配置参数 ==========
 SUBJECTS = [f"sub-{i:02d}" for i in range(1, 5)]
 RUNS = [3]
-LSS_ROOT = Path(r"H:\PythonAnalysis\learn_LSS")
-ROI_DIR = Path(r"H:\PythonAnalysis\learn_mvpa\full_roi_mask")  # ROI掩码目录
-RESULTS_DIR = Path(r"H:\PythonAnalysis\learn_mvpa\metaphor_ROI_MVPA")
+LSS_ROOT = Path(r"../../../learn_LSS")
+ROI_DIR = Path(r"../../../learn_mvpa/full_roi_mask")  # ROI掩码目录
+RESULTS_DIR = Path(r"../../../learn_mvpa/metaphor_ROI_MVPA")
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 关键对比
@@ -68,9 +68,9 @@ def load_lss_trial_data(subject, run):
         return None, None
 
     # 加载trial信息
-    trial_map_path = lss_dir / "trial_map.csv"
+    trial_map_path = lss_dir / "trial_info.csv"
     if not trial_map_path.exists():
-        logging.error(f"trial_map.csv不存在: {trial_map_path}")
+        logging.error(f"trial_info.csv不存在: {trial_map_path}")
         return None, None
 
     trial_info = pd.read_csv(trial_map_path)
@@ -157,8 +157,8 @@ def run_roi_classification(X, y, cv_folds=5, n_permutations=100):
 def prepare_classification_data(trial_info, beta_images, cond1, cond2):
     """准备分类数据"""
     # 筛选特定条件的trial
-    cond1_trials = trial_info[trial_info['trial_condition'].str.contains(cond1, case=False, na=False)]
-    cond2_trials = trial_info[trial_info['trial_condition'].str.contains(cond2, case=False, na=False)]
+    cond1_trials = trial_info[trial_info['original_condition'].str.contains(cond1, case=False, na=False)]
+    cond2_trials = trial_info[trial_info['original_condition'].str.contains(cond2, case=False, na=False)]
 
     if len(cond1_trials) < 3 or len(cond2_trials) < 3:
         log(f"条件 {cond1} vs {cond2}: 样本数不足 ({len(cond1_trials)} vs {len(cond2_trials)})")
@@ -177,7 +177,7 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2):
             y_labels.append(0)  # 条件1标记为0
             trial_details.append({
                 'trial_index': trial['trial_index'],
-                'condition': trial['trial_condition'],
+                'condition': trial['original_condition'],
                 'label': 0
             })
 
@@ -189,7 +189,7 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2):
             y_labels.append(1)  # 条件2标记为1
             trial_details.append({
                 'trial_index': trial['trial_index'],
-                'condition': trial['trial_condition'],
+                'condition': trial['original_condition'],
                 'label': 1
             })
 

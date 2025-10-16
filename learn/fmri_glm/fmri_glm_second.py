@@ -1,7 +1,7 @@
 # ================================
 # 二阶组分析（SPM风格，对齐你的路径）
-# 读取：H:\PythonAnalysis\learn_batch\sub-XX\run-3_spm_style\con_0001.nii.gz
-# 输出：K:\metaphor\2nd_level\yy_vs_kj\  (con_0001.nii / spmT_0001.nii / ResMS.nii / mask.nii)
+# 读取：../../learn_batch/sub-XX/run-3_spm_style/con_0001.nii.gz
+# 输出：../../learn_batch/2nd_level/yy_vs_kj/  (con_0001.nii / spmT_0001.nii / ResMS.nii / mask.nii)
 # ================================
 import os
 from pathlib import Path
@@ -14,10 +14,10 @@ from nilearn.image import new_img_like, resample_to_img
 import pandas as pd
 
 # ===== 路径参数（按你的环境）=====
-FIRST_LEVEL_ROOT = Path(r"H:\PythonAnalysis\learn_batch")     # 你的一阶输出根目录
+FIRST_LEVEL_ROOT = Path(r"../../learn_batch")     # 你的一阶输出根目录
 RUN_ID = 4                                                     # run3
 CON_INDEX = 1                                                  # 对应 con_0001（yy - kj）
-SECOND_LEVEL_DIR = Path(r"H:\PythonAnalysis\learn_batch\2nd_level\run4\yy_vs_kj")     # 与 MATLAB 一致
+SECOND_LEVEL_DIR = Path(r"../../learn_batch/2nd_level/run4/yy_vs_kj")     # 与 MATLAB 一致
 SECOND_LEVEL_DIR.mkdir(parents=True, exist_ok=True)
 
 # ===== 收集所有 con_0001.nii.gz 路径 =====

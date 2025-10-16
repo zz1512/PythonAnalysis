@@ -3,7 +3,7 @@ from nilearn.glm.thresholding import threshold_stats_img
 from nilearn.reporting import get_clusters_table
 import pandas as pd
 
-stat_path = r"K:\metaphor\Activation\2nd_level\run3\yy_vs_kj\spmT_0001.nii.gz" 
+stat_path = r"../metaphor/Activation/2nd_level/run3/yy_vs_kj/spmT_0001.nii.gz" 
 fmri_img = image.load_img(stat_path)
 fmri_data = fmri_img.get_fdata()
 '''

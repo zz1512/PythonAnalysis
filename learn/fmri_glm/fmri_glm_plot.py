@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")  # 无界面安全
 
 # ==== 配置：改这里 ====
-SECOND_LEVEL_DIR = Path(r"H:\PythonAnalysis\learn_batch\2nd_level\run4\yy_vs_kj")
+SECOND_LEVEL_DIR = Path(r"../../learn_batch/2nd_level/run4/yy_vs_kj")
 STAT_BASENAME    = "spmT_0001.nii"   # 也可以换成 z_map，比如 "z_map_0001.nii"
 
 # 阈值二选一

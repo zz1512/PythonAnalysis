@@ -24,12 +24,12 @@ RUNS = [4]  # 如需多 run，写成 [1,2,3]
 TR_FALLBACK = 2.0
 
 # 数据路径模板（按你的命名来）
-FMRI_TPL = r"H:\PythonAnalysis\Pro_proc_data\{sub}\run{run}\smooth{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
-EVENT_TPL = r"H:\PythonAnalysis\data_events\{sub}\{sub}_run-{run}_events.tsv"
-MOTION_TPL = r"H:\PythonAnalysis\Pro_proc_data\{sub}\multi_reg\multi_reg_run{run}.txt"
+FMRI_TPL = r"../../Pro_proc_data/{sub}/run{run}/smooth{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
+EVENT_TPL = r"../../data_events/{sub}/{sub}_run-{run}_events.tsv"
+MOTION_TPL = r"../../Pro_proc_data/{sub}/multi_reg/multi_reg_run{run}.txt"
 
 # 输出
-OUTPUT_ROOT = Path(r"H:\PythonAnalysis\learn_batch")
+OUTPUT_ROOT = Path(r"../../learn_batch")
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 # 对比（可写多个）

@@ -992,8 +992,8 @@ def main():
     """
     import argparse
     parser = argparse.ArgumentParser(description='Create optimized ROI masks for fMRI analysis.')
-    parser.add_argument('--clusters_file', type=str, default='h:\\PythonAnalysis\\learn_batch\\2nd_level\\run3\\yy_vs_kj\\clusters_table.csv', help='Path to the clusters table CSV file.')
-    parser.add_argument('--output_dir', type=str, default='h:\\PythonAnalysis\\learn_mvpa\\full_roi_mask', help='Directory to save the output ROI masks.')
+    parser.add_argument('--clusters_file', type=str, default='../../../learn_batch/2nd_level/run3/yy_vs_kj/clusters_table.csv', help='Path to the clusters table CSV file.')
+    parser.add_argument('--output_dir', type=str, default='../../../learn_mvpa/full_roi_mask', help='Directory to save the output ROI masks.')
     parser.add_argument('--sphere_radius', type=int, default=8, help='Radius of the spherical ROIs in mm.')
     parser.add_argument('--min_voxels_sphere', type=int, default=50, help='Minimum number of voxels for a spherical ROI to be valid.')
     parser.add_argument('--min_voxels_anatomical', type=int, default=100, help='Minimum number of voxels for an anatomical ROI to be valid.')

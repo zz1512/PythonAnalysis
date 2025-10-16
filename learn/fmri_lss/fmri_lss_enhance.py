@@ -23,10 +23,10 @@ N_JOBS_PARALLEL = 4  # 并行处理多个被试
 USE_PRECOMPUTED_MASK = True  # 预计算mask避免重复计算
 
 # 路径模板
-FMRI_TPL = r"H:\PythonAnalysis\Pro_proc_data\{sub}\run{run}\smooth{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
-EVENT_TPL = r"H:\PythonAnalysis\data_events\{sub}\{sub}_run-{run}_events.tsv"
-MOTION_TPL = r"H:\PythonAnalysis\Pro_proc_data\{sub}\multi_reg\{sub}_task-yy_run-{run}_desc-confounds_timeseries.tsv"
-OUTPUT_ROOT = Path(r"H:\PythonAnalysis\learn_LSS")
+FMRI_TPL = r"../../Pro_proc_data/{sub}/run{run}/smooth{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
+EVENT_TPL = r"../../data_events/{sub}/{sub}_run-{run}_events.tsv"
+MOTION_TPL = r"../../Pro_proc_data/{sub}/multi_reg/{sub}_task-yy_run-{run}_desc-confounds_timeseries.tsv"
+OUTPUT_ROOT = Path(r"../../learn_LSS")
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 

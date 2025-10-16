@@ -51,12 +51,12 @@ results = run_group_roi_analysis_enhanced(config)
 LSS_root/
 ├── sub-01/
 │   ├── run-3_LSS/
-│   │   ├── trial_map.csv
+│   │   ├── trial_info.csv
 │   │   ├── beta_trial_001.nii.gz
 │   │   ├── beta_trial_002.nii.gz
 │   │   └── ...
 │   └── run-4_LSS/
-│       ├── trial_map.csv
+│       ├── trial_info.csv
 │       ├── beta_trial_001.nii.gz
 │       ├── beta_trial_002.nii.gz
 │       └── ...
@@ -120,7 +120,7 @@ check_data_availability()
 
 这将检查：
 - 每个run的目录是否存在
-- trial_map.csv文件是否存在
+- trial_info.csv文件是否存在
 - beta文件的完整性
 - 各条件的trial分布
 
