@@ -1,35 +1,70 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+行为数据统计分析脚本：隐喻-空间记忆效果比较
+
+功能描述:
+    对run-7的行为数据进行统计分析，比较YY条件和KJ条件下的记忆效果差异。
+    使用成对样本t检验分析被试内条件差异，并提供独立样本t检验作为补充分析。
+
+分析方法:
+    1. 成对样本t检验（主分析）：比较每个被试在YY和KJ条件下的平均记忆得分
+    2. 独立样本Welch t检验（补充）：不按被试配对，直接比较所有YY和KJ试次
+    3. 效应量计算：Cohen's dz（配对）和Hedges' g（独立）
+    4. 正态性检验：Shapiro-Wilk检验
+
+预期结果示例:
+    被试数 n = 27
+    YY 平均(被试级) = 0.6799 ± 0.1713
+    KJ 平均(被试级) = 0.5878 ± 0.2350
+    差值(YY-KJ) = 0.0921 95%CI [0.0473, 0.1369]
+    t(26) = 4.2232, p = 0.000261
+    Cohen's dz = 0.813
+
+注意事项:
+    - 第12个被试没有行为数据，实际分析被试数为27
+    - 需要确保数据文件包含'trial_type'和'memory'列
+
+作者: 研究团队
+版本: 1.0
+日期: 2024
+"""
+
 import os, re, glob
 import numpy as np
 import pandas as pd
 from scipy import stats
+# === 分析配置参数 ===
+DATA_DIR = r"../../data_events"        # 行为数据文件目录
+FILE_PATTERN = "*run-7_events.tsv"     # 文件匹配模式
+DV_COL = "memory"                      # 因变量列名（记忆效果指标）
 
-# ========= 行为数据分析：获取隐喻-空间的T检验结果 =========
-"""
-第12个被试没做行为
-被试数 n = 27
-YY 平均(被试级) = 0.6799 ± 0.1713
-KJ 平均(被试级) = 0.5878 ± 0.2350
-差值(YY-KJ) = 0.0921 95%CI [0.0473, 0.1369]
-t(26) = 4.2232, p = 0.000261
-Cohen's dz = 0.813
-Shapiro 正态性（差值）：W = 0.9508, p = 0.224628  (p>0.05 则差值近似正态)
-"""
-# ========= 配置区（按你的实际情况改这几项） =========
-DATA_DIR = r"../../data_events"  # 28个文件所在的目录
-FILE_PATTERN = "*run-7_events.tsv"                    # 通配符，例：'*events.tsv' 或 '*events.csv'；默认两者都行
-DV_COL = "memory"                           # 你的记忆效果指标列名，比如 'accuracy' 或 'memory_score' 或 'rt'
-YY_SET = {"yyw", "yyew"}
-KJ_SET = {"kjw", "kjew"}
+# 实验条件定义
+YY_SET = {"yyw", "yyew"}               # YY条件的trial_type值集合
+KJ_SET = {"kjw", "kjew"}               # KJ条件的trial_type值集合
 
-# 若你的文件是TSV，请设置默认分隔符优先为'\t'
-# 代码会根据后缀自动判断，后缀不明时用逗号。
-# ===============================================
+# 文件读取说明：
+# - 自动识别TSV/CSV格式
+# - 优先使用制表符分隔符
+# - 支持递归搜索子目录
 
 def smart_read(path: str) -> pd.DataFrame:
+    """
+    智能读取数据文件，自动识别TSV/CSV格式
+    
+    Args:
+        path: 文件路径
+    
+    Returns:
+        pd.DataFrame: 读取的数据框
+    
+    Note:
+        优先尝试TSV格式（制表符分隔），失败时回退到CSV格式
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext == ".tsv":
         return pd.read_csv(path, sep="\t")
-    # 兜底：尝试TSV再CSV
+    # 兜底策略：先尝试TSV再尝试CSV
     try:
         return pd.read_csv(path, sep="\t")
     except:
@@ -37,7 +72,18 @@ def smart_read(path: str) -> pd.DataFrame:
 
 def get_sub_id_from_name(fn: str) -> str:
     """
-    从文件名里提取被试ID（如 'sub-01' 或 '01'）。提取不到就返回文件基名。
+    从文件名中提取被试ID
+    
+    Args:
+        fn: 文件名或文件路径
+    
+    Returns:
+        str: 标准化的被试ID（格式：sub-XX）
+    
+    Examples:
+        'sub-01_run-7_events.tsv' -> 'sub-01'
+        'subject_05_data.csv' -> 'sub-05'
+        '12_events.tsv' -> 'sub-12'
     """
     base = os.path.basename(fn)
     m = re.search(r"sub[-_]?(\d+)", base, flags=re.IGNORECASE)

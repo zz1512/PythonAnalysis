@@ -1,4 +1,37 @@
-# metaphor_roi_mvpa.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+fMRI ROI-based MVPA分析流水线
+
+功能描述:
+    基于感兴趣区域(ROI)的多体素模式分析(MVPA)，用于隐喻-空间认知的神经解码研究。
+    结合LSS分析结果和预定义ROI掩膜，执行分类分析以识别不同认知条件的神经模式。
+
+主要功能:
+    1. 加载LSS分析产生的单试次beta图像
+    2. 应用ROI掩膜提取感兴趣区域的体素模式
+    3. 使用SVM分类器进行条件间的模式分类
+    4. 执行置换检验评估分类性能的统计显著性
+    5. 生成组水平统计分析和可视化结果
+
+分析流程:
+    单被试分析 → 组水平统计 → 结果可视化 → 报告生成
+
+输入数据:
+    - LSS beta图像: {LSS_ROOT}/{subject}/run-{run}_LSS/beta_trial_*.nii.gz
+    - ROI掩膜: {ROI_DIR}/*.nii.gz
+    - 试次信息: 从LSS目录中的trials_summary.csv获取
+
+输出结果:
+    - 单被试分类准确率和统计结果
+    - 组水平统计分析报告
+    - 可视化图表和数据表格
+
+作者: fMRI分析团队
+版本: 1.0
+日期: 2024
+"""
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -13,40 +46,80 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 
+# 配置日志系统
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ========== 配置参数 ==========
-SUBJECTS = [f"sub-{i:02d}" for i in range(1, 5)]
-RUNS = [3]
-LSS_ROOT = Path(r"../../../learn_LSS")
-ROI_DIR = Path(r"../../../learn_mvpa/full_roi_mask")  # ROI掩码目录
-RESULTS_DIR = Path(r"../../../learn_mvpa/metaphor_ROI_MVPA")
+# ========== MVPA分析配置参数 ==========
+
+# === 被试和实验设置 ===
+SUBJECTS = [f"sub-{i:02d}" for i in range(1, 5)]  # 被试列表：sub-01到sub-04（测试用）
+RUNS = [3]                                        # 分析的run编号列表
+
+# === 数据路径配置 ===
+LSS_ROOT = Path(r"../../../learn_LSS")                      # LSS分析结果根目录
+ROI_DIR = Path(r"../../../learn_mvpa/full_roi_mask")        # ROI掩膜文件目录
+RESULTS_DIR = Path(r"../../../learn_mvpa/metaphor_ROI_MVPA") # MVPA分析结果输出目录
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# 关键对比
+# === 分类对比设置 ===
+# 定义需要进行分类分析的条件对比
+# 格式: (对比名称, 条件1标识, 条件2标识)
 CONTRASTS = [
-    ('metaphor_vs_space', 'yy', 'kj'),  # 隐喻 vs 空间
+    ('metaphor_vs_space', 'yy', 'kj'),  # 隐喻条件 vs 空间条件
+    # 可以添加更多对比，如:
+    # ('condition_A_vs_B', 'condA', 'condB'),
 ]
 
 
+# ========== 核心工具函数 ==========
+
 def log(message):
+    """
+    统一的日志输出函数
+    
+    Args:
+        message (str): 要记录的日志信息
+    """
     logging.info(message)
 
 
 def load_roi_masks(roi_dir):
-    """加载预生成的ROI掩模"""
-    log("加载ROI掩模...")
+    """
+    加载预生成的ROI掩膜文件
+    
+    从指定目录加载所有ROI掩膜文件，用于后续的MVPA分析。
+    支持自动识别文件名格式并提取ROI名称。
+    
+    Args:
+        roi_dir (Path): ROI掩膜文件所在目录路径
+    
+    Returns:
+        dict: ROI掩膜字典，格式为 {roi_name: roi_mask_image}
+    
+    Note:
+        - 自动搜索目录下所有.nii.gz文件
+        - 从文件名中移除"cluster_"前缀作为ROI名称
+        - 跳过加载失败的文件并记录错误
+    
+    Example:
+        >>> roi_masks = load_roi_masks(Path("./roi_masks"))
+        >>> print(list(roi_masks.keys()))
+        ['frontal_001', 'parietal_002', ...]
+    """
+    log("开始加载ROI掩膜文件...")
     roi_masks = {}
 
-    # 查找所有ROI文件
+    # 查找所有ROI掩膜文件
     roi_files = list(roi_dir.glob("*.nii.gz"))
+    log(f"发现 {len(roi_files)} 个ROI掩膜文件")
 
     for roi_file in roi_files:
-        roi_name = roi_file.stem.replace("cluster_", "")  # 从文件名提取ROI名称
+        # 从文件名提取ROI名称（移除cluster_前缀和扩展名）
+        roi_name = roi_file.stem.replace("cluster_", "")
         try:
             roi_mask = image.load_img(str(roi_file))
             roi_masks[roi_name] = roi_mask
-            log(f"加载ROI: {roi_name}")
+            log(f"成功加载ROI: {roi_name}")
         except Exception as e:
             logging.error(f"加载ROI失败 {roi_file}: {e}")
 
