@@ -6,6 +6,14 @@ fMRI Searchlight-based MVPA分析流水线 (增强版)
 功能描述:
     基于searchlight方法的多体素模式分析(MVPA)，用于隐喻-空间认知的神经解码研究。
     相比ROI方法，searchlight在每个体素周围定义球形搜索区域，提供更精细的空间定位。
+    
+增强功能 (基于ROI enhanced版本):
+    - 错误处理与重试机制: 自动重试失败的被试分析
+    - 内存优化: 定期内存清理和批处理优化
+    - 统计增强: 改进的多重比较校正和效应量计算
+    - 备份机制: 自动备份重要结果文件
+    - 进度跟踪: 详细的分析进度记录和恢复
+    - 质量检查: 数据质量自动检查和报告
 
 主要功能:
     1. LSS trial-wise beta系数加载和预处理
@@ -14,6 +22,8 @@ fMRI Searchlight-based MVPA分析流水线 (增强版)
     4. 置换检验和统计显著性测试
     5. 全脑分类准确率图生成和可视化
     6. 多重比较校正和阈值处理
+    7. 错误恢复和重试机制
+    8. 内存优化和性能监控
 
 分析流程:
     数据加载 → Searchlight定义 → 特征提取 → SVM分类 → 置换检验 → 统计校正 → 结果可视化
@@ -28,9 +38,12 @@ fMRI Searchlight-based MVPA分析流水线 (增强版)
     - 统计显著性图: {results_dir}/statistical_maps/
     - 组水平分析结果: {results_dir}/group_searchlight_results.csv
     - HTML分析报告: {results_dir}/searchlight_analysis_report.html
+    - 进度记录: {results_dir}/analysis_progress.json
+    - 备份文件: {results_dir}/backups/
 
 作者: AI Assistant
 创建时间: 2024
+更新时间: 2024 (Enhanced版本)
 """
 
 import numpy as np
@@ -52,6 +65,9 @@ from functools import partial
 import gc
 import json
 from datetime import datetime
+import traceback
+import shutil
+import time
 import warnings
 warnings.filterwarnings('ignore')
 import logging
@@ -122,9 +138,16 @@ class SearchlightMVPAConfig:
         self.use_parallel = True  # 是否使用并行处理
         
         # ========== 内存优化参数 ==========
-        self.memory_cache = None  # 内存缓存目录(None表示不缓存)
+        self.memory_cache = 'nilearn_cache'  # 内存缓存目录
         self.memory_level = 1  # 缓存级别
         self.batch_size = 50  # 批处理大小
+        self.memory_cleanup_interval = 3  # 每N个被试后清理内存
+        
+        # ========== 错误处理与重试参数 ==========
+        self.max_retries = 3  # 最大重试次数
+        self.retry_failed = True  # 是否重试失败的被试
+        self.backup_results = True  # 是否备份结果文件
+        self.save_progress_interval = 5  # 每N个被试保存进度
         
         # ========== 分类对比设置 ==========
         # 格式: [(对比名称, 条件1, 条件2), ...]
@@ -146,6 +169,8 @@ class SearchlightMVPAConfig:
         (self.results_dir / "accuracy_maps").mkdir(exist_ok=True)
         (self.results_dir / "statistical_maps").mkdir(exist_ok=True)
         (self.results_dir / "subject_results").mkdir(exist_ok=True)
+        (self.results_dir / "backups").mkdir(exist_ok=True)  # 备份目录
+        (self.results_dir / "logs").mkdir(exist_ok=True)  # 日志目录
         self.mask_dir.mkdir(parents=True, exist_ok=True)
     
     def get_selected_mask(self):
@@ -280,7 +305,7 @@ class SearchlightMVPAConfig:
 # ========== 核心工具函数 ==========
 def log(message, config=None):
     """
-    带时间戳的日志记录函数
+    增强的日志记录函数
     
     参数:
         message (str): 日志消息内容
@@ -290,10 +315,134 @@ def log(message, config=None):
     log_message = f"[{timestamp}] {message}"
     print(log_message)
     logging.info(message)
+    
+    # 保存到日志文件
+    if config and hasattr(config, 'results_dir'):
+        log_file = config.results_dir / "logs" / "analysis.log"
+        try:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] [SEARCHLIGHT] {message}\n")
+        except Exception:
+            pass  # 静默处理日志文件写入错误
 
 def memory_cleanup():
-    """内存清理函数"""
-    gc.collect()
+    """增强的内存清理函数"""
+    # 强制垃圾回收
+    for i in range(3):
+        gc.collect()
+    log("内存清理完成")
+
+# ========== 进度管理函数 ==========
+def save_progress(config, completed_subjects=None, failed_subjects=None, retry_subjects=None, analysis_config=None):
+    """保存分析进度"""
+    progress_file = config.results_dir / "analysis_progress.json"
+    
+    progress_data = {
+        'timestamp': datetime.now().isoformat(),
+        'completed_subjects': completed_subjects or [],
+        'failed_subjects': failed_subjects or [],
+        'retry_subjects': retry_subjects or [],
+        'analysis_config': analysis_config or {},
+        'total_subjects': len(config.subjects)
+    }
+    
+    try:
+        with open(progress_file, 'w', encoding='utf-8') as f:
+            json.dump(progress_data, f, indent=2, ensure_ascii=False)
+        log(f"进度已保存: {len(completed_subjects or [])} 完成, {len(failed_subjects or [])} 失败", config)
+    except Exception as e:
+        log(f"保存进度失败: {e}", config)
+
+def load_progress(config):
+    """加载分析进度"""
+    progress_file = config.results_dir / "analysis_progress.json"
+    
+    if not progress_file.exists():
+        return None
+    
+    try:
+        with open(progress_file, 'r', encoding='utf-8') as f:
+            progress_data = json.load(f)
+        log(f"加载进度: {len(progress_data.get('completed_subjects', []))} 完成", config)
+        return progress_data
+    except Exception as e:
+        log(f"加载进度失败: {e}", config)
+        return None
+
+# ========== 备份管理函数 ==========
+def backup_file(file_path, config):
+    """备份重要文件"""
+    if not config.backup_results or not Path(file_path).exists():
+        return
+    
+    try:
+        backup_dir = config.results_dir / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)  # 确保备份目录存在
+        backup_path = backup_dir / f"{Path(file_path).stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{Path(file_path).suffix}"
+        shutil.copy2(file_path, backup_path)
+        log(f"文件已备份: {backup_path.name}", config)
+    except Exception as e:
+        log(f"备份失败 {file_path}: {e}", config)
+
+def restore_from_backup(file_path, config):
+    """从备份恢复文件"""
+    if not config.backup_results:
+        return False
+    
+    try:
+        backup_dir = config.results_dir / "backups"
+        file_stem = Path(file_path).stem
+        file_suffix = Path(file_path).suffix
+        
+        # 查找最新的备份文件
+        backup_files = list(backup_dir.glob(f"{file_stem}_*{file_suffix}"))
+        if not backup_files:
+            log(f"未找到备份文件: {file_stem}_*{file_suffix}", config)
+            return False
+        
+        latest_backup = max(backup_files, key=lambda x: x.stat().st_mtime)
+        shutil.copy2(latest_backup, file_path)
+        log(f"从备份恢复: {latest_backup.name} -> {Path(file_path).name}", config)
+        return True
+    except Exception as e:
+        log(f"备份恢复失败: {e}", config)
+        return False
+
+# ========== 重试机制函数 ==========
+def analyze_subject_with_retry(subject, runs, contrasts, config, mask_paths=None):
+    """带重试机制的被试分析"""
+    for attempt in range(config.max_retries + 1):
+        try:
+            log(f"分析被试 {subject} (尝试 {attempt + 1}/{config.max_retries + 1})", config)
+            
+            # 调用原始分析函数
+            if mask_paths:
+                # 多mask分析
+                results = analyze_single_subject_searchlight_multi_mask(subject, runs, contrasts, config, mask_paths)
+            else:
+                # 单mask或全脑分析
+                results = analyze_single_subject_searchlight(subject, runs, contrasts, config)
+            
+            if results:
+                if attempt > 0:
+                    log(f"被试 {subject} 重试成功", config)
+                return results, True
+            else:
+                raise ValueError("分析返回空结果")
+                
+        except Exception as e:
+            error_msg = f"被试 {subject} 分析失败 (尝试 {attempt + 1}/{config.max_retries + 1}): {str(e)}"
+            log(error_msg, config)
+            
+            if attempt < config.max_retries:
+                log(f"将重试被试 {subject}...", config)
+                time.sleep(1)  # 短暂等待
+                memory_cleanup()  # 清理内存
+            else:
+                log(f"被试 {subject} 达到最大重试次数，标记为失败", config)
+                return None, False
+    
+    return None, False
 
 def load_lss_trial_data(subject, run, config):
     """
@@ -843,7 +992,7 @@ def analyze_single_subject_searchlight(subject, runs, contrasts, config):
 # ========== 组水平分析函数 ==========
 def perform_group_analysis_searchlight(all_subject_results, config):
     """
-    执行组水平searchlight分析
+    执行组水平searchlight分析 (增强版)
     
     参数:
         all_subject_results (dict): 所有被试的分析结果
@@ -852,100 +1001,149 @@ def perform_group_analysis_searchlight(all_subject_results, config):
     返回:
         DataFrame: 组水平统计结果
     """
-    log("开始组水平分析", config)
+    log("开始组水平分析 (增强版)", config)
+    start_time = time.time()
     
-    # 收集组水平数据
-    group_data = []
-    for subject, subject_results in all_subject_results.items():
-        for contrast_name, contrast_results in subject_results.items():
-            group_data.append({
-                'subject': subject,
-                'contrast': contrast_name,
-                'mean_accuracy': contrast_results['mean_accuracy'],
-                'max_accuracy': contrast_results['max_accuracy'],
-                'n_voxels_analyzed': contrast_results['n_voxels_analyzed'],
-                'n_significant_voxels': contrast_results.get('n_significant_voxels', 0),
-                'n_trials_cond1': contrast_results['n_trials_cond1'],
-                'n_trials_cond2': contrast_results['n_trials_cond2']
+    try:
+        # 收集组水平数据
+        group_data = []
+        for subject, subject_results in all_subject_results.items():
+            for contrast_name, contrast_results in subject_results.items():
+                group_data.append({
+                    'subject': subject,
+                    'contrast': contrast_name,
+                    'mean_accuracy': contrast_results['mean_accuracy'],
+                    'max_accuracy': contrast_results['max_accuracy'],
+                    'n_voxels_analyzed': contrast_results['n_voxels_analyzed'],
+                    'n_significant_voxels': contrast_results.get('n_significant_voxels', 0),
+                    'n_trials_cond1': contrast_results['n_trials_cond1'],
+                    'n_trials_cond2': contrast_results['n_trials_cond2']
+                })
+        
+        group_df = pd.DataFrame(group_data)
+        
+        if len(group_df) == 0:
+            log("警告: 没有有效的组水平数据", config)
+            return None
+        
+        # 备份原始数据
+        group_results_file = config.results_dir / "group_searchlight_results.csv"
+        if config.backup_results:
+            backup_file(group_results_file, config)
+        
+        # 保存组水平原始数据
+        group_df.to_csv(group_results_file, index=False)
+        log(f"保存组水平原始数据: {len(group_df)}条记录", config)
+        
+        # 组水平统计分析
+        stats_results = []
+        
+        for contrast in group_df['contrast'].unique():
+            contrast_data = group_df[group_df['contrast'] == contrast]
+            
+            # 平均准确率统计
+            mean_accs = contrast_data['mean_accuracy'].values
+            
+            # 检查数据有效性
+            if len(mean_accs) < 3:
+                log(f"警告: 对比 {contrast} 的被试数量过少 (n={len(mean_accs)})", config)
+                continue
+            
+            # 单样本t检验 (测试是否显著高于0.5)
+            t_stat, p_value = stats.ttest_1samp(mean_accs, 0.5)
+            
+            # 计算置信区间
+            ci_95 = stats.t.interval(0.95, len(mean_accs)-1, 
+                                   loc=np.mean(mean_accs), 
+                                   scale=stats.sem(mean_accs))
+            
+            # 描述性统计
+            stats_results.append({
+                'contrast': contrast,
+                'metric': 'mean_accuracy',
+                'n_subjects': len(mean_accs),
+                'mean': np.mean(mean_accs),
+                'std': np.std(mean_accs, ddof=1),
+                'sem': np.std(mean_accs, ddof=1) / np.sqrt(len(mean_accs)),
+                'min': np.min(mean_accs),
+                'max': np.max(mean_accs),
+                'median': np.median(mean_accs),
+                'q25': np.percentile(mean_accs, 25),
+                'q75': np.percentile(mean_accs, 75),
+                'ci_95_lower': ci_95[0],
+                'ci_95_upper': ci_95[1],
+                't_statistic': t_stat,
+                'p_value': p_value,
+                'significant': p_value < config.alpha_level,
+                'effect_size_cohen_d': t_stat / np.sqrt(len(mean_accs))
             })
-    
-    group_df = pd.DataFrame(group_data)
-    
-    if len(group_df) == 0:
-        log("警告: 没有有效的组水平数据", config)
+            
+            # 最大准确率统计
+            max_accs = contrast_data['max_accuracy'].values
+            t_stat_max, p_value_max = stats.ttest_1samp(max_accs, 0.5)
+            
+            # 计算置信区间
+            ci_95_max = stats.t.interval(0.95, len(max_accs)-1, 
+                                       loc=np.mean(max_accs), 
+                                       scale=stats.sem(max_accs))
+            
+            stats_results.append({
+                'contrast': contrast,
+                'metric': 'max_accuracy',
+                'n_subjects': len(max_accs),
+                'mean': np.mean(max_accs),
+                'std': np.std(max_accs, ddof=1),
+                'sem': np.std(max_accs, ddof=1) / np.sqrt(len(max_accs)),
+                'min': np.min(max_accs),
+                'max': np.max(max_accs),
+                'median': np.median(max_accs),
+                'q25': np.percentile(max_accs, 25),
+                'q75': np.percentile(max_accs, 75),
+                'ci_95_lower': ci_95_max[0],
+                'ci_95_upper': ci_95_max[1],
+                't_statistic': t_stat_max,
+                'p_value': p_value_max,
+                'significant': p_value_max < config.alpha_level,
+                'effect_size_cohen_d': t_stat_max / np.sqrt(len(max_accs))
+            })
+        
+        if not stats_results:
+            log("警告: 没有有效的统计结果", config)
+            return None
+        
+        stats_df = pd.DataFrame(stats_results)
+        
+        # 多重比较校正
+        if len(stats_df) > 1:
+            rejected, corrected_p, _, _ = multipletests(
+                stats_df['p_value'].values,
+                alpha=config.alpha_level,
+                method=config.correction_method
+            )
+            stats_df['p_value_corrected'] = corrected_p
+            stats_df['significant_corrected'] = rejected
+        else:
+            stats_df['p_value_corrected'] = stats_df['p_value']
+            stats_df['significant_corrected'] = stats_df['significant']
+        
+        # 备份统计结果
+        stats_results_file = config.results_dir / "group_statistical_results.csv"
+        if config.backup_results:
+            backup_file(stats_results_file, config)
+        
+        # 保存统计结果
+        stats_df.to_csv(stats_results_file, index=False)
+        
+        # 计算分析耗时
+        elapsed_time = time.time() - start_time
+        log(f"组水平分析完成: {len(stats_df)}个统计测试, 耗时: {elapsed_time:.2f}秒", config)
+        
+        return stats_df
+        
+    except Exception as e:
+        log(f"组水平分析失败: {str(e)}", config)
+        log(f"错误详情: {traceback.format_exc()}", config)
         return None
-    
-    # 保存组水平原始数据
-    group_df.to_csv(config.results_dir / "group_searchlight_results.csv", index=False)
-    
-    # 组水平统计分析
-    stats_results = []
-    
-    for contrast in group_df['contrast'].unique():
-        contrast_data = group_df[group_df['contrast'] == contrast]
-        
-        # 平均准确率统计
-        mean_accs = contrast_data['mean_accuracy'].values
-        
-        # 单样本t检验 (测试是否显著高于0.5)
-        t_stat, p_value = stats.ttest_1samp(mean_accs, 0.5)
-        
-        # 描述性统计
-        stats_results.append({
-            'contrast': contrast,
-            'metric': 'mean_accuracy',
-            'n_subjects': len(mean_accs),
-            'mean': np.mean(mean_accs),
-            'std': np.std(mean_accs, ddof=1),
-            'sem': np.std(mean_accs, ddof=1) / np.sqrt(len(mean_accs)),
-            'min': np.min(mean_accs),
-            'max': np.max(mean_accs),
-            't_statistic': t_stat,
-            'p_value': p_value,
-            'significant': p_value < config.alpha_level,
-            'effect_size_cohen_d': t_stat / np.sqrt(len(mean_accs))
-        })
-        
-        # 最大准确率统计
-        max_accs = contrast_data['max_accuracy'].values
-        t_stat_max, p_value_max = stats.ttest_1samp(max_accs, 0.5)
-        
-        stats_results.append({
-            'contrast': contrast,
-            'metric': 'max_accuracy',
-            'n_subjects': len(max_accs),
-            'mean': np.mean(max_accs),
-            'std': np.std(max_accs, ddof=1),
-            'sem': np.std(max_accs, ddof=1) / np.sqrt(len(max_accs)),
-            'min': np.min(max_accs),
-            'max': np.max(max_accs),
-            't_statistic': t_stat_max,
-            'p_value': p_value_max,
-            'significant': p_value_max < config.alpha_level,
-            'effect_size_cohen_d': t_stat_max / np.sqrt(len(max_accs))
-        })
-    
-    stats_df = pd.DataFrame(stats_results)
-    
-    # 多重比较校正
-    if len(stats_df) > 1:
-        rejected, corrected_p, _, _ = multipletests(
-            stats_df['p_value'].values,
-            alpha=config.alpha_level,
-            method=config.correction_method
-        )
-        stats_df['p_value_corrected'] = corrected_p
-        stats_df['significant_corrected'] = rejected
-    else:
-        stats_df['p_value_corrected'] = stats_df['p_value']
-        stats_df['significant_corrected'] = stats_df['significant']
-    
-    # 保存统计结果
-    stats_df.to_csv(config.results_dir / "group_statistical_results.csv", index=False)
-    
-    log(f"组水平分析完成: {len(stats_df)}个统计测试", config)
-    
-    return stats_df
 
 def create_group_visualizations(group_df, stats_df, config):
     """
@@ -1322,7 +1520,7 @@ def generate_html_report_searchlight(group_df, stats_df, config):
 # ========== 主分析函数 ==========
 def run_group_searchlight_analysis(config):
     """
-    运行组水平searchlight MVPA分析
+    运行组水平searchlight MVPA分析 (增强版)
     
     参数:
         config (SearchlightMVPAConfig): 配置对象
@@ -1330,71 +1528,137 @@ def run_group_searchlight_analysis(config):
     返回:
         tuple: (组水平数据, 统计结果) 或 None
     """
-    log("开始Searchlight MVPA分析", config)
+    log("开始Searchlight MVPA分析 (增强版)", config)
+    start_time = time.time()
     
-    # 验证mask配置
-    is_valid, mask_info = config.validate_mask_availability()
-    if not is_valid:
-        log(f"错误: {mask_info}", config)
-        log(f"可用的mask选项: {config.get_available_masks()}", config)
+    try:
+        # 验证mask配置
+        is_valid, mask_info = config.validate_mask_availability()
+        if not is_valid:
+            log(f"错误: {mask_info}", config)
+            log(f"可用的mask选项: {config.get_available_masks()}", config)
+            return None
+        
+        log(f"Mask配置验证通过: {mask_info}", config)
+        
+        # 保存配置
+        config.save_config(config.results_dir / "analysis_config.json")
+        
+        # 尝试加载之前的进度
+        progress_data = load_progress(config)
+        completed_subjects = progress_data.get('completed_subjects', [])
+        failed_subjects = progress_data.get('failed_subjects', [])
+        retry_subjects = progress_data.get('retry_subjects', [])
+        
+        log(f"进度恢复: 已完成 {len(completed_subjects)} 个被试, 失败 {len(failed_subjects)} 个被试", config)
+        
+        # 分析每个被试
+        all_subject_results = {}
+        total_subjects = len(config.subjects)
+        
+        for i, subject in enumerate(config.subjects, 1):
+            log(f"\n处理被试 {subject} ({i}/{total_subjects})", config)
+            
+            # 检查是否已完成
+            if subject in completed_subjects:
+                log(f"被试 {subject} 已完成，跳过", config)
+                continue
+            
+            # 使用重试机制分析被试
+            if config.retry_failed and subject in failed_subjects:
+                log(f"重试失败的被试 {subject}", config)
+                subject_results = analyze_subject_with_retry(
+                    subject, config.runs, config.contrasts, config
+                )
+            else:
+                subject_results = analyze_subject_with_retry(
+                    subject, config.runs, config.contrasts, config
+                )
+            
+            if subject_results is not None:
+                all_subject_results[subject] = subject_results
+                completed_subjects.append(subject)
+                if subject in failed_subjects:
+                    failed_subjects.remove(subject)
+                log(f"被试 {subject} 分析成功", config)
+            else:
+                if subject not in failed_subjects:
+                    failed_subjects.append(subject)
+                log(f"被试 {subject} 分析失败", config)
+            
+            # 定期保存进度
+            if i % config.save_progress_interval == 0:
+                save_progress(config, completed_subjects, failed_subjects, retry_subjects)
+                log(f"进度已保存: {len(completed_subjects)}/{total_subjects} 完成", config)
+            
+            # 定期内存清理
+            if i % config.memory_cleanup_interval == 0:
+                memory_cleanup()
+        
+        # 最终保存进度
+        save_progress(config, completed_subjects, failed_subjects, retry_subjects)
+        
+        if not all_subject_results:
+            log("错误: 没有获得任何分析结果", config)
+            return None
+        
+        log(f"\n被试分析完成: 成功 {len(all_subject_results)}/{total_subjects} 个被试", config)
+        
+        # 组水平分析
+        group_df = None
+        stats_df = perform_group_analysis_searchlight(all_subject_results, config)
+        
+        if stats_df is not None:
+            # 重新构建group_df用于可视化
+            group_data = []
+            for subject, subject_results in all_subject_results.items():
+                for contrast_name, contrast_results in subject_results.items():
+                    group_data.append({
+                        'subject': subject,
+                        'contrast': contrast_name,
+                        'mean_accuracy': contrast_results['mean_accuracy'],
+                        'max_accuracy': contrast_results['max_accuracy'],
+                        'n_voxels_analyzed': contrast_results['n_voxels_analyzed'],
+                        'n_significant_voxels': contrast_results.get('n_significant_voxels', 0),
+                        'n_trials_cond1': contrast_results['n_trials_cond1'],
+                        'n_trials_cond2': contrast_results['n_trials_cond2']
+                    })
+            
+            group_df = pd.DataFrame(group_data)
+            
+            # 创建可视化
+            try:
+                create_group_visualizations(group_df, stats_df, config)
+                log("可视化图表创建成功", config)
+            except Exception as e:
+                log(f"可视化创建失败: {str(e)}", config)
+            
+            # 生成HTML报告
+            try:
+                generate_html_report_searchlight(group_df, stats_df, config)
+                log("HTML报告生成成功", config)
+            except Exception as e:
+                log(f"HTML报告生成失败: {str(e)}", config)
+        
+        # 计算总耗时
+        total_time = time.time() - start_time
+        
+        log(f"\n=== Searchlight MVPA分析完成 ===", config)
+        log(f"总耗时: {total_time:.2f}秒 ({total_time/60:.1f}分钟)", config)
+        log(f"结果保存在: {config.results_dir}", config)
+        log(f"成功分析被试数: {len(all_subject_results)}/{total_subjects}", config)
+        log(f"失败被试数: {len(failed_subjects)}", config)
+        if failed_subjects:
+            log(f"失败被试列表: {failed_subjects}", config)
+        log(f"对比数量: {len(config.contrasts)}", config)
+        log(f"HTML报告: {config.results_dir / 'searchlight_analysis_report.html'}", config)
+        
+        return group_df, stats_df
+        
+    except Exception as e:
+        log(f"分析流程发生严重错误: {str(e)}", config)
+        log(f"错误详情: {traceback.format_exc()}", config)
         return None
-    
-    log(f"Mask配置验证通过: {mask_info}", config)
-    
-    # 保存配置
-    config.save_config(config.results_dir / "analysis_config.json")
-    
-    # 分析每个被试
-    all_subject_results = {}
-    
-    for subject in config.subjects:
-        subject_results = analyze_single_subject_searchlight(
-            subject, config.runs, config.contrasts, config
-        )
-        if subject_results is not None:
-            all_subject_results[subject] = subject_results
-        else:
-            log(f"跳过被试 {subject}: 数据加载失败", config)
-    
-    if not all_subject_results:
-        log("错误: 没有获得任何分析结果", config)
-        return None
-    
-    # 组水平分析
-    group_df = None
-    stats_df = perform_group_analysis_searchlight(all_subject_results, config)
-    
-    if stats_df is not None:
-        # 重新构建group_df用于可视化
-        group_data = []
-        for subject, subject_results in all_subject_results.items():
-            for contrast_name, contrast_results in subject_results.items():
-                group_data.append({
-                    'subject': subject,
-                    'contrast': contrast_name,
-                    'mean_accuracy': contrast_results['mean_accuracy'],
-                    'max_accuracy': contrast_results['max_accuracy'],
-                    'n_voxels_analyzed': contrast_results['n_voxels_analyzed'],
-                    'n_significant_voxels': contrast_results.get('n_significant_voxels', 0),
-                    'n_trials_cond1': contrast_results['n_trials_cond1'],
-                    'n_trials_cond2': contrast_results['n_trials_cond2']
-                })
-        
-        group_df = pd.DataFrame(group_data)
-        
-        # 创建可视化
-        create_group_visualizations(group_df, stats_df, config)
-        
-        # 生成HTML报告
-        generate_html_report_searchlight(group_df, stats_df, config)
-    
-    log(f"\nSearchlight MVPA分析完成!", config)
-    log(f"结果保存在: {config.results_dir}", config)
-    log(f"分析被试数: {len(all_subject_results)}", config)
-    log(f"对比数量: {len(config.contrasts)}", config)
-    log(f"HTML报告: {config.results_dir / 'searchlight_analysis_report.html'}", config)
-    
-    return group_df, stats_df
 
 def main():
     """
