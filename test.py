@@ -1,129 +1,95 @@
-import os
-import glob
+import time
+import shutil
+from pathlib import Path
 
-# 指定目录路径
-directory = r"H:\PythonAnalysis\learn_mvpa\full_roi_mask"
-
-# 要保留的文件名关键词
-keep_keywords = [
-    "2_Lingual_Gyrus_sphere.nii",
-    "3_Angular_Gyrus_sphere.nii",
-    "19_Background_sphere.nii",
-    "20_Insular_Cortex_sphere.nii",
-    "31_Lateral_Occipital_Cortex_superior_division_sphere.nii",
-    "29_Background_sphere.nii",
-    "14_Background_sphere.nii",
-    "10_Precuneous_Cortex_sphere.nii",
-    "4_Precuneous_Cortex_sphere.nii"
-]
+# 配置参数
+SUBJECTS = [f"sub-{i:02d}" for i in range(6, 29)]
+RUNS = [3, 4]
+OUTPUT_ROOT = Path(r"learn_LSS")
+CHECK_INTERVAL = 7200  # 2小时（秒）
+MAX_AGE = 7200  # 2小时（秒）
 
 
-def cleanup_files():
-    # 切换到指定目录
-    original_dir = os.getcwd()
+def get_folder_age_seconds(folder_path):
+    """获取文件夹年龄（秒）"""
+    if not folder_path.exists():
+        return float('inf')
     try:
-        os.chdir(directory)
-
-        # 查找所有以 cluster_ 开头的文件
-        files_to_process = glob.glob("*.nii.gz")
-
-        if not files_to_process:
-            print(f"在目录 {directory} 中没有找到以 'cluster_' 开头的文件")
-            return
-
-        deleted_count = 0
-        kept_count = 0
-
-        for file_path in files_to_process:
-            if os.path.isfile(file_path):
-                # 检查文件名是否包含任何要保留的关键词
-                should_keep = any(keyword in file_path for keyword in keep_keywords)
-
-                if not should_keep:
-                    print(f"删除文件: {file_path}")
-                    os.remove(file_path)
-                    deleted_count += 1
-                else:
-                    print(f"保留文件: {file_path}")
-                    kept_count += 1
-
-        print(f"\n操作完成！")
-        print(f"删除文件数: {deleted_count}")
-        print(f"保留文件数: {kept_count}")
-        print(f"处理文件总数: {len(files_to_process)}")
-
-    except FileNotFoundError:
-        print(f"错误：目录 {directory} 不存在")
-    except PermissionError:
-        print(f"错误：没有权限访问目录 {directory}")
-    except Exception as e:
-        print(f"发生错误: {str(e)}")
-    finally:
-        # 切换回原始目录
-        os.chdir(original_dir)
+        mtime = folder_path.stat().st_mtime
+        return time.time() - mtime
+    except:
+        return float('inf')
 
 
-# 安全预览模式 - 先显示将要删除的文件，不实际删除
-def preview_cleanup():
-    original_dir = os.getcwd()
-    try:
-        os.chdir(directory)
+def cleanup_old_caches():
+    """清理2小时没有更新的cache文件夹"""
+    cache_dirs = []
 
-        files_to_process = glob.glob("*.nii.gz")
+    # 查找所有缓存目录
+    for sub in SUBJECTS:
+        for run in RUNS:
+            lss_dir = OUTPUT_ROOT / sub / f"run-{run}_LSS"
+            if lss_dir.exists():
+                cache_dir = lss_dir / "cache"
+                if cache_dir.exists():
+                    cache_dirs.append(cache_dir)
 
-        if not files_to_process:
-            print(f"在目录 {directory} 中没有找到以 'cluster_' 开头的文件")
-            return
+    cleaned_count = 0
+    for cache_dir in cache_dirs:
+        try:
+            age_seconds = get_folder_age_seconds(cache_dir)
 
-        print("预览模式 - 以下文件将被删除:")
-        print("=" * 50)
+            if age_seconds > MAX_AGE:
+                # 计算缓存大小
+                size_before = sum(f.stat().st_size for f in cache_dir.rglob('*') if f.is_file())
+                shutil.rmtree(cache_dir)
 
-        to_delete = []
-        to_keep = []
-
-        for file_path in files_to_process:
-            if os.path.isfile(file_path):
-                should_keep = any(keyword in file_path for keyword in keep_keywords)
-
-                if not should_keep:
-                    to_delete.append(file_path)
-                    print(f"[删除] {file_path}")
-                else:
-                    to_keep.append(file_path)
-                    print(f"[保留] {file_path}")
-
-        print("=" * 50)
-        print(f"总计: {len(to_delete)} 个文件将被删除, {len(to_keep)} 个文件将被保留")
-
-        if to_delete:
-            response = input("\n确认执行删除操作？(y/N): ")
-            if response.lower() == 'y':
-                cleanup_files()
+                size_mb = size_before // (1024 * 1024)
+                print(f"[{time.strftime('%H:%M:%S')}] 清理缓存: {cache_dir}")
+                print(f"          释放空间: {size_mb} MB, 年龄: {age_seconds / 3600:.1f} 小时")
+                cleaned_count += 1
             else:
-                print("操作已取消")
+                print(f"[{time.strftime('%H:%M:%S')}] 跳过新缓存: {cache_dir} (年龄: {age_seconds / 3600:.1f} 小时)")
 
-    except Exception as e:
-        print(f"发生错误: {str(e)}")
-    finally:
-        os.chdir(original_dir)
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] 清理失败 {cache_dir}: {e}")
+
+    # 检查磁盘空间
+    if OUTPUT_ROOT.exists():
+        total, used, free = shutil.disk_usage(OUTPUT_ROOT)
+        free_gb = free // (2 ** 30)
+        print(f"[{time.strftime('%H:%M:%S')}] 磁盘剩余空间: {free_gb} GB")
+
+    return cleaned_count
+
+
+def main():
+    """主函数：每2小时执行一次清理"""
+    print(f"[{time.strftime('%H:%M:%S')}] 启动缓存清理服务")
+    print(f"清理策略: 每2小时清理年龄超过2小时的cache文件夹")
+    print(f"监控目录: {OUTPUT_ROOT}")
+
+    while True:
+        try:
+            print(f"\n[{time.strftime('%H:%M:%S')}] 开始检查缓存...")
+            cleaned_count = cleanup_old_caches()
+
+            if cleaned_count > 0:
+                print(f"[{time.strftime('%H:%M:%S')}] 本次清理完成: {cleaned_count} 个缓存目录")
+            else:
+                print(f"[{time.strftime('%H:%M:%S')}] 无需清理")
+
+            print(
+                f"[{time.strftime('%H:%M:%S')}] 下次检查时间: {time.strftime('%H:%M:%S', time.localtime(time.time() + CHECK_INTERVAL))}")
+            time.sleep(CHECK_INTERVAL)
+
+        except KeyboardInterrupt:
+            print(f"\n[{time.strftime('%H:%M:%S')}] 用户中断，退出清理服务")
+            break
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}] 执行出错: {e}")
+            time.sleep(300)  # 出错后等待5分钟再继续
 
 
 if __name__ == "__main__":
-    print("文件清理脚本")
-    print(f"目标目录: {directory}")
-    print("保留包含以下关键词的文件:")
-    for keyword in keep_keywords:
-        print(f"  - {keyword}")
-
-    print("\n选择模式:")
-    print("1. 预览模式 (推荐)")
-    print("2. 直接执行删除")
-
-    choice = input("请输入选择 (1 或 2): ").strip()
-
-    if choice == "1":
-        preview_cleanup()
-    elif choice == "2":
-        cleanup_files()
-    else:
-        print("无效选择，退出程序")
+    main()

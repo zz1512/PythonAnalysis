@@ -205,7 +205,7 @@ def run_resume_roi_analysis(config):
     
     # 生成分析总结
     generate_analysis_summary(all_subject_results, group_df, stats_df, config, 
-                             new_subject_results, failed_subjects)
+                            new_subject_results, failed_subjects)
     
     log(f"\n断点续传MVPA分析完成!", config)
     log(f"结果保存在: {config.results_dir}", config)
@@ -221,6 +221,20 @@ def generate_analysis_summary(all_subject_results, group_df, stats_df, config,
                             new_subject_results, failed_subjects):
     """生成分析总结报告"""
     summary_file = config.results_dir / "analysis_summary.txt"
+    
+    # 补齐缺失列，避免下游KeyError
+    if 'significant_uncorrected' not in stats_df.columns:
+        if 'p_value' in stats_df.columns:
+            stats_df['significant_uncorrected'] = stats_df['p_value'] < config.alpha_level
+        else:
+            stats_df['significant_uncorrected'] = False
+    if 'significant_corrected' not in stats_df.columns:
+        if 'p_value' in stats_df.columns:
+            stats_df['significant_corrected'] = stats_df['p_value'] < config.alpha_level
+        else:
+            stats_df['significant_corrected'] = False
+    # t统计量列名兼容
+    t_col = 't_stat' if 't_stat' in stats_df.columns else ('t_statistic' if 't_statistic' in stats_df.columns else None)
     
     with open(summary_file, 'w', encoding='utf-8') as f:
         f.write("=" * 60 + "\n")
@@ -257,8 +271,9 @@ def generate_analysis_summary(all_subject_results, group_df, stats_df, config,
             f.write(f"\n4. 显著结果详情 (校正后):\n")
             sig_results = stats_df[stats_df['significant_corrected']]
             for _, row in sig_results.iterrows():
+                t_val = row[t_col] if t_col else float('nan')
                 f.write(f"   - {row['roi']}: 平均准确率={row['mean_accuracy']:.3f}, "
-                       f"t={row['t_stat']:.3f}, p_corrected={row['p_corrected']:.6f}\n")
+                       f"t={t_val:.3f}, p_corrected={row['p_corrected']:.6f}\n")
         
         f.write(f"\n5. 文件输出:\n")
         f.write(f"   - 完整结果: group_roi_mvpa_results_complete.csv\n")

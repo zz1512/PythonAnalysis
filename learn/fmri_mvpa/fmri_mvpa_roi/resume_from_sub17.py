@@ -31,7 +31,7 @@ def main():
     config = ResumeConfig(
         start_subject=1,      # 总体被试范围1-28
         end_subject=28,       # 总体被试范围1-28
-        resume_from='sub-17'  # 从sub-17开始继续
+        resume_from='sub-28'  # 从sub-17开始继续
     )
     
     print(f"配置信息:")
@@ -66,6 +66,15 @@ def main():
             print("=" * 60)
             print(f"✓ 总被试数: {len(all_subject_results)}")
             print(f"✓ 总测试数: {len(stats_df)}")
+            # 兼容并补齐显著性列
+            if 'significant_corrected' not in stats_df.columns:
+                alpha = getattr(config, 'alpha_level', 0.05)
+                if 'p_corrected' in stats_df.columns:
+                    stats_df['significant_corrected'] = stats_df['p_corrected'] < alpha
+                elif 'p_value' in stats_df.columns:
+                    stats_df['significant_corrected'] = stats_df['p_value'] < alpha
+                else:
+                    stats_df['significant_corrected'] = False
             print(f"✓ 显著结果数 (校正后): {len(stats_df[stats_df['significant_corrected']])}")
             
             # 显示主要输出文件
@@ -84,13 +93,18 @@ def main():
                 else:
                     print(f"  ✗ {desc}: {filepath} (未找到)")
             
-            # 显示显著结果
+            # 显著结果打印兼容t列名
             if len(stats_df[stats_df['significant_corrected']]) > 0:
                 print("\n显著结果 (校正后):")
                 sig_results = stats_df[stats_df['significant_corrected']]
+                # 兼容t统计量列名：优先t_stat，其次t_statistic，若都缺失则用NaN
+                t_col = 't_stat' if 't_stat' in stats_df.columns else (
+                    't_statistic' if 't_statistic' in stats_df.columns else None
+                )
                 for _, row in sig_results.iterrows():
+                    t_val = row[t_col] if t_col else float('nan')
                     print(f"  • {row['roi']}: 准确率={row['mean_accuracy']:.3f}, "
-                          f"t={row['t_stat']:.3f}, p={row['p_corrected']:.6f}")
+                          f"t={t_val:.3f}, p={row['p_corrected']:.6f}")
             else:
                 print("\n未发现显著结果 (校正后)")
             
