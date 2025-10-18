@@ -269,13 +269,22 @@ def run_roi_classification_enhanced(X, y, config):
     # 置换检验（使用最佳参数）
     np.random.seed(config.permutation_random_state)
     null_distribution = []
-    for _ in range(config.n_permutations):
+    observed_score = np.mean(cv_scores)
+    
+    for i in range(config.n_permutations):
+        # 使用不同的随机种子确保每次置换都不同
+        np.random.seed(config.permutation_random_state + i + 1)
         y_perm = np.random.permutation(y)
         perm_scores = cross_val_score(best_pipeline, X, y_perm, cv=cv, scoring='accuracy')
         null_distribution.append(np.mean(perm_scores))
     
-    # 计算p值
-    p_value = (np.sum(null_distribution >= np.mean(cv_scores)) + 1) / (config.n_permutations + 1)
+    # 计算p值 - 修正计算逻辑
+    null_distribution = np.array(null_distribution)
+    p_value = (np.sum(null_distribution >= observed_score) + 1) / (config.n_permutations + 1)
+    
+    # 确保p值不为0（最小值为1/(n_permutations+1)）
+    min_p_value = 1.0 / (config.n_permutations + 1)
+    p_value = max(p_value, min_p_value)
     
     return {
         'cv_scores': cv_scores,
@@ -307,27 +316,53 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     
     # 条件1的trial
     for _, trial in cond1_trials.iterrows():
-        trial_idx = trial['trial_index'] - 1
+        # 对于多run合并数据，使用combined_trial_index；对于单run数据，使用trial_index-1
+        if 'combined_trial_index' in trial:
+            trial_idx = trial['combined_trial_index']
+        else:
+            trial_idx = trial['trial_index'] - 1
+            
         if trial_idx < len(beta_images):
             X_indices.append(trial_idx)
             y_labels.append(0)
-            trial_details.append({
+            trial_detail = {
                 'trial_index': trial['trial_index'],
                 'condition': trial['original_condition'],
                 'label': 0
-            })
+            }
+            # 添加run信息（如果存在）
+            if 'run' in trial:
+                trial_detail['run'] = trial['run']
+            if 'global_trial_index' in trial:
+                trial_detail['global_trial_index'] = trial['global_trial_index']
+            if 'combined_trial_index' in trial:
+                trial_detail['combined_trial_index'] = trial['combined_trial_index']
+            trial_details.append(trial_detail)
     
     # 条件2的trial
     for _, trial in cond2_trials.iterrows():
-        trial_idx = trial['trial_index'] - 1
+        # 对于多run合并数据，使用combined_trial_index；对于单run数据，使用trial_index-1
+        if 'combined_trial_index' in trial:
+            trial_idx = trial['combined_trial_index']
+        else:
+            trial_idx = trial['trial_index'] - 1
+            
         if trial_idx < len(beta_images):
             X_indices.append(trial_idx)
             y_labels.append(1)
-            trial_details.append({
+            trial_detail = {
                 'trial_index': trial['trial_index'],
                 'condition': trial['original_condition'],
                 'label': 1
-            })
+            }
+            # 添加run信息（如果存在）
+            if 'run' in trial:
+                trial_detail['run'] = trial['run']
+            if 'global_trial_index' in trial:
+                trial_detail['global_trial_index'] = trial['global_trial_index']
+            if 'combined_trial_index' in trial:
+                trial_detail['combined_trial_index'] = trial['combined_trial_index']
+            trial_details.append(trial_detail)
     
     if len(X_indices) < 6:
         log(f"有效样本数不足: {len(X_indices)}", config)
@@ -443,35 +478,41 @@ def perform_group_statistics_enhanced(group_df, config):
         contrast_data = group_df[group_df['contrast'] == contrast_name]
         
         for roi in group_df['roi'].unique():
-            roi_data = contrast_data[contrast_data['roi'] == roi]['accuracy']
+            roi_subset = contrast_data[contrast_data['roi'] == roi]
+            roi_accuracies = roi_subset['accuracy']
+            roi_pvalues = roi_subset['p_value']  # 被试内置换检验p值
             
-            if len(roi_data) > 3:
-                # 单样本t检验 vs 随机水平(0.5)
-                t_stat, p_value = stats.ttest_1samp(roi_data, 0.5)
-                cohens_d = (np.mean(roi_data) - 0.5) / np.std(roi_data)
+            if len(roi_accuracies) >= 3:  # 改为>=3，因为3个被试也可以做统计
+                # 单样本t检验 vs 随机水平(0.5) - 用于组水平统计
+                t_stat, group_p_value = stats.ttest_1samp(roi_accuracies, 0.5)
+                cohens_d = (np.mean(roi_accuracies) - 0.5) / np.std(roi_accuracies)
+                
+                # 计算被试内置换检验p值的平均值（作为参考）
+                mean_permutation_p = np.mean(roi_pvalues)
                 
                 stats_results.append({
                     'contrast': contrast_name,
                     'roi': roi,
-                    'mean_accuracy': np.mean(roi_data),
-                    'std_accuracy': np.std(roi_data),
-                    'sem_accuracy': np.std(roi_data) / np.sqrt(len(roi_data)),
+                    'mean_accuracy': np.mean(roi_accuracies),
+                    'std_accuracy': np.std(roi_accuracies),
+                    'sem_accuracy': np.std(roi_accuracies) / np.sqrt(len(roi_accuracies)),
                     't_statistic': t_stat,
-                    'p_value': p_value,
+                    'p_value': group_p_value,  # 组水平t检验p值
+                    'p_value_permutation': mean_permutation_p,  # 被试内置换检验p值平均
                     'cohens_d': cohens_d,
-                    'n_subjects': len(roi_data),
-                    'ci_lower': np.mean(roi_data) - 1.96 * np.std(roi_data) / np.sqrt(len(roi_data)),
-                    'ci_upper': np.mean(roi_data) + 1.96 * np.std(roi_data) / np.sqrt(len(roi_data))
+                    'n_subjects': len(roi_accuracies),
+                    'ci_lower': np.mean(roi_accuracies) - 1.96 * np.std(roi_accuracies) / np.sqrt(len(roi_accuracies)),
+                    'ci_upper': np.mean(roi_accuracies) + 1.96 * np.std(roi_accuracies) / np.sqrt(len(roi_accuracies))
                 })
     
     stats_df = pd.DataFrame(stats_results)
     
-    # 多重比较校正
+    # 多重比较校正 - 使用置换检验p值
     if len(stats_df) > 1:
-        log(f"应用{config.correction_method}多重比较校正", config)
+        log(f"应用{config.correction_method}多重比较校正（基于置换检验p值）", config)
         
         rejected, p_corrected, alpha_sidak, alpha_bonf = multipletests(
-            stats_df['p_value'], 
+            stats_df['p_value_permutation'], 
             alpha=config.alpha_level, 
             method=config.correction_method
         )
@@ -481,10 +522,10 @@ def perform_group_statistics_enhanced(group_df, config):
         stats_df['correction_method'] = config.correction_method
         
         # 报告结果
-        significant_uncorrected = stats_df[stats_df['p_value'] < config.alpha_level]
+        significant_uncorrected = stats_df[stats_df['p_value_permutation'] < config.alpha_level]
         significant_corrected = stats_df[stats_df['significant_corrected']]
         
-        log(f"\n未校正显著结果数: {len(significant_uncorrected)}", config)
+        log(f"\n未校正显著结果数（置换检验）: {len(significant_uncorrected)}", config)
         log(f"校正后显著结果数: {len(significant_corrected)}", config)
         
         if not significant_corrected.empty:
@@ -500,8 +541,8 @@ def perform_group_statistics_enhanced(group_df, config):
             log("\n校正后无显著结果", config)
     else:
         log("\n只有一个比较，无需多重比较校正", config)
-        stats_df['p_corrected'] = stats_df['p_value']
-        stats_df['significant_corrected'] = stats_df['p_value'] < config.alpha_level
+        stats_df['p_corrected'] = stats_df['p_value_permutation']
+        stats_df['significant_corrected'] = stats_df['p_value_permutation'] < config.alpha_level
         stats_df['correction_method'] = 'none'
     
     # 保存统计结果
@@ -711,7 +752,7 @@ def generate_html_report(group_df, stats_df, config):
                     <th>SEM</th>
                     <th>95% CI</th>
                     <th>t-statistic</th>
-                    <th>p-value (raw)</th>
+                    <th>p-value (permutation)</th>
                     <th>p-value (corrected)</th>
                     <th>Cohen's d</th>
                     <th>N Subjects</th>
@@ -732,8 +773,8 @@ def generate_html_report(group_df, stats_df, config):
                     <td>{row['sem_accuracy']:.3f}</td>
                     <td>[{row['ci_lower']:.3f}, {row['ci_upper']:.3f}]</td>
                     <td>{row['t_statistic']:.3f}</td>
-                    <td>{row['p_value']:.3f}</td>
-                    <td>{row['p_corrected']:.3f}</td>
+                    <td>{row['p_value_permutation']:.4f}</td>
+                    <td>{row['p_corrected']:.4f}</td>
                     <td>{row['cohens_d']:.3f}</td>
                     <td>{row['n_subjects']}</td>
                     <td>{significance_mark}</td>
