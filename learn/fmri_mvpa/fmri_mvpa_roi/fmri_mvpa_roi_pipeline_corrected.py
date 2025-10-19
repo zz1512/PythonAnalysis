@@ -29,9 +29,9 @@ class MVPAConfig:
     """MVPA分析配置参数"""
     def __init__(self):
         # 基本参数
-        self.subjects = [f"sub-{i:02d}" for i in range(1, 29)]
+        self.subjects = [f"sub-{i:02d}" for i in range(1, 29) if i not in [14, 24]]
         self.runs = [3, 4]  # 支持多个run
-        self.lss_root = Path(r"../../learn_LSS")
+        self.lss_root = Path(r"../../../learn_LSS")
         self.roi_dir = Path(r"../../../learn_mvpa/full_roi_mask")
         self.results_dir = Path(r"../../../learn_mvpa/metaphor_ROI_MVPA_corrected")
         
@@ -120,57 +120,80 @@ def load_roi_masks(config):
     return roi_masks
 
 def load_lss_trial_data(subject, run, config):
-    """加载单个被试单个run的LSS trial数据"""
-    subject_dir = config.lss_root / subject / "func"
+    """加载LSS分析的trial数据和beta图像"""
+    lss_dir = config.lss_root / subject / f"run-{run}_LSS"
     
-    # 查找trial info文件
-    trial_info_pattern = f"{subject}_task-*_run-{run:02d}_*trial_info.csv"
-    trial_info_files = list(subject_dir.glob(trial_info_pattern))
-    
-    if not trial_info_files:
-        log(f"警告：未找到{subject} run-{run}的trial info文件", config)
+    if not lss_dir.exists():
+        log(f"LSS目录不存在: {lss_dir}", config)
         return None, None
     
-    trial_info_file = trial_info_files[0]
-    trial_info = pd.read_csv(trial_info_file)
-    
-    # 查找beta images目录
-    beta_dir_pattern = f"{subject}_task-*_run-{run:02d}_*trial_betas"
-    beta_dirs = list(subject_dir.glob(beta_dir_pattern))
-    
-    if not beta_dirs:
-        log(f"警告：未找到{subject} run-{run}的beta images目录", config)
+    # 加载trial信息
+    trial_map_path = lss_dir / "trial_info.csv"
+    if not trial_map_path.exists():
+        log(f"trial_info.csv不存在: {trial_map_path}", config)
         return None, None
     
-    beta_dir = beta_dirs[0]
-    beta_files = sorted(list(beta_dir.glob("trial_*.nii.gz")))
+    trial_info = pd.read_csv(trial_map_path)
     
-    if len(beta_files) != len(trial_info):
-        log(f"警告：{subject} run-{run}的beta文件数量({len(beta_files)})与trial数量({len(trial_info)})不匹配", config)
+    # 加载所有beta图像
+    beta_images = []
+    valid_trials = []
+    
+    for _, trial in trial_info.iterrows():
+        beta_path = lss_dir / f"beta_trial_{trial['trial_index']:03d}.nii.gz"
+        if beta_path.exists():
+            beta_images.append(str(beta_path))
+            # 添加run信息到trial数据中
+            trial_with_run = trial.copy()
+            trial_with_run['run'] = run
+            trial_with_run['global_trial_index'] = f"run{run}_trial{trial['trial_index']}"
+            valid_trials.append(trial_with_run)
+        else:
+            log(f"Beta图像缺失: {beta_path}", config)
+    
+    if len(beta_images) == 0:
+        log(f"没有找到有效的beta图像: {subject} run-{run}", config)
         return None, None
     
-    return trial_info, beta_files
+    valid_trials_df = pd.DataFrame(valid_trials)
+    log(f"加载 {subject} run-{run}: {len(beta_images)}个trial", config)
+    
+    return beta_images, valid_trials_df
 
 def load_multi_run_lss_data(subject, runs, config):
-    """加载多个run的LSS数据并合并"""
+    """加载并合并多个run的LSS trial数据"""
+    log(f"开始加载 {subject} 的多run数据: runs {runs}", config)
+    
+    all_beta_images = []
     all_trial_info = []
-    all_beta_files = []
     
     for run in runs:
-        trial_info, beta_files = load_lss_trial_data(subject, run, config)
-        if trial_info is not None and beta_files is not None:
-            # 添加run信息
-            trial_info['run'] = run
+        beta_images, trial_info = load_lss_trial_data(subject, run, config)
+        if beta_images is not None and trial_info is not None:
+            all_beta_images.extend(beta_images)
             all_trial_info.append(trial_info)
-            all_beta_files.extend(beta_files)
+            log(f"  成功加载 run-{run}: {len(beta_images)}个trial", config)
+        else:
+            log(f"  跳过 run-{run}: 数据加载失败", config)
     
-    if not all_trial_info:
+    if not all_beta_images:
+        log(f"错误: {subject} 没有加载到任何有效的trial数据", config)
         return None, None
     
-    # 合并所有run的数据
+    # 合并所有run的trial信息
     combined_trial_info = pd.concat(all_trial_info, ignore_index=True)
     
-    return combined_trial_info, all_beta_files
+    # 重新索引trial，确保每个trial有唯一标识
+    combined_trial_info['combined_trial_index'] = range(len(combined_trial_info))
+    
+    log(f"合并完成 {subject}: 总共{len(all_beta_images)}个trial (来自{len(all_trial_info)}个run)", config)
+    
+    # 打印每个条件的trial数量统计
+    if 'original_condition' in combined_trial_info.columns:
+        condition_counts = combined_trial_info['original_condition'].value_counts()
+        log(f"  条件统计: {dict(condition_counts)}", config)
+    
+    return all_beta_images, combined_trial_info
 
 # ========== 特征提取函数 ==========
 def extract_roi_timeseries_optimized(functional_imgs, roi_mask_path, config, confounds=None):
@@ -269,29 +292,75 @@ def run_roi_classification_enhanced(X, y, config):
 
 def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     """准备分类数据"""
-    # 筛选特定条件的trial
-    cond1_trials = trial_info[trial_info['condition'] == cond1]
-    cond2_trials = trial_info[trial_info['condition'] == cond2]
+    # 筛选特定条件的trial - 使用original_condition列
+    condition_col = 'original_condition' if 'original_condition' in trial_info.columns else 'condition'
+    cond1_trials = trial_info[trial_info[condition_col] == cond1]
+    cond2_trials = trial_info[trial_info[condition_col] == cond2]
     
     if len(cond1_trials) == 0 or len(cond2_trials) == 0:
-        return None, None, {
-            'cond1_count': len(cond1_trials),
-            'cond2_count': len(cond2_trials),
-            'total_trials': len(cond1_trials) + len(cond2_trials)
-        }
+        log(f"条件数据不足: {cond1}={len(cond1_trials)}, {cond2}={len(cond2_trials)}", config)
+        return None, None, None
     
-    # 获取对应的beta images
-    selected_indices = list(cond1_trials.index) + list(cond2_trials.index)
-    selected_betas = [beta_images[i] for i in selected_indices]
+    X_indices = []
+    y_labels = []
+    trial_details = []
     
-    # 创建标签
-    labels = [0] * len(cond1_trials) + [1] * len(cond2_trials)
+    # 条件1的trial
+    for _, trial in cond1_trials.iterrows():
+        # 对于多run合并数据，使用combined_trial_index；对于单run数据，使用trial_index-1
+        if 'combined_trial_index' in trial:
+            trial_idx = trial['combined_trial_index']
+        else:
+            trial_idx = trial['trial_index'] - 1
+            
+        if trial_idx < len(beta_images):
+            X_indices.append(trial_idx)
+            y_labels.append(0)
+            trial_detail = {
+                'trial_index': trial['trial_index'],
+                'condition': trial[condition_col],
+                'label': 0
+            }
+            # 添加run信息（如果存在）
+            if 'run' in trial:
+                trial_detail['run'] = trial['run']
+            if 'global_trial_index' in trial:
+                trial_detail['global_trial_index'] = trial['global_trial_index']
+            if 'combined_trial_index' in trial:
+                trial_detail['combined_trial_index'] = trial['combined_trial_index']
+            trial_details.append(trial_detail)
     
-    return selected_betas, np.array(labels), {
-        'cond1_count': len(cond1_trials),
-        'cond2_count': len(cond2_trials),
-        'total_trials': len(cond1_trials) + len(cond2_trials)
-    }
+    # 条件2的trial
+    for _, trial in cond2_trials.iterrows():
+        # 对于多run合并数据，使用combined_trial_index；对于单run数据，使用trial_index-1
+        if 'combined_trial_index' in trial:
+            trial_idx = trial['combined_trial_index']
+        else:
+            trial_idx = trial['trial_index'] - 1
+            
+        if trial_idx < len(beta_images):
+            X_indices.append(trial_idx)
+            y_labels.append(1)
+            trial_detail = {
+                'trial_index': trial['trial_index'],
+                'condition': trial[condition_col],
+                'label': 1
+            }
+            # 添加run信息（如果存在）
+            if 'run' in trial:
+                trial_detail['run'] = trial['run']
+            if 'global_trial_index' in trial:
+                trial_detail['global_trial_index'] = trial['global_trial_index']
+            if 'combined_trial_index' in trial:
+                trial_detail['combined_trial_index'] = trial['combined_trial_index']
+            trial_details.append(trial_detail)
+    
+    if len(X_indices) < 6:
+        log(f"有效样本数不足: {len(X_indices)}", config)
+        return None, None, None
+    
+    selected_betas = [beta_images[i] for i in X_indices]
+    return selected_betas, np.array(y_labels), pd.DataFrame(trial_details)
 
 # ========== 并行处理函数 ==========
 def analyze_single_roi_parallel(args):
@@ -317,15 +386,19 @@ def analyze_single_roi_parallel(args):
 
 # ========== 主要分析函数 ==========
 def analyze_single_subject_roi_enhanced(subject, runs, contrasts, roi_masks, config):
-    """增强的单被试ROI分析"""
-    log(f"分析被试: {subject}", config)
+    """增强的单被试ROI分析（支持多run合并）"""
+    log(f"开始分析 {subject}", config)
     
-    # 加载LSS数据
-    trial_info, beta_images = load_multi_run_lss_data(subject, runs, config)
+    # 加载多run合并数据
+    if isinstance(runs, list) and len(runs) > 1:
+        beta_images, trial_info = load_multi_run_lss_data(subject, runs, config)
+    else:
+        # 兼容单run分析
+        single_run = runs[0] if isinstance(runs, list) else runs
+        beta_images, trial_info = load_lss_trial_data(subject, single_run, config)
     
-    if trial_info is None or beta_images is None:
-        log(f"跳过被试{subject}：无法加载LSS数据", config)
-        return []
+    if beta_images is None:
+        return None
     
     results = []
     
@@ -333,32 +406,29 @@ def analyze_single_subject_roi_enhanced(subject, runs, contrasts, roi_masks, con
         log(f"  分析对比: {contrast_name} ({cond1} vs {cond2})", config)
         
         # 准备分类数据
-        selected_betas, labels, data_info = prepare_classification_data(
+        selected_betas, labels, trial_details = prepare_classification_data(
             trial_info, beta_images, cond1, cond2, config
         )
         
         if selected_betas is None:
-            log(f"    跳过对比{contrast_name}：数据不足", config)
             continue
         
-        log(f"    数据信息: {cond1}={data_info['cond1_count']}, "
-            f"{cond2}={data_info['cond2_count']}, 总计={data_info['total_trials']}", config)
-        
-        # 准备并行分析参数
+        # 并行处理ROI分析
         if config.use_parallel and len(roi_masks) > 1:
-            # 并行处理多个ROI
-            args_list = [
-                (roi_name, roi_mask_path, selected_betas, labels, config)
-                for roi_name, roi_mask_path in roi_masks.items()
+            # 准备并行参数
+            parallel_args = [
+                (roi_name, roi_mask, selected_betas, labels, config)
+                for roi_name, roi_mask in roi_masks.items()
             ]
             
+            # 并行执行
             with Pool(processes=config.n_jobs) as pool:
-                roi_results = pool.map(analyze_single_roi_parallel, args_list)
+                roi_results = pool.map(analyze_single_roi_parallel, parallel_args)
         else:
             # 串行处理
             roi_results = [
-                analyze_single_roi_parallel((roi_name, roi_mask_path, selected_betas, labels, config))
-                for roi_name, roi_mask_path in roi_masks.items()
+                analyze_single_roi_parallel((roi_name, roi_mask, selected_betas, labels, config))
+                for roi_name, roi_mask in roi_masks.items()
             ]
         
         # 收集结果
@@ -368,9 +438,7 @@ def analyze_single_subject_roi_enhanced(subject, runs, contrasts, roi_masks, con
                     'subject': subject,
                     'contrast': contrast_name,
                     'condition1': cond1,
-                    'condition2': cond2,
-                    'n_trials_cond1': data_info['cond1_count'],
-                    'n_trials_cond2': data_info['cond2_count']
+                    'condition2': cond2
                 })
                 results.append(result)
     
