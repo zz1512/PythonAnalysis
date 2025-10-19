@@ -30,7 +30,7 @@ class MVPAConfig:
     """MVPA分析配置参数"""
     def __init__(self):
         # 基本参数
-        self.subjects = [f"sub-{i:02d}" for i in range(1, 29)]
+        self.subjects = [f"sub-{i:02d}" for i in range(1, 29) if i not in [14, 24]]
         self.runs = [3, 4]  # 支持多个run
         self.lss_root = Path(r"../../../learn_LSS")
         self.roi_dir = Path(r"../../../learn_mvpa/full_roi_mask")
@@ -52,7 +52,7 @@ class MVPAConfig:
         self.cv_random_state = 42
         
         # 置换检验参数，对于严格的统计推断，n_permutations可以增加到1000
-        self.n_permutations = 100
+        self.n_permutations = 1000
         self.permutation_random_state = 42
         
         # 多重比较校正参数
