@@ -51,10 +51,10 @@ def perform_group_statistics_corrected(group_df, config):
         std_acc = np.std(accuracies, ddof=1)
         sem_acc = std_acc / np.sqrt(n_subjects)
         
-        # 单样本t检验（vs 0.5随机水平）- 保持双尾
+        # 单样本t检验（vs 0.5随机水平）
         t_stat, t_p_value = stats.ttest_1samp(accuracies, 0.5)
         
-        # 计算单尾t检验p值（用于参考）
+        # 计算单尾t检验p值
         t_p_value_one_tailed = t_p_value / 2 if mean_acc > 0.5 else 1 - t_p_value / 2
         
         # Cohen's d效应量
@@ -80,7 +80,6 @@ def perform_group_statistics_corrected(group_df, config):
             'std_accuracy': std_acc,
             'sem_accuracy': sem_acc,
             't_statistic': t_stat,
-            'p_value_ttest': t_p_value,  # 双尾t检验p值
             'p_value_ttest_one_tailed': t_p_value_one_tailed,  # 单尾t检验p值
             'p_value_permutation': p_permutation,  # 单尾置换检验p值
             'cohens_d': cohens_d,
@@ -96,7 +95,7 @@ def perform_group_statistics_corrected(group_df, config):
         significance_indicator = "*" if p_permutation < config.alpha_level else ""
         log(f"统计完成: {contrast}-{roi} (n={n_subjects}): "
             f"acc={mean_acc:.3f}{significance_indicator}, "
-            f"t={t_stat:.3f}, p_perm(单尾)={p_permutation:.4f}, d={cohens_d:.3f}", config)
+            f"t={t_stat:.3f}, p_t(单尾)={t_p_value_one_tailed:.4f}, p_perm(单尾)={p_permutation:.4f}, d={cohens_d:.3f}", config)
     
     # 转换为DataFrame
     stats_df = pd.DataFrame(stats_results)
@@ -119,6 +118,7 @@ def perform_group_statistics_corrected(group_df, config):
             log(f"  {result['contrast']} - {result['roi']}: "
                 f"accuracy = {result['mean_accuracy']:.3f}, "
                 f"t({result['n_subjects'] - 1}) = {result['t_statistic']:.3f}, "
+                f"p_t(单尾) = {result['p_value_ttest_one_tailed']:.4f}, "
                 f"p_permutation(单尾) = {result['p_value_permutation']:.4f}, "
                 f"d = {result['cohens_d']:.3f}", config)
     else:

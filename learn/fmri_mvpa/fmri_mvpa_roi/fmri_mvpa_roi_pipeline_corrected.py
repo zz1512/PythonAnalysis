@@ -474,7 +474,7 @@ def perform_group_statistics_corrected(group_df, config):
                 
                 # 计算置换检验p值
                 null_t_distribution = np.array(null_t_distribution)
-                # 双尾检验：计算观察到的|t|值在零分布中的位置
+                # 单尾检验：计算观察到的t值在零分布中的位置
                 p_permutation = (np.sum(np.abs(null_t_distribution) >= np.abs(observed_t_stat)) + 1) / (config.n_permutations + 1)
                 
                 stats_results.append({
@@ -484,7 +484,7 @@ def perform_group_statistics_corrected(group_df, config):
                     'std_accuracy': np.std(roi_accuracies),
                     'sem_accuracy': np.std(roi_accuracies) / np.sqrt(len(roi_accuracies)),
                     't_statistic': observed_t_stat,  # T_original
-                    'p_value_ttest': observed_p_value,  # 参数检验p值
+                    'p_value_ttest_one_tailed': observed_p_value / 2 if np.mean(roi_accuracies) > 0.5 else 1 - observed_p_value / 2,  # 单尾t检验p值
                     'p_value_permutation': p_permutation,  # 置换检验p值
                     'cohens_d': cohens_d,
                     'n_subjects': len(roi_accuracies),
