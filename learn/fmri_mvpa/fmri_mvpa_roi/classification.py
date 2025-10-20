@@ -75,17 +75,21 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
         log(f"条件数据不足: {cond1}={len(cond1_trials)}, {cond2}={len(cond2_trials)}", config)
         return None, None, None
     
+    log(f"准备分类数据: {cond1} vs {cond2} (总beta文件: {len(beta_images)}, trial数: {len(trial_info)})", config)
+    
     X_indices = []
     y_labels = []
     trial_details = []
     
     # 条件1的trial
-    for _, trial in cond1_trials.iterrows():
+    for i, (_, trial) in enumerate(cond1_trials.iterrows()):
         # 对于多run合并数据，使用combined_trial_index；对于单run数据，使用trial_index-1
         if 'combined_trial_index' in trial:
             trial_idx = trial['combined_trial_index']
+            index_type = 'combined_trial_index'
         else:
             trial_idx = trial['trial_index'] - 1
+            index_type = 'trial_index-1'
             
         if trial_idx < len(beta_images):
             X_indices.append(trial_idx)
@@ -97,13 +101,22 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
                 'beta_path': beta_images[trial_idx]
             }
             trial_details.append(trial_detail)
+            
+            # 只记录前3个trial的详细对应关系
+            if i < 3:
+                log(f"  {cond1}[{i+1}]: trial_index={trial['trial_index']}, {index_type}={trial_idx}, "
+                    f"run={trial.get('run', 'unknown')}", config)
+        else:
+            log(f"  警告: trial_idx={trial_idx} 超出beta_images范围 (len={len(beta_images)})", config)
     
     # 条件2的trial
-    for _, trial in cond2_trials.iterrows():
+    for i, (_, trial) in enumerate(cond2_trials.iterrows()):
         if 'combined_trial_index' in trial:
             trial_idx = trial['combined_trial_index']
+            index_type = 'combined_trial_index'
         else:
             trial_idx = trial['trial_index'] - 1
+            index_type = 'trial_index-1'
             
         if trial_idx < len(beta_images):
             X_indices.append(trial_idx)
@@ -115,6 +128,13 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
                 'beta_path': beta_images[trial_idx]
             }
             trial_details.append(trial_detail)
+            
+            # 只记录前3个trial的详细对应关系
+            if i < 3:
+                log(f"  {cond2}[{i+1}]: trial_index={trial['trial_index']}, {index_type}={trial_idx}, "
+                    f"run={trial.get('run', 'unknown')}", config)
+        else:
+            log(f"  警告: trial_idx={trial_idx} 超出beta_images范围 (len={len(beta_images)})", config)
     
     if len(X_indices) == 0:
         log(f"没有有效的trial数据用于分类", config)
@@ -123,7 +143,14 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     # 获取对应的beta图像路径
     selected_beta_images = [beta_images[i] for i in X_indices]
     
-    log(f"准备分类数据: {cond1}={sum(1 for y in y_labels if y == 0)}个trial, "
-        f"{cond2}={sum(1 for y in y_labels if y == 1)}个trial", config)
+    # 汇总日志
+    cond1_count = sum(1 for y in y_labels if y == 0)
+    cond2_count = sum(1 for y in y_labels if y == 1)
+    log(f"分类数据准备完成: {cond1}={cond1_count}, {cond2}={cond2_count}, 总计{len(selected_beta_images)}个beta文件", config)
+    
+    # 检查是否有重复的beta文件
+    unique_betas = set(selected_beta_images)
+    if len(unique_betas) != len(selected_beta_images):
+        log(f"警告: 发现重复的beta文件! 唯一文件数: {len(unique_betas)}, 总选择数: {len(selected_beta_images)}", config)
     
     return selected_beta_images, np.array(y_labels), pd.DataFrame(trial_details)

@@ -3,16 +3,54 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import seaborn as sns
 from utils import log
+
+def setup_chinese_fonts():
+    """设置中文字体，增加跨平台兼容性"""
+    # 尝试多种字体，提高兼容性
+    font_candidates = [
+        'SimHei',           # Windows 黑体
+        'Microsoft YaHei',  # Windows 微软雅黑
+        'PingFang SC',      # macOS 苹方
+        'Hiragino Sans GB', # macOS 冬青黑体
+        'Arial Unicode MS', # 跨平台 Unicode 字体
+        'WenQuanYi Micro Hei', # Linux 文泉驿微米黑
+        'DejaVu Sans',      # Linux 默认字体
+        'sans-serif'        # 系统默认无衬线字体
+    ]
+    
+    font_found = False
+    for font_name in font_candidates:
+        try:
+            # 检查字体是否可用
+            available_fonts = [f.name for f in fm.fontManager.ttflist]
+            if font_name in available_fonts or font_name == 'sans-serif':
+                plt.rcParams['font.sans-serif'] = [font_name] + plt.rcParams['font.sans-serif']
+                plt.rcParams['axes.unicode_minus'] = False
+                print(f"成功设置字体: {font_name}")
+                font_found = True
+                break
+        except Exception as e:
+            print(f"字体 {font_name} 设置失败: {e}")
+            continue
+    
+    if not font_found:
+        print("警告：未找到合适的中文字体，可能影响中文显示")
+        # 使用默认设置
+        plt.rcParams['axes.unicode_minus'] = False
+    
+    return font_found
 
 def create_enhanced_visualizations(group_df, stats_df, config):
     """创建增强的可视化"""
     log("创建可视化", config)
     
-    # 设置中文字体
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-    plt.rcParams['axes.unicode_minus'] = False
+    # 设置中文字体（使用改进的字体设置函数）
+    font_success = setup_chinese_fonts()
+    if not font_success:
+        log("警告：中文字体设置可能不完整，图表中的中文可能显示异常", config)
     
     # 创建多个图表
     fig = plt.figure(figsize=(20, 16))
@@ -159,9 +197,10 @@ def create_individual_roi_plots(group_df, stats_df, config):
     """为每个ROI创建详细的个体图表"""
     log("创建单个ROI详细图表", config)
     
-    # 设置中文字体
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-    plt.rcParams['axes.unicode_minus'] = False
+    # 设置中文字体（使用改进的字体设置函数）
+    font_success = setup_chinese_fonts()
+    if not font_success:
+        log("警告：中文字体设置可能不完整，单个ROI图表中的中文可能显示异常", config)
     
     # 获取ROI列表
     rois = stats_df['roi'].unique()

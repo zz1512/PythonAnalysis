@@ -42,9 +42,12 @@ def load_lss_trial_data(subject, run, config):
     # 加载所有beta图像
     beta_images = []
     valid_trials = []
+    missing_files = []
     
-    for _, trial in trial_info.iterrows():
+    for i, (_, trial) in enumerate(trial_info.iterrows()):
         beta_path = lss_dir / f"beta_trial_{trial['trial_index']:03d}.nii.gz"
+        beta_filename = f"beta_trial_{trial['trial_index']:03d}.nii.gz"
+        
         if beta_path.exists():
             beta_images.append(str(beta_path))
             # 添加run信息到trial数据中
@@ -54,6 +57,14 @@ def load_lss_trial_data(subject, run, config):
             valid_trials.append(trial_with_run)
         else:
             log(f"Beta图像缺失: {beta_path}", config)
+            missing_files.append(beta_filename)
+        
+    
+    # 报告缺失文件
+    if missing_files:
+        log(f"  run {run}: 发现 {len(missing_files)} 个缺失的beta文件", config)
+    
+    log(f"  run {run}: 加载了 {len(beta_images)} 个trial", config)
     
     if len(beta_images) == 0:
         log(f"没有找到有效的beta图像: {subject} run-{run}", config)
@@ -65,32 +76,44 @@ def load_lss_trial_data(subject, run, config):
     return beta_images, valid_trials_df
 
 def load_multi_run_lss_data(subject, runs, config):
-    """加载并合并多个run的LSS trial数据"""
-    log(f"开始加载 {subject} 的多run数据: runs {runs}", config)
+    """加载多个run的LSS数据"""
+    log(f"开始加载被试 {subject} 的多run LSS数据, runs: {runs}", config)
     
-    all_beta_images = []
     all_trial_info = []
+    all_beta_images = []
+    global_trial_index = 0
     
     for run in runs:
         beta_images, trial_info = load_lss_trial_data(subject, run, config)
         if beta_images is not None and trial_info is not None:
-            all_beta_images.extend(beta_images)
+            # 为每个trial添加run信息和全局索引
+            trial_info['run'] = run
+            trial_info['global_trial_index'] = range(global_trial_index, 
+                                                    global_trial_index + len(trial_info))
+            trial_info['combined_trial_index'] = trial_info['global_trial_index']
+            
+            # 记录索引映射关系
+            log(f"  run {run} 索引映射: 原始trial_index {trial_info['trial_index'].min()}-{trial_info['trial_index'].max()}, "
+                f"combined_trial_index {global_trial_index}-{global_trial_index + len(trial_info) - 1}", config)
+            
             all_trial_info.append(trial_info)
-            log(f"  成功加载 run-{run}: {len(beta_images)}个trial", config)
+            all_beta_images.extend(beta_images)
+            global_trial_index += len(trial_info)
         else:
-            log(f"  跳过 run-{run}: 数据加载失败", config)
+            log(f"  警告: run {run} 数据加载失败", config)
     
-    if not all_beta_images:
-        log(f"错误: {subject} 没有加载到任何有效的trial数据", config)
+    if not all_trial_info:
+        log(f"错误: 被试 {subject} 没有成功加载任何run的数据", config)
         return None, None
     
-    # 合并所有run的trial信息
+    # 合并所有run的数据
     combined_trial_info = pd.concat(all_trial_info, ignore_index=True)
     
-    # 重新索引trial，确保每个trial有唯一标识
-    combined_trial_info['combined_trial_index'] = range(len(combined_trial_info))
+    log(f"多run数据合并完成: 总共 {len(combined_trial_info)} 个trial, {len(all_beta_images)} 个beta文件", config)
     
-    log(f"合并完成 {subject}: 总共{len(all_beta_images)}个trial (来自{len(all_trial_info)}个run)", config)
+    # 验证数据一致性
+    if len(combined_trial_info) != len(all_beta_images):
+        log(f"警告: trial数量({len(combined_trial_info)})与beta文件数量({len(all_beta_images)})不匹配!", config)
     
     # 打印每个条件的trial数量统计
     if 'original_condition' in combined_trial_info.columns:

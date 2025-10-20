@@ -7,24 +7,65 @@ from pathlib import Path
 from utils import log
 
 def image_to_base64(image_path):
-    """将图片转换为base64编码"""
+    """将图片转换为base64编码，增强错误处理"""
     try:
+        # 检查文件是否存在
+        if not Path(image_path).exists():
+            print(f"警告：图片文件不存在: {image_path}")
+            return None
+        
+        # 检查文件大小，避免加载过大的文件
+        file_size = Path(image_path).stat().st_size
+        if file_size > 10 * 1024 * 1024:  # 10MB限制
+            print(f"警告：图片文件过大 ({file_size/1024/1024:.1f}MB): {image_path}")
+            return None
+        
         with open(image_path, "rb") as img_file:
-            return base64.b64encode(img_file.read()).decode('utf-8')
+            encoded = base64.b64encode(img_file.read()).decode('utf-8')
+            print(f"成功编码图片: {image_path} ({file_size/1024:.1f}KB)")
+            return encoded
+            
+    except PermissionError:
+        print(f"权限错误：无法读取图片文件: {image_path}")
+        return None
+    except MemoryError:
+        print(f"内存错误：图片文件过大无法加载: {image_path}")
+        return None
     except Exception as e:
-        print(f"图片编码失败: {e}")
+        print(f"图片编码失败: {image_path}, 错误类型: {type(e).__name__}, 详情: {e}")
         return None
 
-def generate_html_report(group_df, stats_df, config):
+def generate_image_html(image_b64, alt_text):
+    """
+    生成图片HTML代码，处理加载失败的情况
+    
+    Args:
+        image_b64: base64编码的图片数据
+        alt_text: 图片的alt文本
+    
+    Returns:
+        str: HTML代码字符串
+    """
+    if image_b64:
+        # 使用变量来避免f-string中的反斜杠问题
+        onerror_script = "this.style.display='none'; this.nextElementSibling.style.display='block';"
+        return f'<img src="data:image/png;base64,{image_b64}" style="width:100%; max-width:1200px; height:auto; border:1px solid #ddd; border-radius:8px; margin:20px 0;" alt="{alt_text}" onerror="{onerror_script}" /><div style="display:none; color:red; padding:20px; border:1px solid #ddd; border-radius:8px; background:#f8f8f8; text-align:center;">⚠️ {alt_text}加载失败<br><small>图片文件可能不存在或损坏</small></div>'
+    else:
+        return f'<div style="color:red; padding:20px; border:1px solid #ddd; border-radius:8px; background:#f8f8f8; text-align:center;">⚠️ {alt_text}加载失败<br><small>请检查图片生成是否成功</small></div>'
+
+def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individual_viz_b64=None):
     """生成增强的中文HTML报告"""
     log("生成HTML报告", config)
     
-    # 获取图片的base64编码
-    main_viz_path = config.results_dir / "enhanced_analysis_visualizations.png"
-    individual_viz_path = config.results_dir / "individual_roi_detailed_plots.png"
-    
-    main_viz_b64 = image_to_base64(main_viz_path) if main_viz_path.exists() else None
-    individual_viz_b64 = image_to_base64(individual_viz_path) if individual_viz_path.exists() else None
+    # 如果没有提供图片数据，尝试从文件加载
+    if main_viz_b64 is None or individual_viz_b64 is None:
+        main_viz_path = config.results_dir / "enhanced_analysis_visualizations.png"
+        individual_viz_path = config.results_dir / "individual_roi_detailed_plots.png"
+        
+        if main_viz_b64 is None:
+            main_viz_b64 = image_to_base64(main_viz_path) if main_viz_path.exists() else None
+        if individual_viz_b64 is None:
+            individual_viz_b64 = image_to_base64(individual_viz_path) if individual_viz_path.exists() else None
     
     # 按效应排序（优先显示准确率>50%且显著的结果）
     sorted_df = stats_df.copy()
@@ -426,7 +467,7 @@ def generate_html_report(group_df, stats_df, config):
                 <h2>📊 可视化结果总览</h2>
                 <p>以下图表展示了所有ROI的分析结果，包括分类准确率、效应量分布、统计显著性等多个维度的信息：</p>
                 
-                {f'<img src="data:image/png;base64,{main_viz_b64}" style="width:100%; max-width:1200px; height:auto; border:1px solid #ddd; border-radius:8px; margin:20px 0;"/>' if main_viz_b64 else '<p style="color:red;">⚠️ 主要可视化图表加载失败</p>'}
+                {generate_image_html(main_viz_b64, '主要可视化图表')}
                 
                 <div class="summary-box">
                     <h4>📋 图表说明</h4>
@@ -445,7 +486,7 @@ def generate_html_report(group_df, stats_df, config):
                 <h2>🔍 单个ROI详细分析</h2>
                 <p>以下为每个ROI的详细分析图表，包含个体数据点、统计信息和置信区间：</p>
                 
-                {f'<img src="data:image/png;base64,{individual_viz_b64}" style="width:100%; max-width:1200px; height:auto; border:1px solid #ddd; border-radius:8px; margin:20px 0;"/>' if individual_viz_b64 else '<p style="color:red;">⚠️ 单个ROI详细图表加载失败</p>'}
+                {generate_image_html(individual_viz_b64, '单个ROI详细图表')}
                 
                 <div class="summary-box">
                     <h4>📋 单个ROI图表说明</h4>
