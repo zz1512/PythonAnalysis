@@ -52,7 +52,7 @@ class MVPAConfig:
         self.cv_random_state = 42
         
         # 置换检验参数，对于严格的统计推断，n_permutations可以增加到1000
-        self.n_permutations = 100
+        self.n_permutations = 1000
         self.permutation_random_state = 42
         
         # 多重比较校正参数
@@ -266,25 +266,12 @@ def run_roi_classification_enhanced(X, y, config):
     best_pipeline = grid_search.best_estimator_
     cv_scores = cross_val_score(best_pipeline, X, y, cv=cv, scoring='accuracy')
     
-    # 置换检验（使用最佳参数）
-    np.random.seed(config.permutation_random_state)
-    null_distribution = []
+    # 根据专家建议：单被试不做置换检验，只使用交叉验证结果
     observed_score = np.mean(cv_scores)
     
-    for i in range(config.n_permutations):
-        # 使用不同的随机种子确保每次置换都不同
-        np.random.seed(config.permutation_random_state + i + 1)
-        y_perm = np.random.permutation(y)
-        perm_scores = cross_val_score(best_pipeline, X, y_perm, cv=cv, scoring='accuracy')
-        null_distribution.append(np.mean(perm_scores))
-    
-    # 计算p值 - 修正计算逻辑
-    null_distribution = np.array(null_distribution)
-    p_value = (np.sum(null_distribution >= observed_score) + 1) / (config.n_permutations + 1)
-    
-    # 确保p值不为0（最小值为1/(n_permutations+1)）
-    min_p_value = 1.0 / (config.n_permutations + 1)
-    p_value = max(p_value, min_p_value)
+    # 不进行置换检验，设置默认值
+    null_distribution = np.array([])
+    p_value = np.nan  # 单被试不计算p值
     
     return {
         'cv_scores': cv_scores,
@@ -469,8 +456,13 @@ def analyze_single_subject_roi_enhanced(subject, runs, contrasts, roi_masks, con
 
 # ========== 统计分析函数 ==========
 def perform_group_statistics_enhanced(group_df, config):
-    """增强的组水平统计检验"""
-    log("执行组水平统计检验", config)
+    """重构的组水平统计检验 - 三步流程：
+    1. 第一水平（不置换）：对每个被试计算统计图 S_i
+    2. 构建组统计图：计算组水平统计图 T_original  
+    3. 组水平置换：随机翻转符号进行置换检验
+    """
+    
+    log("执行三步流程：1）单被试统计图，2）组统计图，3）组水平置换检验", config)
     
     stats_results = []
     
@@ -479,16 +471,35 @@ def perform_group_statistics_enhanced(group_df, config):
         
         for roi in group_df['roi'].unique():
             roi_subset = contrast_data[contrast_data['roi'] == roi]
-            roi_accuracies = roi_subset['accuracy']
-            roi_pvalues = roi_subset['p_value']  # 被试内置换检验p值
+            roi_accuracies = roi_subset['accuracy']  # 这是每个被试的统计图 S_i
             
-            if len(roi_accuracies) >= 3:  # 改为>=3，因为3个被试也可以做统计
-                # 单样本t检验 vs 随机水平(0.5) - 用于组水平统计
-                t_stat, group_p_value = stats.ttest_1samp(roi_accuracies, 0.5)
+            if len(roi_accuracies) >= 3:
+                # 步骤2：构建组统计图 T_original
+                # 对每个体素（这里是ROI）进行单样本t检验
+                observed_t_stat, observed_p_value = stats.ttest_1samp(roi_accuracies, 0.5)
                 cohens_d = (np.mean(roi_accuracies) - 0.5) / np.std(roi_accuracies)
                 
-                # 计算被试内置换检验p值的平均值（作为参考）
-                mean_permutation_p = np.mean(roi_pvalues)
+                # 步骤3：组水平置换检验
+                # 随机翻转一部分被试统计图的符号
+                np.random.seed(config.permutation_random_state)
+                null_t_distribution = []
+                
+                for i in range(config.n_permutations):
+                    # 随机翻转符号（等效于置换"效应大于0"的假设）
+                    flip_signs = np.random.choice([-1, 1], size=len(roi_accuracies))
+                    # 将准确率转换为效应量，然后翻转符号
+                    effect_sizes = roi_accuracies - 0.5  # 相对于chance level的效应
+                    flipped_effects = effect_sizes * flip_signs
+                    flipped_accuracies = flipped_effects + 0.5  # 转换回准确率
+                    
+                    # 重新计算组水平统计图（t值）
+                    perm_t_stat, _ = stats.ttest_1samp(flipped_accuracies, 0.5)
+                    null_t_distribution.append(perm_t_stat)
+                
+                # 计算置换检验p值
+                null_t_distribution = np.array(null_t_distribution)
+                # 双尾检验：计算观察到的|t|值在零分布中的位置
+                p_permutation = (np.sum(np.abs(null_t_distribution) >= np.abs(observed_t_stat)) + 1) / (config.n_permutations + 1)
                 
                 stats_results.append({
                     'contrast': contrast_name,
@@ -496,9 +507,9 @@ def perform_group_statistics_enhanced(group_df, config):
                     'mean_accuracy': np.mean(roi_accuracies),
                     'std_accuracy': np.std(roi_accuracies),
                     'sem_accuracy': np.std(roi_accuracies) / np.sqrt(len(roi_accuracies)),
-                    't_statistic': t_stat,
-                    'p_value': group_p_value,  # 组水平t检验p值
-                    'p_value_permutation': mean_permutation_p,  # 被试内置换检验p值平均
+                    't_statistic': observed_t_stat,  # T_original
+                    'p_value_ttest': observed_p_value,  # 参数检验p值
+                    'p_value_permutation': p_permutation,  # 置换检验p值
                     'cohens_d': cohens_d,
                     'n_subjects': len(roi_accuracies),
                     'ci_lower': np.mean(roi_accuracies) - 1.96 * np.std(roi_accuracies) / np.sqrt(len(roi_accuracies)),
@@ -507,43 +518,27 @@ def perform_group_statistics_enhanced(group_df, config):
     
     stats_df = pd.DataFrame(stats_results)
     
-    # 多重比较校正 - 使用置换检验p值
-    if len(stats_df) > 1:
-        log(f"应用{config.correction_method}多重比较校正（基于置换检验p值）", config)
-        
-        rejected, p_corrected, alpha_sidak, alpha_bonf = multipletests(
-            stats_df['p_value_permutation'], 
-            alpha=config.alpha_level, 
-            method=config.correction_method
-        )
-        
-        stats_df['p_corrected'] = p_corrected
-        stats_df['significant_corrected'] = rejected
-        stats_df['correction_method'] = config.correction_method
-        
-        # 报告结果
-        significant_uncorrected = stats_df[stats_df['p_value_permutation'] < config.alpha_level]
-        significant_corrected = stats_df[stats_df['significant_corrected']]
-        
-        log(f"\n未校正显著结果数（置换检验）: {len(significant_uncorrected)}", config)
-        log(f"校正后显著结果数: {len(significant_corrected)}", config)
-        
-        if not significant_corrected.empty:
-            log("\n校正后显著结果:", config)
-            for _, result in significant_corrected.iterrows():
-                log(f"  {result['contrast']} - {result['roi']}: "
-                    f"accuracy = {result['mean_accuracy']:.3f}, "
-                    f"t({result['n_subjects'] - 1}) = {result['t_statistic']:.3f}, "
-                    f"p_raw = {result['p_value']:.3f}, "
-                    f"p_corrected = {result['p_corrected']:.3f}, "
-                    f"d = {result['cohens_d']:.3f}", config)
-        else:
-            log("\n校正后无显著结果", config)
+    # 使用组水平置换检验p值进行显著性判断，无多重比较校正
+    log("使用组水平置换检验p值进行显著性判断，无多重比较校正", config)
+    
+    # 使用置换检验p值作为最终显著性判断
+    stats_df['significant'] = stats_df['p_value_permutation'] < config.alpha_level
+    
+    # 报告结果
+    significant_results = stats_df[stats_df['significant']]
+    
+    log(f"\n组水平置换检验显著结果数: {len(significant_results)}/{len(stats_df)}", config)
+    
+    if not significant_results.empty:
+        log("\n显著结果:", config)
+        for _, result in significant_results.iterrows():
+            log(f"  {result['contrast']} - {result['roi']}: "
+                f"accuracy = {result['mean_accuracy']:.3f}, "
+                f"t({result['n_subjects'] - 1}) = {result['t_statistic']:.3f}, "
+                f"p_permutation = {result['p_value_permutation']:.3f}, "
+                f"d = {result['cohens_d']:.3f}", config)
     else:
-        log("\n只有一个比较，无需多重比较校正", config)
-        stats_df['p_corrected'] = stats_df['p_value_permutation']
-        stats_df['significant_corrected'] = stats_df['p_value_permutation'] < config.alpha_level
-        stats_df['correction_method'] = 'none'
+        log("\n无显著结果", config)
     
     # 保存统计结果
     stats_df.to_csv(config.results_dir / "group_statistical_results.csv", index=False)
@@ -590,7 +585,7 @@ def create_enhanced_visualizations(group_df, stats_df, config):
                 # 检查显著性
                 roi_stats = stats_df[(stats_df['contrast'] == contrast_name) & 
                                     (stats_df['roi'] == roi)]
-                is_sig = len(roi_stats) > 0 and roi_stats.iloc[0]['significant_corrected']
+                is_sig = len(roi_stats) > 0 and roi_stats.iloc[0]['significant']
                 sig_row.append(is_sig)
             
             heatmap_data.append(contrast_row)
@@ -641,7 +636,7 @@ def create_enhanced_visualizations(group_df, stats_df, config):
                 # 标记显著性
                 for i, roi in enumerate(roi_order):
                     roi_stat = contrast_stats[contrast_stats['roi']==roi].iloc[0]
-                    if roi_stat['significant_corrected']:
+                    if roi_stat['significant']:
                         bars[i].set_color('red')
                         ax1.text(i, roi_stat['mean_accuracy'] + roi_stat['sem_accuracy'] + 0.01, 
                                 '*', ha='center', va='bottom', fontsize=16, fontweight='bold')
@@ -658,7 +653,7 @@ def create_enhanced_visualizations(group_df, stats_df, config):
                 # 右图：效应量
                 effect_sizes = [contrast_stats[contrast_stats['roi']==roi]['cohens_d'].iloc[0] 
                                for roi in roi_order]
-                colors = ['red' if contrast_stats[contrast_stats['roi']==roi]['significant_corrected'].iloc[0] 
+                colors = ['red' if contrast_stats[contrast_stats['roi']==roi]['significant'].iloc[0] 
                          else 'blue' for roi in roi_order]
                 
                 ax2.barh(range(len(roi_order)), effect_sizes, color=colors, alpha=0.7)
@@ -732,14 +727,13 @@ def generate_html_report(group_df, stats_df, config):
     
     # 添加汇总统计
     total_tests = len(stats_df)
-    significant_uncorrected = len(stats_df[stats_df['p_value'] < config.alpha_level])
-    significant_corrected = len(stats_df[stats_df['significant_corrected']])
+    # 使用置换检验p值进行显著性统计
+    significant_results = len(stats_df[stats_df['significant']])
     
     html_content += f"""
             <div class="metric"><strong>Total Tests:</strong> {total_tests}</div>
-            <div class="metric"><strong>Significant (uncorrected):</strong> {significant_uncorrected}</div>
-            <div class="metric"><strong>Significant (corrected):</strong> {significant_corrected}</div>
-            <div class="metric"><strong>False Discovery Rate:</strong> {(significant_uncorrected - significant_corrected) / max(significant_uncorrected, 1):.2%}</div>
+            <div class="metric"><strong>Significant Results:</strong> {significant_results}</div>
+            <div class="metric"><strong>Significance Rate:</strong> {significant_results / max(total_tests, 1):.2%}</div>
         </div>
         
         <div class="section">
@@ -752,8 +746,8 @@ def generate_html_report(group_df, stats_df, config):
                     <th>SEM</th>
                     <th>95% CI</th>
                     <th>t-statistic</th>
+                    <th>p-value (t-test)</th>
                     <th>p-value (permutation)</th>
-                    <th>p-value (corrected)</th>
                     <th>Cohen's d</th>
                     <th>N Subjects</th>
                     <th>Significant</th>
@@ -762,8 +756,8 @@ def generate_html_report(group_df, stats_df, config):
     
     # 添加每行结果
     for _, row in stats_df.iterrows():
-        row_class = "significant" if row['significant_corrected'] else ""
-        significance_mark = "✓" if row['significant_corrected'] else ""
+        row_class = "significant" if row['significant'] else ""
+        significance_mark = "✓" if row['significant'] else ""
         
         html_content += f"""
                 <tr class="{row_class}">
@@ -773,8 +767,8 @@ def generate_html_report(group_df, stats_df, config):
                     <td>{row['sem_accuracy']:.3f}</td>
                     <td>[{row['ci_lower']:.3f}, {row['ci_upper']:.3f}]</td>
                     <td>{row['t_statistic']:.3f}</td>
+                    <td>{row['p_value_ttest']:.4f}</td>
                     <td>{row['p_value_permutation']:.4f}</td>
-                    <td>{row['p_corrected']:.4f}</td>
                     <td>{row['cohens_d']:.3f}</td>
                     <td>{row['n_subjects']}</td>
                     <td>{significance_mark}</td>
@@ -903,7 +897,7 @@ def main():
         group_df, stats_df = results
         logging.info("\n=== 分析完成 ===")
         logging.info(f"总测试数: {len(stats_df)}")
-        logging.info(f"显著结果数 (校正后): {len(stats_df[stats_df['significant_corrected']])}")
+        logging.info(f"显著结果数: {len(stats_df[stats_df['significant']])}")
         logging.info(f"详细报告: {config.results_dir / 'analysis_report.html'}")
     else:
         logging.error("分析失败")
