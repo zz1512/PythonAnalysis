@@ -22,7 +22,7 @@ from datetime import datetime
 # 路径配置
 OUTPUT_ROOT = Path(r"../../learn_LSS")
 SUBJECTS = [f"sub-{i:02d}" for i in range(24, 25)]  # 可根据实际情况调整
-RUNS = [3]  # 可根据实际情况调整
+RUNS = [3, 4]  # 可根据实际情况调整
 TRIALS_PER_RUN = 70  # 每个run的预期trial数量
 MIN_ROWS_THRESHOLD = 70  # CSV文件最小行数阈值
 

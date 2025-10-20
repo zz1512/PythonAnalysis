@@ -37,7 +37,7 @@ from nilearn.masking import compute_brain_mask
 # ========== 分析配置参数 ==========
 
 # 被试和实验设置
-SUBJECTS = [f"sub-{i:02d}" for i in range(1, 29)]  # 被试编号：sub-01 到 sub-28
+SUBJECTS = [f"sub-{i:02d}" for i in range(24, 25)]  # 被试编号：sub-01 到 sub-28
 RUNS = [3, 4]  # 分析的run编号
 TR_FALLBACK = 2.0  # 默认TR值(秒)，当无法从图像头文件推断时使用
 
@@ -51,8 +51,8 @@ CLEAN_CACHE_AFTER_RUN = True  # 是否在每个run完成后自动清理缓存
 MAX_CACHE_SIZE_GB = 100.0  # 缓存目录最大允许大小(GB)，超过将触发自动清理
 
 # ========== 数据路径模板 ==========
-# 预处理后的fMRI数据路径
-FMRI_TPL = r"../../Pro_proc_data/{sub}/run{run}/smooth{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
+# 预处理后的fMRI数据路径,MVPA不能使用平滑数据
+FMRI_TPL = r"../../Pro_proc_data/{sub}/run{run}/{sub}_task-yy_run-{run}_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii"
 # 实验事件文件路径
 EVENT_TPL = r"../../data_events/{sub}/{sub}_run-{run}_events.tsv"
 # 头动参数文件路径
