@@ -9,59 +9,65 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from utils import log
 
+
 def run_roi_classification_enhanced(X, y, config):
-    """增强的ROI分类分析"""
-    # 创建基础分类器
-    base_svm = SVC(random_state=config.svm_params['random_state'])
-    
-    # 创建分类pipeline
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('svm', base_svm)
-    ])
-    
-    # 交叉验证
-    cv = StratifiedKFold(
-        n_splits=config.cv_folds, 
-        shuffle=True, 
+    """增强的ROI分类分析 - 修正版"""
+
+    # 外层CV：用于评估泛化性能
+    outer_cv = StratifiedKFold(
+        n_splits=config.cv_folds,
+        shuffle=True,
         random_state=config.cv_random_state
     )
-    
-    # 参数网格搜索
-    param_grid = {'svm__' + key: value for key, value in config.svm_param_grid.items()}
-    grid_search = GridSearchCV(
-        pipeline, 
-        param_grid, 
-        cv=cv, 
-        scoring='accuracy', 
-        n_jobs=1  # 避免嵌套并行
+
+    # 内层CV：用于超参数选择
+    inner_cv = StratifiedKFold(
+        n_splits=config.cv_folds,
+        shuffle=True,
+        random_state=config.cv_random_state + 1
     )
-    
-    # 拟合网格搜索
-    grid_search.fit(X, y)
-    
-    # 使用最佳参数进行交叉验证
-    best_pipeline = grid_search.best_estimator_
-    cv_scores = cross_val_score(best_pipeline, X, y, cv=cv, scoring='accuracy')
-    
-    # 根据专家建议：单被试不做置换检验，只使用交叉验证结果
-    observed_score = np.mean(cv_scores)
-    
-    # 不进行置换检验，设置默认值
-    null_distribution = np.array([])
-    p_value = np.nan  # 单被试不计算p值
-    
+
+    # 创建pipeline
+    pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('svm', SVC(random_state=config.svm_params['random_state']))
+    ])
+
+    param_grid = {'svm__' + key: value for key, value in config.svm_param_grid.items()}
+
+    # 手动实现嵌套交叉验证
+    outer_scores = []
+
+    for train_idx, test_idx in outer_cv.split(X, y):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        # 在内层训练集上进行网格搜索
+        inner_search = GridSearchCV(
+            pipeline,
+            param_grid,
+            cv=inner_cv,
+            scoring='accuracy',
+            n_jobs=1
+        )
+        inner_search.fit(X_train, y_train)
+
+        # 用最佳模型在测试集上评估
+        best_model = inner_search.best_estimator_
+        test_score = best_model.score(X_test, y_test)
+        outer_scores.append(test_score)
+
+    cv_scores = np.array(outer_scores)
+
     return {
         'cv_scores': cv_scores,
         'mean_accuracy': np.mean(cv_scores),
         'std_accuracy': np.std(cv_scores),
-        'p_value_permutation': p_value,  # 被试内置换检验p值
-        'null_distribution': null_distribution,
+        'p_value_permutation': np.nan,
+        'null_distribution': np.array([]),
         'chance_level': 0.5,
         'n_features': X.shape[1],
-        'n_samples': X.shape[0],
-        'best_params': grid_search.best_params_,
-        'best_score': grid_search.best_score_
+        'n_samples': X.shape[0]
     }
 
 def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):

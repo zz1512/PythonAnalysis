@@ -9,8 +9,8 @@ class MVPAConfig:
     """MVPA分析配置参数"""
     def __init__(self):
         # 基本参数
-        self.subjects = [f"sub-{i:02d}" for i in range(1, 29) if i not in [14, 24]]
-        self.runs = [3, 4]  # 支持多个run
+        self.subjects = [f"sub-{i:02d}" for i in range(1, 29)]
+        self.runs = [3]  # 支持多个run
         self.lss_root = Path(r"../../../learn_LSS")
         self.roi_dir = Path(r"../../../learn_mvpa/full_roi_mask")
         self.results_dir = Path(r"../../../learn_mvpa/metaphor_ROI_MVPA_corrected")
