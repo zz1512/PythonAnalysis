@@ -5,3 +5,4 @@ data_events/
 learn_batch/
 learn_LSS/
 learn_mvpa/
+learn/fmri_mvpa/fmri_mvpa_roi/__pycache__
