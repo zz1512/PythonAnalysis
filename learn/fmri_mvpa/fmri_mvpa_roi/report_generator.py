@@ -3,6 +3,7 @@
 
 import base64
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from utils import log
 
@@ -69,79 +70,227 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
     
     # 按效应排序（优先显示准确率>50%且显著的结果）
     sorted_df = stats_df.copy()
-    sorted_df['sort_key'] = (
-        sorted_df['significant'].astype(int) * 1000 +  # 显著性权重
-        (sorted_df['mean_accuracy'] > 0.5).astype(int) * 100 +  # 超过随机水平权重
-        np.abs(sorted_df['cohens_d']) * 10  # 效应量权重
-    )
+    
+    # 安全地计算排序键
+    significant_weight = 0
+    if 'significant' in sorted_df.columns:
+        try:
+            significant_weight = sorted_df['significant'].fillna(False).astype(int) * 1000
+        except:
+            significant_weight = 0
+    
+    accuracy_weight = 0
+    if 'mean_accuracy' in sorted_df.columns:
+        try:
+            accuracy_weight = (sorted_df['mean_accuracy'].fillna(0.5) > 0.5).astype(int) * 100
+        except:
+            accuracy_weight = 0
+    
+    effect_weight = 0
+    if 'cohens_d' in sorted_df.columns:
+        try:
+            effect_weight = np.abs(sorted_df['cohens_d'].fillna(0)) * 10
+        except:
+            effect_weight = 0
+    
+    sorted_df['sort_key'] = significant_weight + accuracy_weight + effect_weight
     sorted_df = sorted_df.sort_values('sort_key', ascending=False)
     
-    # 计算摘要统计
-    total_rois = len(stats_df)
-    significant_rois = len(stats_df[stats_df['significant']])
-    above_chance_rois = len(stats_df[stats_df['mean_accuracy'] > 0.5])
-    max_accuracy = stats_df['mean_accuracy'].max()
-    best_roi = stats_df.loc[stats_df['mean_accuracy'].idxmax(), 'roi']
+    # 数据验证和预处理
+    if stats_df.empty:
+        # 处理空数据情况
+        total_rois = 0
+        significant_rois = 0
+        above_chance_rois = 0
+        max_accuracy = 0.0
+        best_roi = "无数据"
+    else:
+        # 确保必要的列存在
+        required_columns = ['roi', 'mean_accuracy', 'significant']
+        missing_columns = [col for col in required_columns if col not in stats_df.columns]
+        if missing_columns:
+            # 添加缺失的列
+            for col in missing_columns:
+                if col == 'roi':
+                    stats_df[col] = f"ROI_{range(len(stats_df))}"
+                elif col == 'mean_accuracy':
+                    stats_df[col] = 0.5
+                elif col == 'significant':
+                    stats_df[col] = False
+        
+        # 处理NaN值
+        stats_df = stats_df.fillna({
+            'mean_accuracy': 0.5,
+            'significant': False,
+            'sem_accuracy': 0.0,
+            't_statistic': 0.0,
+            'p_value_permutation': 1.0,
+            'cohens_d': 0.0,
+            'ci_lower': 0.5,
+            'ci_upper': 0.5,
+            'n_subjects': 0
+        })
+        
+        # 计算摘要统计
+        total_rois = len(stats_df)
+        significant_rois = len(stats_df[stats_df['significant']])
+        above_chance_rois = len(stats_df[stats_df['mean_accuracy'] > 0.5])
+        
+        # 安全地获取最大准确率和最佳ROI
+        if not stats_df['mean_accuracy'].isna().all():
+            max_accuracy = stats_df['mean_accuracy'].max()
+            best_idx = stats_df['mean_accuracy'].idxmax()
+            best_roi = stats_df.loc[best_idx, 'roi'] if not pd.isna(best_idx) else "未知"
+        else:
+            max_accuracy = 0.0
+            best_roi = "无有效数据"
     
     # 生成详细分析函数
     def generate_detailed_analysis():
         if stats_df.empty:
             return "<p>无可用数据进行分析</p>"
         
-        # 最佳结果分析
-        best_result = stats_df.loc[stats_df['mean_accuracy'].idxmax()]
-        best_roi_data = group_df[group_df['roi'] == best_result['roi']]['mean_accuracy']
-        best_std = best_roi_data.std()
+        # 安全地获取最佳结果
+        try:
+            if not stats_df['mean_accuracy'].isna().all():
+                best_idx = stats_df['mean_accuracy'].idxmax()
+                if pd.isna(best_idx):
+                    return "<p>数据中包含无效值，无法进行分析</p>"
+                best_result = stats_df.loc[best_idx]
+                
+                # 安全地获取组数据
+                if not group_df.empty and 'roi' in group_df.columns and 'mean_accuracy' in group_df.columns:
+                    best_roi_data = group_df[group_df['roi'] == best_result['roi']]['mean_accuracy']
+                    best_std = best_roi_data.std() if not best_roi_data.empty else 0.0
+                else:
+                    best_std = 0.0
+            else:
+                return "<p>所有准确率数据均为无效值，无法进行分析</p>"
+        except Exception as e:
+            return f"<p>分析过程中出现错误: {str(e)}</p>"
+        
+        # 安全地获取最佳结果的各项指标
+        def safe_get(series, key, default=0.0):
+            try:
+                value = series.get(key, default)
+                return value if not pd.isna(value) else default
+            except:
+                return default
+        
+        roi_name = safe_get(best_result, 'roi', 'Unknown')
+        mean_acc = safe_get(best_result, 'mean_accuracy', 0.5)
+        sem_acc = safe_get(best_result, 'sem_accuracy', 0.0)
+        ci_lower = safe_get(best_result, 'ci_lower', 0.0)
+        ci_upper = safe_get(best_result, 'ci_upper', 0.0)
+        n_subjects = safe_get(best_result, 'n_subjects', 0)
+        cohens_d = safe_get(best_result, 'cohens_d', 0.0)
+        significant = safe_get(best_result, 'significant', False)
+        p_value = safe_get(best_result, 'p_value_permutation', 1.0)
         
         analysis_html = f"""
         <div class="highlight-box">
             <h4>🏆 最佳结果分析</h4>
-            <p><strong>{best_result['roi']}</strong> 表现最佳：</p>
+            <p><strong>{roi_name}</strong> 表现最佳：</p>
             <ul>
-                <li>平均准确率：<strong>{best_result['mean_accuracy']:.3f} ± {best_std:.3f}</strong></li>
-                <li>标准误：<strong>{best_result['sem_accuracy']:.3f}</strong></li>
-                <li>95%置信区间：<strong>[{best_result['ci_lower']:.3f}, {best_result['ci_upper']:.3f}]</strong></li>
-                <li>被试数量：<strong>{best_result['n_subjects']}</strong></li>
-                <li>效应量：<strong>Cohen's d = {best_result['cohens_d']:.3f}</strong></li>
-                <li>统计显著性：<strong>{'显著' if best_result['significant'] else '不显著'}</strong> (p = {best_result['p_value_permutation']:.3f})</li>
+                <li>平均准确率：<strong>{mean_acc:.3f} ± {best_std:.3f}</strong></li>
+                <li>标准误：<strong>{sem_acc:.3f}</strong></li>
+                <li>95%置信区间：<strong>[{ci_lower:.3f}, {ci_upper:.3f}]</strong></li>
+                <li>被试数量：<strong>{n_subjects}</strong></li>
+                <li>效应量：<strong>Cohen's d = {cohens_d:.3f}</strong></li>
+                <li>统计显著性：<strong>{'显著' if significant else '不显著'}</strong> (p = {p_value:.3f})</li>
             </ul>
         </div>
         """
         
         # 显著结果列表
-        significant_results = stats_df[stats_df['significant']]
-        if not significant_results.empty:
-            analysis_html += """
-            <div class="summary-box">
-                <h4>✅ 显著结果列表</h4>
-                <ul>
-            """
-            for _, result in significant_results.iterrows():
-                roi_data = group_df[group_df['roi'] == result['roi']]['mean_accuracy']
-                roi_std = roi_data.std()
-                analysis_html += f"""
-                    <li><strong>{result['roi']}</strong>: {result['mean_accuracy']:.3f} ± {roi_std:.3f} 
-                    (p = {result['p_value_permutation']:.3f}, d = {result['cohens_d']:.3f})</li>
+        try:
+            if 'significant' in stats_df.columns:
+                significant_results = stats_df[stats_df['significant'].fillna(False)]
+            else:
+                # 如果没有significant列，尝试根据p值判断显著性
+                if 'p_value_permutation' in stats_df.columns:
+                    significant_results = stats_df[stats_df['p_value_permutation'].fillna(1.0) < 0.05]
+                else:
+                    significant_results = pd.DataFrame()  # 空数据框
+            
+            if not significant_results.empty:
+                analysis_html += """
+                <div class="summary-box">
+                    <h4>✅ 显著结果列表</h4>
+                    <ul>
                 """
-            analysis_html += "</ul></div>"
+                for _, result in significant_results.iterrows():
+                    try:
+                        # 安全地获取ROI数据
+                        if not group_df.empty and 'roi' in group_df.columns and 'mean_accuracy' in group_df.columns:
+                            roi_data = group_df[group_df['roi'] == safe_get(result, 'roi', 'Unknown')]['mean_accuracy']
+                            roi_std = roi_data.std() if not roi_data.empty else 0.0
+                            roi_std = roi_std if not pd.isna(roi_std) else 0.0
+                        else:
+                            roi_std = 0.0
+                        
+                        roi_name = safe_get(result, 'roi', 'Unknown')
+                        mean_acc = safe_get(result, 'mean_accuracy', 0.5)
+                        p_val = safe_get(result, 'p_value_permutation', 1.0)
+                        cohens_d = safe_get(result, 'cohens_d', 0.0)
+                        
+                        analysis_html += f"""
+                            <li><strong>{roi_name}</strong>: {mean_acc:.3f} ± {roi_std:.3f} 
+                            (p = {p_val:.3f}, d = {cohens_d:.3f})</li>
+                        """
+                    except Exception as e:
+                        analysis_html += f"<li>处理结果时出现错误: {str(e)}</li>"
+                analysis_html += "</ul></div>"
+        except Exception as e:
+            analysis_html += f"<p>生成显著结果列表时出现错误: {str(e)}</p>"
         
         # 趋势分析
-        above_chance = stats_df[stats_df['mean_accuracy'] > 0.5]
-        accuracy_range = stats_df['mean_accuracy'].max() - stats_df['mean_accuracy'].min()
-        mean_effect_size = np.abs(stats_df['cohens_d']).mean()
+        try:
+            # 安全地计算趋势指标
+            if 'mean_accuracy' in stats_df.columns:
+                mean_acc_series = stats_df['mean_accuracy'].fillna(0.5)
+                above_chance = stats_df[mean_acc_series > 0.5]
+                accuracy_range = mean_acc_series.max() - mean_acc_series.min()
+                min_acc = mean_acc_series.min()
+                max_acc = mean_acc_series.max()
+            else:
+                above_chance = pd.DataFrame()
+                accuracy_range = 0.0
+                min_acc = 0.5
+                max_acc = 0.5
+            
+            if 'cohens_d' in stats_df.columns:
+                cohens_d_series = stats_df['cohens_d'].fillna(0.0)
+                mean_effect_size = np.abs(cohens_d_series).mean()
+            else:
+                mean_effect_size = 0.0
+            
+            # 计算显著ROI数量
+            if 'significant' in stats_df.columns:
+                significant_count = stats_df['significant'].fillna(False).sum()
+            else:
+                # 根据p值判断
+                if 'p_value_permutation' in stats_df.columns:
+                    significant_count = (stats_df['p_value_permutation'].fillna(1.0) < 0.05).sum()
+                else:
+                    significant_count = 0
+            
+            analysis_html += f"""
+            <div class="trend-box">
+                <h4>📈 整体趋势分析</h4>
+                <ul>
+                    <li>超过随机水平的ROI：<strong>{len(above_chance)}/{total_rois}</strong> ({len(above_chance)/total_rois*100:.1f}%)</li>
+                    <li>准确率范围：<strong>{min_acc:.3f} - {max_acc:.3f}</strong> (变异度: {accuracy_range:.3f})</li>
+                    <li>平均效应量：<strong>{mean_effect_size:.3f}</strong></li>
+                    <li>统计显著的ROI：<strong>{significant_count}/{total_rois}</strong> ({significant_count/total_rois*100:.1f}%)</li>
+                </ul>
+            </div>
+            """
+        except Exception as e:
+            analysis_html += f"<p>生成趋势分析时出现错误: {str(e)}</p>"
         
-        analysis_html += f"""
-        <div class="trend-box">
-            <h4>📈 整体趋势分析</h4>
-            <ul>
-                <li>超过随机水平的ROI：<strong>{len(above_chance)}/{total_rois}</strong> ({len(above_chance)/total_rois*100:.1f}%)</li>
-                <li>准确率范围：<strong>{stats_df['mean_accuracy'].min():.3f} - {stats_df['mean_accuracy'].max():.3f}</strong> (变异度: {accuracy_range:.3f})</li>
-                <li>平均效应量：<strong>{mean_effect_size:.3f}</strong></li>
-                <li>统计显著的ROI：<strong>{significant_rois}/{total_rois}</strong> ({significant_rois/total_rois*100:.1f}%)</li>
-            </ul>
-        </div>
-        
-        <div class="section">
+        analysis_html += """
+         <div class="section">
             <h3>📊 统计方法说明</h3>
             <div class="summary-box">
                 <h4>🔬 组水平检验</h4>
@@ -166,7 +315,7 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
             },
             {
                 "title": "📊 样本量评估",
-                "content": f"当前分析包含{len(group_df['subject'].unique())}个被试，建议进行功效分析评估样本量充分性。"
+                "content": f"当前分析包含{len(group_df['subject'].unique()) if not group_df.empty and 'subject' in group_df.columns else 0}个被试，建议进行功效分析评估样本量充分性。"
             },
             {
                 "title": "🔄 交叉验证策略",
@@ -227,40 +376,66 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
         """
         
         for idx, (_, row) in enumerate(df.iterrows(), 1):
-            # 计算该ROI的标准差
-            roi_data = group_df[group_df['roi'] == row['roi']]['mean_accuracy']
-            roi_std = roi_data.std()
-            
-            # 效应量解释
-            d_value = abs(row['cohens_d'])
-            if d_value < 0.2:
-                effect_size = "微小效应"
-            elif d_value < 0.5:
-                effect_size = "小效应"
-            elif d_value < 0.8:
-                effect_size = "中等效应"
-            else:
-                effect_size = "大效应"
-            
-            # 显著性标记
-            significance = "✓ 显著" if row['significant'] else "不显著"
-            row_class = "significant-row" if row['significant'] else ""
-            
-            table_html += f"""
-                <tr class="{row_class}">
-                    <td>{idx}</td>
-                    <td><strong>{row['roi']}</strong></td>
-                    <td>{row['mean_accuracy']:.3f} ± {roi_std:.3f}</td>
-                    <td>{row['sem_accuracy']:.3f}</td>
-                    <td>{row['t_statistic']:.3f}</td>
-                    <td>{row['p_value_permutation']:.4f}</td>
-                    <td>{row['cohens_d']:.3f}</td>
-                    <td>[{row['ci_lower']:.3f}, {row['ci_upper']:.3f}]</td>
-                    <td>{row['n_subjects']}</td>
-                    <td>{significance}</td>
-                    <td>{effect_size}</td>
-                </tr>
-            """
+            try:
+                # 安全地计算该ROI的标准差
+                if not group_df.empty and 'roi' in group_df.columns and 'mean_accuracy' in group_df.columns:
+                    roi_data = group_df[group_df['roi'] == row['roi']]['mean_accuracy']
+                    roi_std = roi_data.std() if not roi_data.empty else 0.0
+                    roi_std = roi_std if not pd.isna(roi_std) else 0.0
+                else:
+                    roi_std = 0.0
+                
+                # 安全地处理效应量解释
+                cohens_d = row.get('cohens_d', 0.0)
+                cohens_d = cohens_d if not pd.isna(cohens_d) else 0.0
+                d_value = abs(cohens_d)
+                if d_value < 0.2:
+                    effect_size = "微小效应"
+                elif d_value < 0.5:
+                    effect_size = "小效应"
+                elif d_value < 0.8:
+                    effect_size = "中等效应"
+                else:
+                    effect_size = "大效应"
+                
+                # 安全地处理显著性标记
+                significant = row.get('significant', False)
+                significant = significant if not pd.isna(significant) else False
+                significance = "✓ 显著" if significant else "不显著"
+                row_class = "significant-row" if significant else ""
+                
+                # 安全地格式化数值
+                def safe_format(value, format_str=".3f", default="N/A"):
+                    try:
+                        if pd.isna(value):
+                            return default
+                        return f"{value:{format_str}}"
+                    except:
+                        return default
+                
+                table_html += f"""
+                    <tr class="{row_class}">
+                        <td>{idx}</td>
+                        <td><strong>{row.get('roi', 'Unknown')}</strong></td>
+                        <td>{safe_format(row.get('mean_accuracy', 0.0))} ± {safe_format(roi_std)}</td>
+                        <td>{safe_format(row.get('sem_accuracy', 0.0))}</td>
+                        <td>{safe_format(row.get('t_statistic', 0.0))}</td>
+                        <td>{safe_format(row.get('p_value_permutation', 1.0), '.4f')}</td>
+                        <td>{safe_format(cohens_d)}</td>
+                        <td>[{safe_format(row.get('ci_lower', 0.0))}, {safe_format(row.get('ci_upper', 0.0))}]</td>
+                        <td>{row.get('n_subjects', 0)}</td>
+                        <td>{significance}</td>
+                        <td>{effect_size}</td>
+                    </tr>
+                """
+            except Exception as e:
+                # 如果处理某一行出现错误，添加错误行
+                table_html += f"""
+                    <tr>
+                        <td>{idx}</td>
+                        <td colspan="10">处理数据时出现错误: {str(e)}</td>
+                    </tr>
+                """
         
         table_html += "</tbody></table>"
         return table_html
@@ -516,7 +691,7 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
             <div class="section">
                 <h2>📊 完整统计结果</h2>
                 <p>以下为所有ROI的完整统计结果：</p>
-                {generate_results_table(stats_df.sort_values('mean_accuracy', ascending=False))}
+                {generate_results_table(stats_df.sort_values('mean_accuracy', ascending=False) if 'mean_accuracy' in stats_df.columns else stats_df)}
             </div>
             
             <div class="section">
@@ -568,16 +743,31 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
     log(f"增强的中文HTML报告已生成：{report_path}", config)
     
     # 同时生成简化版本的CSV报告
-    summary_df = sorted_df[[
+    # 安全地选择存在的列
+    desired_columns = [
         'roi', 'mean_accuracy', 'sem_accuracy', 't_statistic', 
         'p_value_permutation', 'cohens_d', 
         'significant', 'ci_lower', 'ci_upper'
-    ]].copy()
-    summary_df.columns = [
-        'ROI区域', '分类准确率', '标准误', 't统计量', 
-        '置换检验p值', 'Cohen\'s d', 
-        '是否显著', '置信区间下限', '置信区间上限'
     ]
+    available_columns = [col for col in desired_columns if col in sorted_df.columns]
+    summary_df = sorted_df[available_columns].copy() if available_columns else pd.DataFrame()
+    
+    # 安全地重命名列
+    if not summary_df.empty:
+        column_mapping = {
+            'roi': 'ROI区域', 
+            'mean_accuracy': '分类准确率', 
+            'sem_accuracy': '标准误', 
+            't_statistic': 't统计量', 
+            'p_value_permutation': '置换检验p值', 
+            'cohens_d': 'Cohen\'s d', 
+            'significant': '是否显著', 
+            'ci_lower': '置信区间下限', 
+            'ci_upper': '置信区间上限'
+        }
+        # 只重命名存在的列
+        rename_dict = {col: column_mapping[col] for col in available_columns if col in column_mapping}
+        summary_df = summary_df.rename(columns=rename_dict)
     summary_df.to_csv(config.results_dir / "results_summary_chinese.csv", 
                       index=False, encoding='utf-8-sig')
     
