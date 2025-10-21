@@ -33,7 +33,7 @@ from scipy import stats
 from multiprocessing import cpu_count
 from nilearn.maskers import NiftiMasker
 from sklearn.svm import SVC
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.feature_selection import SelectKBest, VarianceThreshold, f_classif
 from sklearn.decomposition import PCA
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold
 from sklearn.preprocessing import StandardScaler
@@ -296,6 +296,9 @@ def build_classification_pipeline(config, n_features):
 
     steps = [('imputer', SimpleImputer(strategy='mean'))]
 
+    # 在进行任何基于方差或统计量的特征选择之前，先移除常数特征，避免零方差导致的警告
+    steps.append(('variance_filter', VarianceThreshold(threshold=0.0)))
+
     if config.apply_feature_selection:
         if config.feature_selection_method == 'univariate':
             selector = DynamicSelectKBest(score_func=f_classif, k=min(config.max_features, n_features))
@@ -318,14 +321,14 @@ def apply_feature_selection(X, y, config, method='univariate', k=500):
     """应用特征选择解决维度问题"""
     n_samples, n_features = X.shape
 
-    # 去除常数特征（方差为0的特征）
-    def remove_constant_features(X):
-        variance = np.var(X, axis=0)
-        non_constant_features = variance > 0  # 保留方差不为0的特征
-        return X[:, non_constant_features]
+    # 去除常数特征（方差为0的特征），避免后续统计检验出现无效值
+    variance = np.var(X, axis=0)
+    if not np.any(variance > 0):
+        log("⚠️ 所有特征的方差均为0，跳过特征选择并返回原始特征。", config)
+        return X
 
-    # 去除常数特征
-    X = remove_constant_features(X)
+    variance_filter = VarianceThreshold(threshold=0.0)
+    X = variance_filter.fit_transform(X)
     n_samples, n_features = X.shape  # 更新特征数量
 
     if n_features <= k:
