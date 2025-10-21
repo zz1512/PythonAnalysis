@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from scipy import stats
+from multiprocessing import cpu_count
 from nilearn.maskers import NiftiMasker
 from sklearn.svm import SVC
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV
@@ -47,62 +48,50 @@ class MVPAConfig:
     """MVPA分析配置类"""
     
     def __init__(self):
-        # 基础路径配置
-        self.base_dir = Path("/Users/bytedance/PycharmProjects/PythonAnalysis/learn/fmri_mvpa")
-        self.data_dir = self.base_dir / "data"
-        self.results_dir = self.base_dir / "results" / "roi_mvpa_results"
-        
-        # 创建结果目录
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 被试列表
-        self.subjects = ['sub-01', 'sub-02', 'sub-03', 'sub-04', 'sub-05']
-        
-        # run列表
-        self.runs = [1, 2, 3, 4]
-        
-        # ROI配置
-        self.roi_dir = self.data_dir / "rois"
-        self.roi_pattern = "*.nii.gz"
-        
-        # LSS数据路径模板
-        self.lss_dir_template = self.data_dir / "derivatives" / "lss" / "{subject}" / "func"
-        self.lss_file_template = "{subject}_task-faces_run-{run:02d}_space-MNI152NLin2009cAsym_desc-lss_beta.nii.gz"
-        self.trial_info_template = "{subject}_task-faces_run-{run:02d}_desc-lss_trial_info.csv"
+        # 基本参数
+        self.subjects = [f"sub-{i:02d}" for i in range(1, 29) if i not in [14, 24]]
+        self.runs = [3, 4]  # 支持多个run
+        self.lss_root = Path(r"../../../learn_LSS")
+        self.roi_dir = Path(r"../../../learn_mvpa/full_roi_mask")
+        self.results_dir = Path(r"../../../learn_mvpa/metaphor_ROI_MVPA_corrected")
         
         # 分类器参数
         self.svm_params = {
-            'kernel': 'linear',
-            'C': 1.0,
             'random_state': 42
         }
         
-        # 参数网格搜索
+        # 参数网格搜索配置
         self.svm_param_grid = {
-            'C': [0.1, 1.0, 10.0]
+            'C': [0.1, 1.0, 10.0],  # 可选的C值
+            'kernel': ['linear']     # 保持线性核
         }
         
         # 交叉验证参数
         self.cv_folds = 5
         self.cv_random_state = 42
         
-        # 置换检验参数
+        # 置换检验参数（仅用于组水平分析）
         self.n_permutations = 1000
         self.permutation_random_state = 42
         
-        # 统计参数
+        # 显著性水平
         self.alpha_level = 0.05
+        
+        # 并行处理参数
+        self.n_jobs = min(4, cpu_count() - 1)
+        self.use_parallel = True
+        
+        # 内存优化参数
+        self.memory_cache = 'nilearn_cache'
+        self.memory_level = 1
         
         # 对比条件
         self.contrasts = [
-            ('faces_vs_objects', 'faces', 'objects'),
-            ('faces_vs_scenes', 'faces', 'scenes'),
-            ('objects_vs_scenes', 'objects', 'scenes')
+            ('metaphor_vs_space', 'yy', 'kj'),  # 隐喻 vs 空间
         ]
         
-        # 内存和缓存设置
-        self.memory_cache = None
-        self.memory_level = 1
+        # 创建结果目录
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         
         # 日志设置
         self.log_level = logging.INFO
