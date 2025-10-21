@@ -33,9 +33,9 @@ from scipy import stats
 from multiprocessing import cpu_count
 from nilearn.maskers import NiftiMasker
 from sklearn.svm import SVC
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.feature_selection import SelectKBest, VarianceThreshold, f_classif
 from sklearn.decomposition import PCA
-from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut
+from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from report_generator import generate_html_report, image_to_base64
@@ -255,18 +255,80 @@ def check_feature_dimension_warning(X, y, roi_name, config):
         return True
 
 
+class DynamicSelectKBest(SelectKBest):
+    """在每次拟合时根据输入维度自动调整k值的SelectKBest"""
+
+    def __init__(self, score_func=f_classif, k=500):
+        super().__init__(score_func=score_func, k=k)
+        self.original_k = k
+
+    def fit(self, X, y=None, **fit_params):
+        if isinstance(self.original_k, int):
+            max_k = min(self.original_k, X.shape[1])
+            max_k = max(1, max_k)
+            self.k = max_k
+        else:
+            self.k = self.original_k
+        return super().fit(X, y, **fit_params)
+
+
+class DynamicPCA(PCA):
+    """在每次拟合时根据输入维度自动调整主成分数量的PCA"""
+
+    def __init__(self, n_components=500, **kwargs):
+        super().__init__(n_components=n_components, **kwargs)
+        self.original_n_components = n_components
+
+    def fit(self, X, y=None, **fit_params):
+        if isinstance(self.original_n_components, int):
+            max_components = min(self.original_n_components, X.shape[1])
+            if X.shape[0] > 1:
+                max_components = min(max_components, X.shape[0] - 1)
+            max_components = max(1, max_components)
+            self.n_components = max_components
+        else:
+            self.n_components = self.original_n_components
+        return super().fit(X, y, **fit_params)
+
+
+def build_classification_pipeline(config, n_features):
+    """构建包含必要预处理和可选特征选择的分类pipeline"""
+
+    steps = [('imputer', SimpleImputer(strategy='mean'))]
+
+    # 在进行任何基于方差或统计量的特征选择之前，先移除常数特征，避免零方差导致的警告
+    steps.append(('variance_filter', VarianceThreshold(threshold=0.0)))
+
+    if config.apply_feature_selection:
+        if config.feature_selection_method == 'univariate':
+            selector = DynamicSelectKBest(score_func=f_classif, k=min(config.max_features, n_features))
+            steps.append(('feature_selector', selector))
+        elif config.feature_selection_method == 'pca':
+            reducer = DynamicPCA(n_components=min(config.max_features, n_features))
+            steps.append(('feature_selector', reducer))
+        else:
+            log(f"  ⚠️ 未知的特征选择方法: {config.feature_selection_method}，跳过特征选择", config)
+
+    steps.append(('scaler', StandardScaler()))
+
+    svm_params = config.svm_params.copy()
+    steps.append(('svm', SVC(**svm_params)))
+
+    return Pipeline(steps)
+
+
 def apply_feature_selection(X, y, config, method='univariate', k=500):
     """应用特征选择解决维度问题"""
     n_samples, n_features = X.shape
 
-    # 去除常数特征（方差为0的特征）
-    def remove_constant_features(X):
-        variance = np.var(X, axis=0)
-        non_constant_features = variance > 0  # 保留方差不为0的特征
-        return X[:, non_constant_features]
+    # 去除常数特征（方差为0的特征），避免后续统计检验出现无效值
+    variance = np.var(X, axis=0)
+    if not np.any(variance > 0):
+        log("⚠️ 所有特征的方差均为0，跳过特征选择并返回原始特征。", config)
+        return X
 
-    # 去除常数特征
-    X = remove_constant_features(X)
+    variance_filter = VarianceThreshold(threshold=0.0)
+    X = variance_filter.fit_transform(X)
     n_samples, n_features = X.shape  # 更新特征数量
 
     if n_features <= k:
@@ -303,10 +365,12 @@ def apply_feature_selection(X, y, config, method='univariate', k=500):
 
 
 
-def validate_classifier_performance(X, y, trial_info, config, roi_name, contrast_name):
+def validate_classifier_performance(X, y, groups, config, roi_name, contrast_name):
     """验证分类器性能的真实性"""
 
     log(f"验证分类器泛化能力 - {roi_name} {contrast_name}:", config)
+
+    y = np.asarray(y, dtype=int)
 
     # 1. 检查特征数量与样本数量的比例
     n_samples, n_features = X.shape
@@ -317,31 +381,22 @@ def validate_classifier_performance(X, y, trial_info, config, roi_name, contrast
         log(f"  ⚠️ 警告: 特征维度远大于样本数量，容易过拟合!", config)
 
     # 2. 使用更严格的交叉验证
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('svm', SVC(kernel='linear', C=1.0, random_state=42))
-    ])
+    pipeline = build_classification_pipeline(config, X.shape[1])
 
-    # 如果数据有run信息，使用按run分组的交叉验证
-    if 'run' in trial_info.columns:
-        # 获取当前数据的run信息
-        current_trial_info = trial_info.iloc[:len(y)]  # 假设y的顺序与trial_info一致
-        groups = current_trial_info['run'].values
-
-        if len(np.unique(groups)) > 1:
+    try:
+        if groups is not None and len(np.unique(groups)) > 1:
             logo = LeaveOneGroupOut()
             cv_scores = cross_val_score(pipeline, X, y, cv=logo, groups=groups, scoring='accuracy')
             log(f"  按run分组交叉验证: {np.mean(cv_scores):.3f} ± {np.std(cv_scores):.3f}", config)
         else:
-            # 只有一个run，使用常规交叉验证
-            cv = StratifiedKFold(n_splits=min(5, len(y) // 2), shuffle=True, random_state=42)
+            max_splits = min(5, np.min(np.bincount(y)))
+            n_splits = max(2, max_splits)
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
             cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
             log(f"  常规交叉验证: {np.mean(cv_scores):.3f} ± {np.std(cv_scores):.3f}", config)
-    else:
-        # 使用常规交叉验证
-        cv = StratifiedKFold(n_splits=min(5, len(y) // 2), shuffle=True, random_state=42)
-        cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
-        log(f"  常规交叉验证: {np.mean(cv_scores):.3f} ± {np.std(cv_scores):.3f}", config)
+    except ValueError as e:
+        log(f"  ⚠️ 交叉验证失败: {e}", config)
+        cv_scores = np.array([])
 
     return cv_scores, ratio
 
@@ -350,11 +405,9 @@ def run_permutation_test_debug(X, y, config, n_permutations=100):
     """运行置换测试验证分类显著性（调试用）"""
     log("运行置换测试验证结果真实性:", config)
 
-    # 创建分类器pipeline
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('svm', SVC(kernel='linear', C=1.0, random_state=42))
-    ])
+    y = np.asarray(y, dtype=int)
+
+    pipeline = build_classification_pipeline(config, X.shape[1])
 
     # 真实准确率
     cv = StratifiedKFold(n_splits=min(5, len(y) // 2), shuffle=True, random_state=42)
@@ -665,16 +718,10 @@ def extract_roi_features_with_selection(beta_images, roi_mask_path, config, labe
 
         X = masker.fit_transform(beta_images)
 
-        # 检查维度问题
+        # 检查维度问题（仅用于记录，实际特征选择在交叉验证pipeline中进行）
         if labels is not None:
             roi_name = Path(roi_mask_path).stem
-            dimension_ok = check_feature_dimension_warning(X, labels, roi_name, config)
-
-            # 如果维度问题严重，应用特征选择
-            if not dimension_ok and config.apply_feature_selection:
-                X = apply_feature_selection(X, labels, config,
-                                            method=config.feature_selection_method,
-                                            k=config.max_features)
+            check_feature_dimension_warning(X, labels, roi_name, config)
 
         return X
 
@@ -688,52 +735,107 @@ def extract_roi_features_with_selection(beta_images, roi_mask_path, config, labe
 # ============================================================================
 
 @enhanced_error_handling("ROI分类分析")
-def run_roi_classification_enhanced(X, y, config):
-    """增强的ROI分类分析 - 修正版"""
+def run_roi_classification_enhanced(X, y, config, groups=None):
+    """增强的ROI分类分析 - 修正版，避免数据泄露并支持分组交叉验证"""
 
-    # 外层CV：用于评估泛化性能
-    outer_cv = StratifiedKFold(
-        n_splits=config.cv_folds,
-        shuffle=True,
-        random_state=config.cv_random_state
-    )
+    y = np.asarray(y, dtype=int)
+    groups = np.asarray(groups) if groups is not None else None
+    use_groups = groups is not None and len(np.unique(groups)) > 1
 
-    # 内层CV：用于超参数选择
-    inner_cv = StratifiedKFold(
-        n_splits=config.cv_folds,
-        shuffle=True,
-        random_state=config.cv_random_state + 1
-    )
+    class_counts = np.bincount(y)
+    if class_counts.min() < 2:
+        log("  ⚠️ 分类任务跳过: 至少有一个类别的样本数不足2，无法进行稳定的交叉验证", config)
+        return None
 
-    # 创建pipeline
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('svm', SVC(random_state=config.svm_params['random_state']))
-    ])
+    if use_groups:
+        outer_splitter = LeaveOneGroupOut()
+        outer_splits = list(outer_splitter.split(X, y, groups))
+        if len(outer_splits) == 0:
+            use_groups = False
+    else:
+        outer_splits = []
+
+    if not use_groups:
+        min_class = class_counts.min()
+        n_splits = max(2, min(config.cv_folds, min_class))
+        outer_splitter = StratifiedKFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=config.cv_random_state
+        )
+        outer_splits = list(outer_splitter.split(X, y))
 
     param_grid = {'svm__' + key: value for key, value in config.svm_param_grid.items()}
 
-    # 手动实现嵌套交叉验证
     outer_scores = []
 
-    for train_idx, test_idx in outer_cv.split(X, y):
+    for train_idx, test_idx in outer_splits:
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
+        groups_train = groups[train_idx] if use_groups else None
 
-        # 在内层训练集上进行网格搜索
-        inner_search = GridSearchCV(
-            pipeline,
-            param_grid,
-            cv=inner_cv,
-            scoring='accuracy',
-            n_jobs=1
-        )
-        inner_search.fit(X_train, y_train)
+        pipeline = build_classification_pipeline(config, X.shape[1])
 
-        # 用最佳模型在测试集上评估
+        if use_groups:
+            unique_groups = np.unique(groups_train)
+            if len(unique_groups) >= 2:
+                n_splits = min(config.cv_folds, len(unique_groups))
+                inner_splitter = GroupKFold(n_splits=n_splits)
+                inner_search = GridSearchCV(
+                    pipeline,
+                    param_grid,
+                    cv=inner_splitter,
+                    scoring='accuracy',
+                    n_jobs=1
+                )
+                inner_search.fit(X_train, y_train, groups=groups_train)
+            else:
+                # 如果训练集中只有一个group，退回到分层交叉验证
+                min_class = np.min(np.bincount(y_train))
+                if min_class < 2:
+                    log("  ⚠️ 外层折跳过: 训练集中某类别样本不足2，无法执行内层交叉验证", config)
+                    continue
+                n_splits = max(2, min(config.cv_folds, min_class))
+                inner_splitter = StratifiedKFold(
+                    n_splits=n_splits,
+                    shuffle=True,
+                    random_state=config.cv_random_state + 1
+                )
+                inner_search = GridSearchCV(
+                    pipeline,
+                    param_grid,
+                    cv=inner_splitter,
+                    scoring='accuracy',
+                    n_jobs=1
+                )
+                inner_search.fit(X_train, y_train)
+        else:
+            min_class = np.min(np.bincount(y_train))
+            if min_class < 2:
+                log("  ⚠️ 外层折跳过: 训练集中某类别样本不足2，无法执行内层交叉验证", config)
+                continue
+            n_splits = max(2, min(config.cv_folds, min_class))
+            inner_splitter = StratifiedKFold(
+                n_splits=n_splits,
+                shuffle=True,
+                random_state=config.cv_random_state + 1
+            )
+            inner_search = GridSearchCV(
+                pipeline,
+                param_grid,
+                cv=inner_splitter,
+                scoring='accuracy',
+                n_jobs=1
+            )
+            inner_search.fit(X_train, y_train)
+
         best_model = inner_search.best_estimator_
         test_score = best_model.score(X_test, y_test)
         outer_scores.append(test_score)
+
+    if len(outer_scores) == 0:
+        log("  ⚠️ 外层交叉验证未产生有效评分，跳过该ROI", config)
+        return None
 
     cv_scores = np.array(outer_scores)
 
@@ -1112,9 +1214,11 @@ def run_group_roi_analysis_corrected(config):
                             log(f"  {roi_name}: 样本数量不足({X.shape[0]})，跳过", config)
                             continue
 
+                        groups = trial_details['run'].fillna('unknown').astype(str).values
+
                         # 验证分类器性能
                         cv_scores, feature_ratio = validate_classifier_performance(
-                            X, labels, trial_details, config, roi_name, contrast_name
+                            X, labels, groups, config, roi_name, contrast_name
                         )
 
                         # 调试模式：运行置换测试验证
@@ -1124,7 +1228,7 @@ def run_group_roi_analysis_corrected(config):
                             )
 
                         # 运行正式分类分析
-                        result = run_roi_classification_enhanced(X, labels, config)
+                        result = run_roi_classification_enhanced(X, labels, config, groups=groups)
 
                         if result is not None:
                             result.update({
