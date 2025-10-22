@@ -1272,12 +1272,12 @@ def run_group_roi_analysis_corrected(config):
         # 保存组水平统计结果
         stats_df.to_csv(config.results_dir / "group_roi_mvpa_statistics.csv", index=False)
 
-        # 创建可视化
-        create_enhanced_visualizations(group_df, stats_df, config)
+        # 创建可视化并获取生成的图像路径
+        main_viz_path, individual_viz_path = create_enhanced_visualizations(group_df, stats_df, config)
 
         # 生成HTML报告
-        main_viz_b64 = image_to_base64(config.results_dir / "main_visualizations.png")
-        individual_viz_b64 = image_to_base64(config.results_dir / "individual_roi_plots.png")
+        main_viz_b64 = image_to_base64(main_viz_path) if main_viz_path else None
+        individual_viz_b64 = image_to_base64(individual_viz_path) if individual_viz_path else None
         generate_html_report(group_df, stats_df, config, main_viz_b64=main_viz_b64,
                              individual_viz_b64=individual_viz_b64)
 
