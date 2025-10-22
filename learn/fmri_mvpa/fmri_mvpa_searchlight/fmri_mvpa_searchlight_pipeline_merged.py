@@ -1,7 +1,7 @@
 # !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-fMRI MVPA Searchlight Pipeline - 完整版本（带特征选择）
+fMRI MVPA Searchlight Pipeline - 完整版本
 
 这是将所有模块合并到一个文件中的版本，包含以下功能：
 - 配置管理
@@ -710,26 +710,33 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
 
 def permutation_test_group_level(group_accuracies, n_permutations=1000, random_state=None):
     """组水平置换检验"""
-    if random_state is not None:
-        np.random.seed(random_state)
 
-    # 计算真实的组平均准确率
-    true_mean = np.mean(group_accuracies)
-
-    # 运行置换测试
-    perm_means = []
+    accuracies = np.asarray(group_accuracies, dtype=float)
     chance_level = 0.5
 
-    for i in range(n_permutations):
-        # 生成随机准确率（围绕chance level）
-        perm_accuracies = np.random.normal(chance_level, 0.1, len(group_accuracies))
-        perm_accuracies = np.clip(perm_accuracies, 0, 1)  # 限制在[0,1]范围内
-        perm_means.append(np.mean(perm_accuracies))
+    if accuracies.size == 0:
+        raise ValueError("group_accuracies must contain at least one value")
 
-    perm_means = np.array(perm_means)
+    # 观测到的平均准确率（差值和原始准确率）
+    true_mean = np.mean(accuracies)
+    observed_diff = true_mean - chance_level
 
-    # 计算p值
-    p_value = np.sum(perm_means >= true_mean) / n_permutations
+    rng = np.random.default_rng(random_state)
+
+    # 采用符号翻转的置换方法，保持样本分布但打破条件标签
+    centered = accuracies - chance_level
+    perm_diffs = []
+    for _ in range(n_permutations):
+        signs = rng.choice([-1, 1], size=centered.shape)
+        permuted_mean_diff = np.mean(centered * signs)
+        perm_diffs.append(permuted_mean_diff)
+
+    perm_diffs = np.asarray(perm_diffs)
+    perm_means = perm_diffs + chance_level
+
+    # 使用双侧检验计算p值
+    extreme_count = np.sum(np.abs(perm_diffs) >= abs(observed_diff)) + 1
+    p_value = extreme_count / (n_permutations + 1)
 
     return {
         'true_mean': true_mean,

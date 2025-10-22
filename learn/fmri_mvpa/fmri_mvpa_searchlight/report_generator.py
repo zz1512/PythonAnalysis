@@ -470,8 +470,6 @@ def generate_config_section(config):
             <div class="config-item">
                 <h4>🔧 算法设置</h4>
                 <p><strong>分类器:</strong> SVM (线性核)</p>
-                <p><strong>特征选择:</strong> {feature_selection}</p>
-                <p><strong>最大特征数:</strong> {max_features}</p>
                 <p><strong>并行进程:</strong> {n_jobs}</p>
             </div>
             <div class="config-item">
@@ -490,8 +488,6 @@ def generate_config_section(config):
         lss_root=config.lss_root.name,
         mask_dir=config.mask_dir.name,
         results_dir=config.results_dir.name,
-        feature_selection="启用" if config.apply_feature_selection else "禁用",
-        max_features=config.max_features,
         n_jobs=config.n_jobs,
         n_perm=config.n_permutations,
         alpha=config.alpha_level,
