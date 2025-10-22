@@ -58,6 +58,12 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
     """生成增强的中文HTML报告"""
     log("生成HTML报告", config)
     
+    # 允许直接传入路径对象，避免重复的base64转换逻辑
+    if isinstance(main_viz_b64, Path):
+        main_viz_b64 = image_to_base64(main_viz_b64)
+    if isinstance(individual_viz_b64, Path):
+        individual_viz_b64 = image_to_base64(individual_viz_b64)
+
     # 如果没有提供图片数据，尝试从文件加载
     if main_viz_b64 is None or individual_viz_b64 is None:
         main_viz_path = config.results_dir / "enhanced_analysis_visualizations.png"

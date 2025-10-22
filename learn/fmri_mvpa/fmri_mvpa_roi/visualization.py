@@ -46,7 +46,7 @@ def setup_chinese_fonts():
 
 
 def create_enhanced_visualizations(group_df, stats_df, config):
-    """创建增强的可视化"""
+    """创建增强的可视化并返回生成的图像路径"""
     log("创建可视化", config)
 
     # 设置中文字体（使用改进的字体设置函数）
@@ -206,9 +206,9 @@ def create_enhanced_visualizations(group_df, stats_df, config):
     log(f"可视化图表已保存: {viz_path}", config)
 
     # 创建单个ROI详细图表
-    create_individual_roi_plots(group_df, stats_df, config)
+    individual_viz_path = create_individual_roi_plots(group_df, stats_df, config)
 
-    return viz_path
+    return viz_path, individual_viz_path
 
 
 def create_individual_roi_plots(group_df, stats_df, config):
