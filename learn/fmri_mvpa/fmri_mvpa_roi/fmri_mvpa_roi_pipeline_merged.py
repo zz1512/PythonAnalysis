@@ -292,27 +292,14 @@ class DynamicPCA(PCA):
 
 
 def build_classification_pipeline(config, n_features):
-    """构建包含必要预处理和可选特征选择的分类pipeline"""
+    """构建Searchlight分类pipeline - 简化版本"""
 
-    steps = [('imputer', SimpleImputer(strategy='mean'))]
-
-    # 在进行任何基于方差或统计量的特征选择之前，先移除常数特征，避免零方差导致的警告
-    steps.append(('variance_filter', VarianceThreshold(threshold=0.0)))
-
-    if config.apply_feature_selection:
-        if config.feature_selection_method == 'univariate':
-            selector = DynamicSelectKBest(score_func=f_classif, k=min(config.max_features, n_features))
-            steps.append(('feature_selector', selector))
-        elif config.feature_selection_method == 'pca':
-            reducer = DynamicPCA(n_components=min(config.max_features, n_features))
-            steps.append(('feature_selector', reducer))
-        else:
-            log(f"  ⚠️ 未知的特征选择方法: {config.feature_selection_method}，跳过特征选择", config)
-
-    steps.append(('scaler', StandardScaler()))
-
-    svm_params = config.svm_params.copy()
-    steps.append(('svm', SVC(**svm_params)))
+    steps = [
+        ('imputer', SimpleImputer(strategy='mean')),  # 处理可能的缺失值
+        ('variance_filter', VarianceThreshold(threshold=0.0)),  # 只移除零方差特征
+        ('scaler', StandardScaler()),  # 标准化
+        ('classifier', SVC(**config.svm_params))  # 分类器
+    ]
 
     return Pipeline(steps)
 
