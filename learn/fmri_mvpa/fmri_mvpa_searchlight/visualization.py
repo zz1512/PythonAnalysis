@@ -197,54 +197,67 @@ def create_group_accuracy_barplot(stats_df, ax):
     try:
         contrasts = stats_df['contrast'].tolist()
         accuracies = stats_df['mean_accuracy'].tolist()
-        errors = stats_df['sem_accuracy'].tolist()
-        
-        # 根据显著性设置颜色
-        colors = ['#2E8B57' if row.get('significant_permutation', False) or row.get('significant_t_test', False) 
+        chance_series = stats_df.get('mean_chance_accuracy', pd.Series([0.5]*len(stats_df)))
+        chance_levels = chance_series.tolist()
+        if 'mean_delta_accuracy' in stats_df.columns:
+            deltas = stats_df['mean_delta_accuracy'].tolist()
+        else:
+            deltas = (stats_df['mean_accuracy'] - chance_series).tolist()
+        errors_series = stats_df.get('sem_delta_accuracy', stats_df.get('sem_accuracy', pd.Series([0.0]*len(stats_df))))
+        errors = errors_series.tolist()
+
+        x = np.arange(len(contrasts))
+
+        colors = ['#2E8B57' if row.get('significant_permutation', False) or row.get('significant_t_test', False)
                  else '#CD5C5C' for _, row in stats_df.iterrows()]
-        
-        bars = ax.bar(contrasts, accuracies, yerr=errors, capsize=5, 
-                     color=colors, alpha=0.8, edgecolor='black', linewidth=1)
-        
-        # 添加准确率数值标签
-        for bar, acc in zip(bars, accuracies):
+
+        bars = ax.bar(x, accuracies, yerr=errors, capsize=5,
+                     color=colors, alpha=0.85, edgecolor='black', linewidth=1)
+
+        ax.scatter(x, chance_levels, color='black', marker='D', s=60, label='机会水平', zorder=5)
+
+        for idx, (bar, acc, delta) in enumerate(zip(bars, accuracies, deltas)):
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                   f'{acc:.3f}', ha='center', va='bottom', fontweight='bold')
-        
-        # 添加机会水平线
-        ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7, label='机会水平 (50%)')
-        
-        ax.set_title('组水平分类准确率', fontsize=14, fontweight='bold')
-        ax.set_ylabel('平均准确率', fontsize=12)
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
+                    f'{acc:.3f}\nΔ={delta:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(contrasts, rotation=0)
+
+        ymin = min(min(chance_levels), min(accuracies)) - 0.05
+        ymax = max(max(accuracies), max(chance_levels)) + 0.05
+        ax.set_ylim(ymin, ymax)
+
+        ax.set_title('组水平准确率与差值', fontsize=14, fontweight='bold')
+        ax.set_ylabel('准确率', fontsize=12)
         ax.set_xlabel('对比条件', fontsize=12)
         ax.legend()
         ax.grid(True, alpha=0.3)
-        
-        # 设置y轴范围
-        ax.set_ylim(0.4, max(accuracies) + 0.1)
-        
+
     except Exception as e:
         ax.text(0.5, 0.5, f'绘图错误: {str(e)}', ha='center', va='center', transform=ax.transAxes)
 
 def create_accuracy_distribution(group_df, ax):
     """创建准确率分布图"""
     try:
-        # 创建小提琴图
-        sns.violinplot(data=group_df, x='contrast', y='accuracy', ax=ax, inner='box')
-        
-        # 添加散点
-        sns.stripplot(data=group_df, x='contrast', y='accuracy', ax=ax, 
-                     color='red', alpha=0.6, size=4)
-        
-        # 添加机会水平线
-        ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7)
-        
-        ax.set_title('个体准确率分布', fontsize=12, fontweight='bold')
-        ax.set_ylabel('准确率', fontsize=10)
+        value_col = 'mean_delta_accuracy' if 'mean_delta_accuracy' in group_df.columns else 'accuracy'
+        sns.violinplot(data=group_df, x='contrast', y=value_col, ax=ax, inner='box', color='#87CEEB')
+
+        sns.stripplot(data=group_df, x='contrast', y=value_col, ax=ax,
+                     color='darkred', alpha=0.7, size=4)
+
+        if value_col == 'mean_delta_accuracy':
+            ax.axhline(y=0.0, color='black', linestyle='--', alpha=0.7)
+            ax.set_title('个体准确率差值分布 (准确率-机会水平)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('准确率差值', fontsize=10)
+        else:
+            ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7)
+            ax.set_title('个体准确率分布', fontsize=12, fontweight='bold')
+            ax.set_ylabel('准确率', fontsize=10)
+
         ax.set_xlabel('对比条件', fontsize=10)
         ax.tick_params(axis='x', rotation=45)
-        
+
     except Exception as e:
         ax.text(0.5, 0.5, f'绘图错误: {str(e)}', ha='center', va='center', transform=ax.transAxes)
 
@@ -286,13 +299,13 @@ def create_pvalue_comparison(stats_df, ax):
     try:
         contrasts = stats_df['contrast'].tolist()
         t_pvalues = stats_df['t_pvalue'].tolist()
-        perm_pvalues = stats_df['permutation_pvalue'].tolist()
+        perm_pvalues = stats_df.get('sign_flip_pvalue', stats_df.get('permutation_pvalue', pd.Series([np.nan]*len(stats_df)))).tolist()
         
         x = np.arange(len(contrasts))
         width = 0.35
         
         bars1 = ax.bar(x - width/2, t_pvalues, width, label='t检验', alpha=0.8, color='skyblue')
-        bars2 = ax.bar(x + width/2, perm_pvalues, width, label='置换检验', alpha=0.8, color='lightcoral')
+        bars2 = ax.bar(x + width/2, perm_pvalues, width, label='符号翻转置换', alpha=0.8, color='lightcoral')
         
         # 添加显著性水平线
         ax.axhline(y=0.05, color='red', linestyle='--', alpha=0.7, label='α = 0.05')
@@ -313,13 +326,17 @@ def create_subject_consistency_heatmap(group_df, ax):
     """创建被试间一致性热图"""
     try:
         # 创建被试×对比条件的准确率矩阵
-        pivot_df = group_df.pivot(index='subject', columns='contrast', values='accuracy')
-        
-        # 创建热图
-        sns.heatmap(pivot_df, annot=True, fmt='.3f', cmap='RdYlBu_r', 
-                   center=0.5, ax=ax, cbar_kws={'label': '准确率'})
-        
-        ax.set_title('被试间准确率一致性', fontsize=12, fontweight='bold')
+        value_col = 'mean_delta_accuracy' if 'mean_delta_accuracy' in group_df.columns else 'accuracy'
+        pivot_df = group_df.pivot(index='subject', columns='contrast', values=value_col)
+
+        center = 0 if value_col == 'mean_delta_accuracy' else 0.5
+        label = '准确率差值' if value_col == 'mean_delta_accuracy' else '准确率'
+
+        sns.heatmap(pivot_df, annot=True, fmt='.3f', cmap='RdYlBu_r',
+                   center=center, ax=ax, cbar_kws={'label': label})
+
+        title = '被试间准确率差值一致性' if value_col == 'mean_delta_accuracy' else '被试间准确率一致性'
+        ax.set_title(title, fontsize=12, fontweight='bold')
         ax.set_xlabel('对比条件', fontsize=10)
         ax.set_ylabel('被试', fontsize=10)
         
@@ -336,20 +353,26 @@ def create_accuracy_vs_sample_size(group_df, ax):
         contrasts = group_df['contrast'].unique()
         colors = plt.cm.Set1(np.linspace(0, 1, len(contrasts)))
         
+        value_col = 'mean_delta_accuracy' if 'mean_delta_accuracy' in group_df.columns else 'accuracy'
+
         for i, contrast in enumerate(contrasts):
             contrast_data = group_df[group_df['contrast'] == contrast]
-            ax.scatter(contrast_data['total_trials'], contrast_data['accuracy'], 
+            ax.scatter(contrast_data['total_trials'], contrast_data[value_col],
                       c=[colors[i]], label=contrast, alpha=0.7, s=50)
-        
-        # 添加机会水平线
-        ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7, label='机会水平')
-        
-        ax.set_title('准确率 vs 样本量', fontsize=12, fontweight='bold')
+
+        if value_col == 'mean_delta_accuracy':
+            ax.axhline(y=0.0, color='black', linestyle='--', alpha=0.7, label='Δ = 0')
+            ax.set_ylabel('准确率差值', fontsize=10)
+            ax.set_title('准确率差值 vs 样本量', fontsize=12, fontweight='bold')
+        else:
+            ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7, label='机会水平')
+            ax.set_ylabel('准确率', fontsize=10)
+            ax.set_title('准确率 vs 样本量', fontsize=12, fontweight='bold')
+
         ax.set_xlabel('总试次数', fontsize=10)
-        ax.set_ylabel('准确率', fontsize=10)
         ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax.grid(True, alpha=0.3)
-        
+
     except Exception as e:
         ax.text(0.5, 0.5, f'绘图错误: {str(e)}', ha='center', va='center', transform=ax.transAxes)
 
@@ -390,29 +413,29 @@ def create_individual_contrast_plot(contrast_data, ax, contrast_name):
     """为单个对比条件创建个体结果图"""
     try:
         subjects = contrast_data['subject'].tolist()
-        accuracies = contrast_data['accuracy'].tolist()
-        
-        # 根据准确率设置颜色
-        colors = ['#2E8B57' if acc >= 0.6 else '#FFA500' if acc >= 0.55 else '#CD5C5C' 
-                 for acc in accuracies]
-        
-        bars = ax.bar(subjects, accuracies, color=colors, alpha=0.8, 
+        accuracies = contrast_data.get('mean_accuracy', contrast_data['accuracy']).tolist()
+        chance_values = contrast_data.get('mean_chance_accuracy', pd.Series([0.5]*len(contrast_data))).tolist()
+        deltas = contrast_data.get('mean_delta_accuracy', (contrast_data.get('mean_accuracy', contrast_data['accuracy']) - contrast_data.get('mean_chance_accuracy', 0.5))).tolist()
+
+        colors = ['#2E8B57' if acc - chance >= 0.05 else '#FFA500' if acc - chance >= 0.02 else '#CD5C5C'
+                 for acc, chance in zip(accuracies, chance_values)]
+
+        bars = ax.bar(subjects, accuracies, color=colors, alpha=0.85,
                      edgecolor='black', linewidth=1)
-        
-        # 添加准确率数值标签
-        for bar, acc in zip(bars, accuracies):
+
+        ax.scatter(subjects, chance_values, color='black', marker='D', s=40, label='机会水平', zorder=5)
+
+        for bar, acc, delta in zip(bars, accuracies, deltas):
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                   f'{acc:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-        
-        # 添加机会水平线
-        ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.7)
-        
-        # 计算平均值线
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.005,
+                   f'{acc:.3f}\nΔ={delta:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+
         mean_acc = np.mean(accuracies)
-        ax.axhline(y=mean_acc, color='blue', linestyle='-', alpha=0.7, 
-                  label=f'平均: {mean_acc:.3f}')
-        
+        mean_chance = np.mean(chance_values)
+        ax.axhline(y=mean_chance, color='gray', linestyle='--', alpha=0.6, label=f'平均机会水平 {mean_chance:.3f}')
+        ax.axhline(y=mean_acc, color='blue', linestyle='-', alpha=0.7,
+                  label=f'平均准确率 {mean_acc:.3f}')
+
         ax.set_title(f'{contrast_name}', fontsize=11, fontweight='bold')
         ax.set_ylabel('准确率', fontsize=9)
         ax.set_xlabel('被试', fontsize=9)

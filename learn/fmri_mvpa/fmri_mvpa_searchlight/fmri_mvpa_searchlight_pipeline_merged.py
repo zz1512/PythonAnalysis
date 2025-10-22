@@ -1,7 +1,7 @@
 # !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-fMRI MVPA Searchlight Pipeline - 完整版本（带特征选择）
+fMRI MVPA Searchlight Pipeline - 完整版本
 
 这是将所有模块合并到一个文件中的版本，包含以下功能：
 - 配置管理
@@ -29,7 +29,6 @@ from multiprocessing import cpu_count
 from nilearn.decoding import SearchLight
 from nilearn.maskers import NiftiMasker
 from nilearn import image
-from nilearn.mass_univariate import permuted_ols
 from sklearn.svm import SVC
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold
@@ -78,6 +77,9 @@ class MVPAConfig:
         # 置换检验参数（仅用于组水平分析）
         self.n_permutations = 1000  # searchlight通常使用较少的置换次数
         self.permutation_random_state = 42
+        self.within_subject_permutations = 1000  # 每个被试估计机会水平的置换次数
+        self.max_exact_sign_flips_subjects = 12  # 被试数不超过该阈值时枚举全部符号翻转
+        self.enable_two_sided_group_tests = True  # 组水平检测使用双侧检验
 
         # 显著性水平
         self.alpha_level = 0.05
@@ -165,6 +167,51 @@ def log_safe(message, config):
 def memory_cleanup():
     """内存清理"""
     gc.collect()
+
+
+def permute_labels_within_groups(labels, groups, rng):
+    """在保持组内结构的情况下随机置换标签"""
+    labels = np.asarray(labels)
+
+    if groups is None:
+        return rng.permutation(labels)
+
+    groups = np.asarray(groups)
+    permuted = labels.copy()
+    for group in np.unique(groups):
+        mask = groups == group
+        permuted[mask] = rng.permutation(labels[mask])
+
+    return permuted
+
+
+def generate_sign_flip_vectors(n_subjects, config, rng):
+    """生成用于符号翻转置换的符号矩阵"""
+    if n_subjects == 0:
+        return [], 0, False
+
+    exact_limit = getattr(config, 'max_exact_sign_flips_subjects', 0)
+    two_sided = getattr(config, 'enable_two_sided_group_tests', True)
+
+    if exact_limit and n_subjects <= exact_limit:
+        import itertools
+
+        sign_vectors = []
+        for signs in itertools.product([-1, 1], repeat=n_subjects):
+            if two_sided:
+                sign_vectors.append(np.array(signs, dtype=float))
+            else:
+                if np.prod(signs) == 1:
+                    sign_vectors.append(np.array(signs, dtype=float))
+
+        return sign_vectors, len(sign_vectors), True
+
+    n_permutations = getattr(config, 'n_permutations', 0)
+    if n_permutations <= 0:
+        return [], 0, False
+
+    sign_vectors = [rng.choice([-1.0, 1.0], size=n_subjects) for _ in range(n_permutations)]
+    return sign_vectors, len(sign_vectors), False
 
 
 # ============================================================================
@@ -338,18 +385,46 @@ def build_classification_pipeline(config, n_features):
 # 添加缺失的函数
 # ============================================================================
 
-def analyze_searchlight_results(searchlight, config, subject_id, contrast_name):
+def analyze_searchlight_results(searchlight, config, subject_id, contrast_name,
+                                chance_img=None, chance_info=None):
     """分析Searchlight结果"""
     try:
         accuracy_data = searchlight.scores_.get_fdata()
         mask_data = searchlight.mask_img_.get_fdata() > 0
 
-        # 只分析mask内的体素
         masked_accuracies = accuracy_data[mask_data]
 
-        if len(masked_accuracies) == 0:
+        if masked_accuracies.size == 0:
             log(f"警告: {subject_id} {contrast_name} 无有效体素", config)
             return None
+
+        chance_metrics = {}
+        chance_data = None
+        if chance_img is not None:
+            chance_data = chance_img.get_fdata()
+            masked_chance = chance_data[mask_data]
+            chance_metrics['mean_chance_accuracy'] = float(np.mean(masked_chance))
+            chance_metrics['chance_accuracy_std'] = float(np.std(masked_chance))
+            chance_metrics['chance_accuracy_min'] = float(np.min(masked_chance))
+            chance_metrics['chance_accuracy_max'] = float(np.max(masked_chance))
+            chance_metrics['chance_above_half_ratio'] = float(np.mean(masked_chance > 0.5))
+
+            if chance_info and 'n_subject_permutations' in chance_info:
+                chance_metrics['n_subject_permutations'] = chance_info['n_subject_permutations']
+
+        delta_metrics = {}
+        if chance_data is not None:
+            delta_data = accuracy_data - chance_data
+            masked_delta = delta_data[mask_data]
+            delta_metrics['mean_delta_accuracy'] = float(np.mean(masked_delta))
+            delta_metrics['delta_accuracy_std'] = float(np.std(masked_delta, ddof=1)) if masked_delta.size > 1 else 0.0
+            delta_metrics['delta_accuracy_min'] = float(np.min(masked_delta))
+            delta_metrics['delta_accuracy_max'] = float(np.max(masked_delta))
+            delta_metrics['delta_above_zero_ratio'] = float(np.mean(masked_delta > 0))
+
+            if chance_info and 'chance_std_data' in chance_info:
+                chance_std_masked = chance_info['chance_std_data'][mask_data]
+                delta_metrics['mean_chance_std'] = float(np.mean(chance_std_masked))
 
         # 计算各种统计量
         results = {
@@ -365,6 +440,9 @@ def analyze_searchlight_results(searchlight, config, subject_id, contrast_name):
             'n_voxels_above_60': np.sum(masked_accuracies > 0.6),
             'n_voxels_total': len(masked_accuracies)
         }
+
+        results.update(chance_metrics)
+        results.update(delta_metrics)
 
         log(f"  {contrast_name} 结果:", config)
         log(f"    - 平均准确率: {results['mean_accuracy']:.4f}", config)
@@ -607,42 +685,54 @@ def check_system_resources(config):
         log("无法检测系统资源，请安装psutil: pip install psutil", config)
 
 
+def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
+    """内部函数，用于拟合SearchLight估计器"""
+    classifier = SVC(**config.svm_params)
+
+    if groups is not None and len(np.unique(groups)) > 1:
+        cv = LeaveOneGroupOut()
+    else:
+        cv = StratifiedKFold(
+            n_splits=min(config.cv_folds, len(labels)),
+            random_state=config.cv_random_state,
+            shuffle=True
+        )
+
+    searchlight = SearchLight(
+        mask_img=process_mask_path,
+        radius=config.searchlight_radius,
+        estimator=classifier,
+        cv=cv,
+        scoring='accuracy',
+        n_jobs=config.n_jobs,
+        verbose=verbose
+    )
+
+    searchlight.fit(beta_images, labels, groups=groups)
+    return searchlight
+
+
 @enhanced_error_handling("Searchlight分类分析")
 def run_searchlight_classification(beta_images, labels, process_mask_path, config, groups=None):
     """运行searchlight分类分析 - 改进版本"""
     try:
-        # 资源检查
         check_system_resources(config)
 
-        # 构建分类器
-        classifier = SVC(**config.svm_params)
-
-        # 设置交叉验证
-        if groups is not None and len(np.unique(groups)) > 1:
-            cv = LeaveOneGroupOut()
-        else:
-            cv = StratifiedKFold(n_splits=min(config.cv_folds, len(labels)),
-                                 random_state=config.cv_random_state, shuffle=True)
-
-        # 创建SearchLight对象
-        searchlight = SearchLight(
-            mask_img=process_mask_path,
-            radius=config.searchlight_radius,
-            estimator=classifier,
-            cv=cv,
-            scoring='accuracy',
-            n_jobs=config.n_jobs,
+        log(
+            f"开始Searchlight分析: 半径={config.searchlight_radius}体素, 样本数={len(labels)}",
+            config
+        )
+        start_time = time.time()
+        searchlight = _fit_searchlight(
+            beta_images,
+            labels,
+            process_mask_path,
+            config,
+            groups=groups,
             verbose=1
         )
 
-        # 运行searchlight分析
-        log(f"开始Searchlight分析: 半径={config.searchlight_radius}体素, 样本数={len(labels)}", config)
-        start_time = time.time()
-
-        searchlight.fit(beta_images, labels, groups=groups)
-
-        end_time = time.time()
-        duration = (end_time - start_time) / 60
+        duration = (time.time() - start_time) / 60
         log(f"Searchlight完成: 耗时{duration:.1f}分钟", config)
 
         return searchlight
@@ -650,6 +740,64 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
     except Exception as e:
         log(f"Searchlight分析失败: {str(e)}", config)
         return None
+
+
+def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, template_img,
+                                groups=None):
+    """通过标签置换估计单个被试的机会水平地图"""
+
+    n_permutations = getattr(config, 'within_subject_permutations', 0)
+    if n_permutations is None or n_permutations <= 0:
+        return None, None
+
+    rng = np.random.default_rng(config.permutation_random_state)
+    sum_scores = None
+    sum_sq_scores = None
+    actual_permutations = 0
+
+    for perm_index in range(n_permutations):
+        permuted_labels = permute_labels_within_groups(labels, groups, rng)
+
+        try:
+            perm_searchlight = _fit_searchlight(
+                beta_images,
+                permuted_labels,
+                process_mask_path,
+                config,
+                groups=groups,
+                verbose=0
+            )
+        except Exception as exc:  # pragma: no cover - 记录并继续
+            log(f"置换 {perm_index + 1}/{n_permutations} 失败: {exc}", config)
+            continue
+
+        perm_scores = perm_searchlight.scores_.get_fdata()
+
+        if sum_scores is None:
+            sum_scores = perm_scores
+            sum_sq_scores = perm_scores ** 2
+        else:
+            sum_scores += perm_scores
+            sum_sq_scores += perm_scores ** 2
+
+        actual_permutations += 1
+
+    if actual_permutations == 0:
+        log("警告: 未能生成任何有效的机会水平置换地图", config)
+        return None, None
+
+    mean_data = sum_scores / actual_permutations
+    var_data = np.maximum(sum_sq_scores / actual_permutations - mean_data ** 2, 0)
+    std_data = np.sqrt(var_data)
+
+    chance_img = image.new_img_like(template_img, mean_data)
+    chance_std_img = image.new_img_like(template_img, std_data)
+
+    return chance_img, chance_std_img, {
+        'n_subject_permutations': actual_permutations,
+        'chance_mean_data': mean_data,
+        'chance_std_data': std_data
+    }
 
 
 # ============================================================================
@@ -708,35 +856,60 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
 # 组水平统计分析模块 (group_statistics.py)
 # ============================================================================
 
-def permutation_test_group_level(group_accuracies, n_permutations=1000, random_state=None):
-    """组水平置换检验"""
-    if random_state is not None:
-        np.random.seed(random_state)
+def permutation_test_group_level(deltas, config):
+    """组水平符号翻转置换检验"""
 
-    # 计算真实的组平均准确率
-    true_mean = np.mean(group_accuracies)
+    delta_values = np.asarray(deltas, dtype=float)
 
-    # 运行置换测试
-    perm_means = []
-    chance_level = 0.5
+    if delta_values.size == 0:
+        raise ValueError("group_accuracies must contain at least one value")
 
-    for i in range(n_permutations):
-        # 生成随机准确率（围绕chance level）
-        perm_accuracies = np.random.normal(chance_level, 0.1, len(group_accuracies))
-        perm_accuracies = np.clip(perm_accuracies, 0, 1)  # 限制在[0,1]范围内
-        perm_means.append(np.mean(perm_accuracies))
+    rng = np.random.default_rng(config.permutation_random_state)
+    observed_mean = float(np.mean(delta_values))
+    observed_std = float(np.std(delta_values, ddof=1)) if delta_values.size > 1 else 0.0
+    sem = observed_std / np.sqrt(len(delta_values)) if len(delta_values) > 0 else np.nan
+    observed_t = observed_mean / sem if sem > 0 else 0.0
 
-    perm_means = np.array(perm_means)
+    sign_vectors, total_permutations, used_exact = generate_sign_flip_vectors(
+        len(delta_values),
+        config,
+        rng
+    )
 
-    # 计算p值
-    p_value = np.sum(perm_means >= true_mean) / n_permutations
+    if total_permutations == 0:
+        return {
+            'observed_mean': observed_mean,
+            'observed_t': observed_t,
+            'p_value': 1.0,
+            'null_distribution': np.array([], dtype=float),
+            'used_exact': used_exact,
+            'sem': sem,
+            'observed_std': observed_std,
+            'n_permutations': 0
+        }
+
+    permuted_means = []
+    for signs in sign_vectors:
+        permuted_means.append(np.mean(delta_values * signs))
+
+    permuted_means = np.asarray(permuted_means, dtype=float)
+
+    if getattr(config, 'enable_two_sided_group_tests', True):
+        extreme = np.sum(np.abs(permuted_means) >= abs(observed_mean)) + 1
+    else:
+        extreme = np.sum(permuted_means >= observed_mean) + 1
+
+    p_value = extreme / (total_permutations + 1)
 
     return {
-        'true_mean': true_mean,
-        'perm_means': perm_means,
-        'p_value': p_value,
-        'perm_mean': np.mean(perm_means),
-        'perm_std': np.std(perm_means)
+        'observed_mean': observed_mean,
+        'observed_t': observed_t,
+        'p_value': float(p_value),
+        'null_distribution': permuted_means,
+        'used_exact': used_exact,
+        'sem': sem,
+        'observed_std': observed_std,
+        'n_permutations': total_permutations
     }
 
 
@@ -755,32 +928,32 @@ def perform_group_statistics_corrected(group_df, config):
             log(f"跳过 {contrast_name}: 数据点不足", config)
             continue
 
-        # 提取准确率
         accuracies = contrast_data['accuracy'].values
+        chance_values = contrast_data.get('mean_chance_accuracy', pd.Series(np.full_like(accuracies, 0.5))).values
+        if 'mean_delta_accuracy' in contrast_data.columns:
+            deltas = contrast_data['mean_delta_accuracy'].values
+        else:
+            deltas = accuracies - chance_values
 
-        # 基本统计
         mean_acc = np.mean(accuracies)
-        std_acc = np.std(accuracies, ddof=1)
-        sem_acc = std_acc / np.sqrt(len(accuracies))
+        mean_chance = np.mean(chance_values)
+        mean_delta = np.mean(deltas)
 
-        # 单样本t检验 (与chance level 0.5比较)
-        t_stat, t_pval = stats.ttest_1samp(accuracies, 0.5)
+        std_delta = np.std(deltas, ddof=1) if len(deltas) > 1 else 0.0
+        sem_delta = std_delta / np.sqrt(len(deltas)) if len(deltas) > 0 else np.nan
 
-        # 置换检验
-        perm_result = permutation_test_group_level(
-            accuracies,
-            n_permutations=config.n_permutations,
-            random_state=config.permutation_random_state
-        )
+        t_stat, t_pval = stats.ttest_1samp(deltas, 0.0)
 
-        # 效应量 (Cohen's d)
-        cohens_d = (mean_acc - 0.5) / std_acc if std_acc > 0 else 0
+        perm_result = permutation_test_group_level(deltas, config)
 
-        # 95%置信区间
-        ci_lower = mean_acc - 1.96 * sem_acc
-        ci_upper = mean_acc + 1.96 * sem_acc
+        cohens_d = mean_delta / std_delta if std_delta > 0 else 0.0
 
-        # 显著性判断
+        ci_lower_delta = mean_delta - 1.96 * sem_delta if np.isfinite(sem_delta) else np.nan
+        ci_upper_delta = mean_delta + 1.96 * sem_delta if np.isfinite(sem_delta) else np.nan
+
+        ci_lower_acc = mean_chance + ci_lower_delta if np.isfinite(ci_lower_delta) else np.nan
+        ci_upper_acc = mean_chance + ci_upper_delta if np.isfinite(ci_upper_delta) else np.nan
+
         is_significant_t = t_pval < config.alpha_level
         is_significant_perm = perm_result['p_value'] < config.alpha_level
 
@@ -788,28 +961,49 @@ def perform_group_statistics_corrected(group_df, config):
             'contrast': contrast_name,
             'n_subjects': len(accuracies),
             'mean_accuracy': mean_acc,
-            'std_accuracy': std_acc,
-            'sem_accuracy': sem_acc,
-            'ci_lower': ci_lower,
-            'ci_upper': ci_upper,
+            'mean_chance_accuracy': mean_chance,
+            'mean_delta_accuracy': mean_delta,
+            'std_accuracy': np.std(accuracies, ddof=1) if len(accuracies) > 1 else 0.0,
+            'std_delta_accuracy': std_delta,
+            'sem_accuracy': sem_delta,
+            'sem_delta_accuracy': sem_delta,
+            'ci_lower': ci_lower_acc,
+            'ci_upper': ci_upper_acc,
+            'ci_lower_delta': ci_lower_delta,
+            'ci_upper_delta': ci_upper_delta,
             't_statistic': t_stat,
             't_pvalue': t_pval,
+            't_like_statistic': perm_result['observed_t'],
             'permutation_pvalue': perm_result['p_value'],
+            'sign_flip_pvalue': perm_result['p_value'],
             'cohens_d': cohens_d,
             'significant_t_test': is_significant_t,
             'significant_permutation': is_significant_perm,
-            'perm_mean': perm_result['perm_mean'],
-            'perm_std': perm_result['perm_std']
+            'used_exact_permutation': perm_result['used_exact'],
+            'n_group_permutations': perm_result['n_permutations']
         }
 
         stats_results.append(result)
 
         # 记录结果
+        sem_delta_str = f"{sem_delta:.4f}" if np.isfinite(sem_delta) else "nan"
         log(f"  {contrast_name} 结果:", config)
-        log(f"    平均准确率: {mean_acc:.4f} ± {sem_acc:.4f}", config)
-        log(f"    t检验: t={t_stat:.3f}, p={t_pval:.4f} {'*' if is_significant_t else ''}", config)
-        log(f"    置换检验: p={perm_result['p_value']:.4f} {'*' if is_significant_perm else ''}", config)
-        log(f"    效应量: d={cohens_d:.3f}", config)
+        log(f"    平均准确率: {mean_acc:.4f}", config)
+        log(f"    平均机会水平: {mean_chance:.4f}", config)
+        log(f"    平均差值: {mean_delta:.4f} ± {sem_delta_str}", config)
+        log(
+            f"    t检验(Δ): t={t_stat:.3f}, p={t_pval:.4f}"
+            f" {'*' if is_significant_t else ''}",
+            config
+        )
+        log(
+            f"    符号翻转置换: p={perm_result['p_value']:.4f}"
+            f" {'*' if is_significant_perm else ''}"
+            f" | {'精确枚举' if perm_result['used_exact'] else '随机采样'}"
+            f" {perm_result['n_permutations']} 次",
+            config
+        )
+        log(f"    效应量(Δ): d={cohens_d:.3f}", config)
 
     stats_df = pd.DataFrame(stats_results)
     log(f"组水平统计分析完成，共 {len(stats_df)} 个对比条件", config)
@@ -892,20 +1086,58 @@ def run_group_searchlight_analysis(config):
                 )
 
                 if searchlight is not None:
-                    # 分析结果
+                    chance_img, chance_std_img, chance_info = estimate_subject_chance_map(
+                        selected_betas,
+                        labels,
+                        process_mask_path,
+                        config,
+                        searchlight.scores_,
+                        groups=groups
+                    )
+
                     subject_results = analyze_searchlight_results(
-                        searchlight, config, subject_id, contrast_name
+                        searchlight,
+                        config,
+                        subject_id,
+                        contrast_name,
+                        chance_img=chance_img,
+                        chance_info=chance_info
                     )
 
                     if subject_results:
-                        # 保存个体结果
+                        condition_col = 'original_condition' if 'original_condition' in trial_details.columns else 'condition'
+                        if condition_col in trial_details.columns:
+                            subject_results['n_trials_cond1'] = int((trial_details[condition_col] == cond1).sum())
+                            subject_results['n_trials_cond2'] = int((trial_details[condition_col] == cond2).sum())
+
                         subject_result_dir = config.results_dir / "subject_results" / subject_id
                         subject_result_dir.mkdir(parents=True, exist_ok=True)
 
-                        # 保存准确率图
                         accuracy_map_path = subject_result_dir / f"{contrast_name}_accuracy_map.nii.gz"
                         searchlight.scores_.to_filename(str(accuracy_map_path))
                         subject_results['accuracy_map_path'] = str(accuracy_map_path)
+
+                        if chance_img is not None:
+                            chance_map_path = subject_result_dir / f"{contrast_name}_chance_map.nii.gz"
+                            chance_img.to_filename(str(chance_map_path))
+                            subject_results['chance_map_path'] = str(chance_map_path)
+
+                            if chance_info and chance_info.get('n_subject_permutations'):
+                                log(
+                                    f"    机会水平置换次数: {chance_info['n_subject_permutations']}",
+                                    config
+                                )
+
+                            if chance_std_img is not None:
+                                chance_std_path = subject_result_dir / f"{contrast_name}_chance_std_map.nii.gz"
+                                chance_std_img.to_filename(str(chance_std_path))
+                                subject_results['chance_std_map_path'] = str(chance_std_path)
+
+                            delta_data = searchlight.scores_.get_fdata() - chance_img.get_fdata()
+                            delta_img = image.new_img_like(searchlight.scores_, delta_data)
+                            delta_map_path = subject_result_dir / f"{contrast_name}_delta_map.nii.gz"
+                            delta_img.to_filename(str(delta_map_path))
+                            subject_results['delta_map_path'] = str(delta_map_path)
 
                         all_results.append(subject_results)
                         subject_has_results = True
@@ -970,68 +1202,156 @@ def create_group_accuracy_maps(group_df, config):
 
         # 加载所有个体准确率图
         accuracy_maps = []
+        chance_maps = []
+
         for _, row in contrast_data.iterrows():
             try:
-                accuracy_img = image.load_img(row['accuracy_map_path'])
-                accuracy_maps.append(accuracy_img)
+                accuracy_maps.append(image.load_img(row['accuracy_map_path']))
             except Exception as e:
-                log(f"加载准确率图失败: {row['accuracy_map_path']}, {str(e)}", config)
+                log(f"加载准确率图失败: {row.get('accuracy_map_path')}, {str(e)}", config)
                 continue
+
+            chance_path = row.get('chance_map_path')
+            if chance_path:
+                try:
+                    chance_maps.append(image.load_img(chance_path))
+                except Exception as e:
+                    log(f"加载机会水平图失败: {chance_path}, {str(e)}", config)
+                    chance_maps.append(None)
+            else:
+                chance_maps.append(None)
 
         if len(accuracy_maps) < 3:
             log(f"跳过 {contrast_name}: 有效准确率图不足", config)
             continue
 
+        if any(ch is None for ch in chance_maps):
+            log(f"跳过 {contrast_name}: 缺少机会水平图，无法执行两步校正", config)
+            continue
+
         try:
-            # 计算平均准确率图
+            n_subjects = len(accuracy_maps)
+            accuracy_data = np.stack([img.get_fdata() for img in accuracy_maps], axis=0)
+            chance_data = np.stack([img.get_fdata() for img in chance_maps], axis=0)
+            delta_data = accuracy_data - chance_data
+
             mean_accuracy_img = image.mean_img(accuracy_maps)
+            mean_chance_img = image.mean_img(chance_maps)
+            mean_delta_data = np.mean(delta_data, axis=0)
 
-            # 保存组水平准确率图
-            group_accuracy_path = config.results_dir / "accuracy_maps" / f"group_{contrast_name}_mean_accuracy.nii.gz"
-            group_accuracy_path.parent.mkdir(parents=True, exist_ok=True)
-            mean_accuracy_img.to_filename(str(group_accuracy_path))
+            mean_delta_img = image.new_img_like(accuracy_maps[0], mean_delta_data)
 
-            log(f"保存组水平准确率图: {group_accuracy_path}", config)
+            group_dir = config.results_dir / "accuracy_maps"
+            group_dir.mkdir(parents=True, exist_ok=True)
 
-            # 进行单样本t检验
-            # 准备数据进行统计检验
-            accuracy_data = np.array([img.get_fdata() for img in accuracy_maps])
+            accuracy_out = group_dir / f"group_{contrast_name}_mean_accuracy.nii.gz"
+            chance_out = group_dir / f"group_{contrast_name}_mean_chance.nii.gz"
+            delta_out = group_dir / f"group_{contrast_name}_mean_delta.nii.gz"
 
-            # 创建设计矩阵（单样本t检验）
-            design_matrix = np.ones((len(accuracy_maps), 1))
+            mean_accuracy_img.to_filename(str(accuracy_out))
+            mean_chance_img.to_filename(str(chance_out))
+            mean_delta_img.to_filename(str(delta_out))
 
-            # 运行置换检验
-            log(f"运行 {contrast_name} 的置换检验...", config)
-            neg_log_pvals, t_scores_original_data, _ = permuted_ols(
-                tested_vars=design_matrix,
-                target_vars=accuracy_data.reshape(len(accuracy_maps), -1),
-                model_intercept=False,
-                n_perm=config.n_permutations,
-                two_sided_test=False,  # 单侧检验（准确率 > 0.5）
-                random_state=config.permutation_random_state,
-                n_jobs=config.n_jobs
+            log(f"保存组水平平均准确率图: {accuracy_out}", config)
+            log(f"保存组水平平均机会水平图: {chance_out}", config)
+            log(f"保存组水平平均差值图: {delta_out}", config)
+
+            delta_flat = delta_data.reshape(n_subjects, -1)
+            mean_delta_flat = mean_delta_data.reshape(-1)
+            if n_subjects > 1:
+                std_delta_flat = np.std(delta_flat, axis=0, ddof=1)
+            else:
+                std_delta_flat = np.zeros(delta_flat.shape[1], dtype=float)
+            sem_flat = np.divide(std_delta_flat, np.sqrt(n_subjects), where=np.sqrt(n_subjects) > 0)
+
+            t_flat = np.zeros_like(mean_delta_flat)
+            valid_mask = sem_flat > 0
+            t_flat[valid_mask] = mean_delta_flat[valid_mask] / sem_flat[valid_mask]
+
+            rng = np.random.default_rng(config.permutation_random_state)
+            sign_vectors, total_permutations, used_exact = generate_sign_flip_vectors(
+                n_subjects,
+                config,
+                rng
             )
 
-            # 重塑结果到原始图像形状
-            original_shape = accuracy_maps[0].shape
-            t_scores_img_data = t_scores_original_data.reshape(original_shape)
-            neg_log_pvals_img_data = neg_log_pvals.reshape(original_shape)
+            abs_obs_t = np.abs(t_flat[valid_mask])
+            extreme_counts = np.ones_like(abs_obs_t, dtype=np.int64)
+            max_distribution = []
 
-            # 创建统计图像
-            t_scores_img = image.new_img_like(accuracy_maps[0], t_scores_img_data)
-            neg_log_pvals_img = image.new_img_like(accuracy_maps[0], neg_log_pvals_img_data)
+            if total_permutations > 0 and abs_obs_t.size > 0:
+                for signs in sign_vectors:
+                    signed = delta_flat * signs[:, None]
+                    perm_mean = np.mean(signed, axis=0)
+                    perm_t = np.zeros_like(perm_mean)
+                    perm_t[valid_mask] = perm_mean[valid_mask] / sem_flat[valid_mask]
+                    perm_abs = np.abs(perm_t[valid_mask])
+                    extreme_counts += (perm_abs >= abs_obs_t).astype(np.int64)
+                    max_distribution.append(float(np.max(perm_abs)))
 
-            # 保存统计图
-            t_scores_path = config.results_dir / "statistical_maps" / f"group_{contrast_name}_t_scores.nii.gz"
-            neg_log_pvals_path = config.results_dir / "statistical_maps" / f"group_{contrast_name}_neg_log_pvals.nii.gz"
+                max_distribution = np.asarray(max_distribution, dtype=float)
+                uncorrected_valid = extreme_counts / (total_permutations + 1)
 
-            t_scores_path.parent.mkdir(parents=True, exist_ok=True)
+                corrected_counts = (
+                    np.sum(max_distribution[:, None] >= abs_obs_t[None, :], axis=0) + 1
+                )
+                corrected_valid = corrected_counts / (total_permutations + 1)
+                max_t_threshold = np.quantile(
+                    max_distribution,
+                    1 - config.alpha_level
+                ) if max_distribution.size > 0 else np.nan
+            else:
+                uncorrected_valid = np.ones_like(abs_obs_t, dtype=float)
+                corrected_valid = np.ones_like(abs_obs_t, dtype=float)
+                max_distribution = np.array([], dtype=float)
+                max_t_threshold = np.nan
 
-            t_scores_img.to_filename(str(t_scores_path))
-            neg_log_pvals_img.to_filename(str(neg_log_pvals_path))
+            p_uncorrected = np.ones_like(mean_delta_flat, dtype=float)
+            p_corrected = np.ones_like(mean_delta_flat, dtype=float)
+            p_uncorrected[valid_mask] = uncorrected_valid
+            p_corrected[valid_mask] = corrected_valid
 
-            log(f"保存统计图: {t_scores_path}", config)
-            log(f"保存p值图: {neg_log_pvals_path}", config)
+            t_map_img = image.new_img_like(accuracy_maps[0], t_flat.reshape(accuracy_maps[0].shape))
+            p_uncorr_img = image.new_img_like(accuracy_maps[0], p_uncorrected.reshape(accuracy_maps[0].shape))
+            p_corr_img = image.new_img_like(accuracy_maps[0], p_corrected.reshape(accuracy_maps[0].shape))
+
+            stats_dir = config.results_dir / "statistical_maps"
+            stats_dir.mkdir(parents=True, exist_ok=True)
+
+            t_path = stats_dir / f"group_{contrast_name}_t_like_map.nii.gz"
+            p_uncorr_path = stats_dir / f"group_{contrast_name}_p_uncorrected.nii.gz"
+            p_corr_path = stats_dir / f"group_{contrast_name}_p_fwer_corrected.nii.gz"
+
+            t_map_img.to_filename(str(t_path))
+            p_uncorr_img.to_filename(str(p_uncorr_path))
+            p_corr_img.to_filename(str(p_corr_path))
+
+            neg_log_p_uncorr = np.zeros_like(p_uncorrected)
+            valid_pos = p_uncorrected > 0
+            neg_log_p_uncorr[valid_pos] = -np.log10(p_uncorrected[valid_pos])
+            neg_log_img = image.new_img_like(accuracy_maps[0], neg_log_p_uncorr.reshape(accuracy_maps[0].shape))
+            neg_log_path = stats_dir / f"group_{contrast_name}_neg_log10_p_uncorrected.nii.gz"
+            neg_log_img.to_filename(str(neg_log_path))
+
+            log(f"保存统计图: {t_path}", config)
+            log(f"保存未校正p值图: {p_uncorr_path}", config)
+            log(f"保存FWER校正p值图: {p_corr_path}", config)
+
+            threshold_info = {
+                'contrast': contrast_name,
+                'n_subjects': n_subjects,
+                'n_group_permutations': int(total_permutations),
+                'used_exact': bool(used_exact),
+                'max_t_threshold': float(max_t_threshold) if np.isfinite(max_t_threshold) else None
+            }
+
+            threshold_path = stats_dir / f"group_{contrast_name}_thresholds.json"
+            with open(threshold_path, 'w', encoding='utf-8') as f:
+                json.dump(threshold_info, f, ensure_ascii=False, indent=2)
+
+            log(f"保存阈值信息: {threshold_path}", config)
+            if np.isfinite(max_t_threshold):
+                log(f"  max|t| FWER阈值 (@α={config.alpha_level}): {max_t_threshold:.3f}", config)
 
         except Exception as e:
             log(f"创建 {contrast_name} 组水平图失败: {str(e)}", config)
