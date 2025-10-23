@@ -331,18 +331,20 @@ def generate_stats_table(stats_df):
                     <th>对比条件</th>
                     <th>被试数</th>
                     <th>平均准确率</th>
-                    <th>标准误</th>
-                    <th>95% CI</th>
-                    <th>t统计量</th>
-                    <th>t检验p值</th>
-                    <th>置换检验p值</th>
+                    <th>平均机会水平</th>
+                    <th>平均差值</th>
+                    <th>差值SEM</th>
+                    <th>差值95% CI</th>
+                    <th>t统计量(Δ)</th>
+                    <th>符号翻转p值</th>
+                    <th>置换次数</th>
                     <th>效应量(d)</th>
                     <th>显著性</th>
                 </tr>
             </thead>
             <tbody>
     """
-    
+
     for _, row in stats_df.iterrows():
         # 判断显著性
         is_significant = row.get('significant_permutation', False) or row.get('significant_t_test', False)
@@ -359,16 +361,23 @@ def generate_stats_table(stats_df):
         
         significance_symbol = '✓' if is_significant else '✗'
         
+        ci_lower_delta = row.get('ci_lower_delta', np.nan)
+        ci_upper_delta = row.get('ci_upper_delta', np.nan)
+        sem_delta = row.get('sem_delta_accuracy', row.get('sem_accuracy', np.nan))
+        permutations = row.get('n_group_permutations', np.nan)
+
         table_html += f"""
                 <tr class="{row_class}">
                     <td><strong>{row['contrast']}</strong></td>
                     <td>{row['n_subjects']}</td>
                     <td class="{acc_class} metric">{row['mean_accuracy']:.4f}</td>
-                    <td>{row['sem_accuracy']:.4f}</td>
-                    <td>[{row['ci_lower']:.3f}, {row['ci_upper']:.3f}]</td>
+                    <td>{row.get('mean_chance_accuracy', np.nan):.4f}</td>
+                    <td>{row.get('mean_delta_accuracy', np.nan):.4f}</td>
+                    <td>{sem_delta:.4f}</td>
+                    <td>[{ci_lower_delta:.3f}, {ci_upper_delta:.3f}]</td>
                     <td>{row['t_statistic']:.3f}</td>
-                    <td>{row['t_pvalue']:.4f}</td>
-                    <td>{row['permutation_pvalue']:.4f}</td>
+                    <td>{row.get('sign_flip_pvalue', row.get('permutation_pvalue', np.nan)):.4f}</td>
+                    <td>{int(permutations) if np.isfinite(permutations) else 'N/A'}</td>
                     <td>{row['cohens_d']:.3f}</td>
                     <td>{significance_symbol}</td>
                 </tr>
@@ -389,7 +398,7 @@ def generate_stats_table(stats_df):
                 <span class="accuracy-low">&lt;55% (低)</span>
             </li>
             <li><strong>效应量解读:</strong> |d| ≥ 0.8 (大), 0.5-0.8 (中等), 0.2-0.5 (小), &lt;0.2 (微小)</li>
-            <li><strong>置换检验:</strong> 更保守的统计方法，控制假阳性率</li>
+            <li><strong>两步校正:</strong> 个体层面置换估计机会水平，组层面符号翻转并结合max-T控制FWER</li>
         </ul>
     </div>
     """
@@ -400,7 +409,7 @@ def generate_individual_table(group_df):
     """生成个体结果表格"""
     if group_df.empty:
         return "<p>无个体结果数据</p>"
-    
+
     table_html = """
     <div class="table-container">
         <h3>个体分析结果</h3>
@@ -412,41 +421,56 @@ def generate_individual_table(group_df):
                     <th>条件1样本数</th>
                     <th>条件2样本数</th>
                     <th>平均准确率</th>
-                    <th>准确率图路径</th>
+                    <th>平均机会水平</th>
+                    <th>平均差值</th>
+                    <th>准确率图</th>
+                    <th>机会水平图</th>
+                    <th>差值图</th>
                 </tr>
             </thead>
             <tbody>
     """
-    
+
     for _, row in group_df.iterrows():
-        # 准确率颜色
-        acc = row['accuracy']
+        acc = row.get('mean_accuracy', row.get('accuracy', np.nan))
         if acc >= 0.6:
             acc_class = 'accuracy-high'
         elif acc >= 0.55:
             acc_class = 'accuracy-medium'
         else:
             acc_class = 'accuracy-low'
-        
+
+        accuracy_map = row.get('accuracy_map_path')
+        chance_map = row.get('chance_map_path')
+        delta_map = row.get('delta_map_path')
+
+        def make_link(path):
+            if path:
+                name = Path(path).name
+                return f'<a href="{path}">{name}</a>'
+            return '缺失'
+
         table_html += f"""
                 <tr>
-                    <td><strong>{row['subject']}</strong></td>
-                    <td>{row['contrast']}</td>
-                    <td>{row['n_trials_cond1']}</td>
-                    <td>{row['n_trials_cond2']}</td>
-                    <td class="{acc_class} metric">{row['accuracy']:.4f}</td>
-                    <td style="font-size: 0.8em; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">
-                        {Path(row['accuracy_map_path']).name if 'accuracy_map_path' in row else 'N/A'}
-                    </td>
+                    <td><strong>{row.get('subject', 'N/A')}</strong></td>
+                    <td>{row.get('contrast', 'N/A')}</td>
+                    <td>{row.get('n_trials_cond1', 'N/A')}</td>
+                    <td>{row.get('n_trials_cond2', 'N/A')}</td>
+                    <td class="{acc_class} metric">{acc:.4f}</td>
+                    <td>{row.get('mean_chance_accuracy', np.nan):.4f}</td>
+                    <td>{row.get('mean_delta_accuracy', np.nan):.4f}</td>
+                    <td>{make_link(accuracy_map)}</td>
+                    <td>{make_link(chance_map)}</td>
+                    <td>{make_link(delta_map)}</td>
                 </tr>
         """
-    
+
     table_html += """
             </tbody>
         </table>
     </div>
     """
-    
+
     return table_html
 
 def generate_config_section(config):
@@ -470,13 +494,13 @@ def generate_config_section(config):
             <div class="config-item">
                 <h4>🔧 算法设置</h4>
                 <p><strong>分类器:</strong> SVM (线性核)</p>
-                <p><strong>特征选择:</strong> {feature_selection}</p>
-                <p><strong>最大特征数:</strong> {max_features}</p>
                 <p><strong>并行进程:</strong> {n_jobs}</p>
             </div>
             <div class="config-item">
                 <h4>📊 统计设置</h4>
                 <p><strong>置换次数:</strong> {n_perm}</p>
+                <p><strong>被试内置换:</strong> {within_perm}</p>
+                <p><strong>精确符号翻转阈值:</strong> {max_exact} 名被试</p>
                 <p><strong>显著性水平:</strong> {alpha}</p>
                 <p><strong>随机种子:</strong> {random_state}</p>
             </div>
@@ -490,12 +514,12 @@ def generate_config_section(config):
         lss_root=config.lss_root.name,
         mask_dir=config.mask_dir.name,
         results_dir=config.results_dir.name,
-        feature_selection="启用" if config.apply_feature_selection else "禁用",
-        max_features=config.max_features,
         n_jobs=config.n_jobs,
         n_perm=config.n_permutations,
+        within_perm=getattr(config, 'within_subject_permutations', 'N/A'),
+        max_exact=getattr(config, 'max_exact_sign_flips_subjects', 'N/A'),
         alpha=config.alpha_level,
         random_state=config.cv_random_state
     )
-    
+
     return config_html
