@@ -169,6 +169,13 @@ def memory_cleanup():
     gc.collect()
 
 
+def as_data_array(img):
+    """将Niimg或数组安全地转换为numpy数组."""
+    if hasattr(img, "get_fdata"):
+        return img.get_fdata()
+    return np.asarray(img)
+
+
 def permute_labels_within_groups(labels, groups, rng):
     """在保持组内结构的情况下随机置换标签"""
     labels = np.asarray(labels)
@@ -340,7 +347,7 @@ def validate_searchlight_parameters(config, process_mask_path):
     try:
         # 检查mask体素数
         mask_img = nib.load(process_mask_path)
-        mask_data = mask_img.get_fdata()
+        mask_data = as_data_array(mask_img)
         n_voxels = np.sum(mask_data > 0)
 
         # 估算球体体积
@@ -389,8 +396,8 @@ def analyze_searchlight_results(searchlight, config, subject_id, contrast_name,
                                 chance_img=None, chance_info=None):
     """分析Searchlight结果"""
     try:
-        accuracy_data = searchlight.scores_.get_fdata()
-        mask_data = searchlight.mask_img_.get_fdata() > 0
+        accuracy_data = as_data_array(searchlight.scores_)
+        mask_data = as_data_array(searchlight.mask_img_) > 0
 
         masked_accuracies = accuracy_data[mask_data]
 
@@ -401,7 +408,7 @@ def analyze_searchlight_results(searchlight, config, subject_id, contrast_name,
         chance_metrics = {}
         chance_data = None
         if chance_img is not None:
-            chance_data = chance_img.get_fdata()
+            chance_data = as_data_array(chance_img)
             masked_chance = chance_data[mask_data]
             chance_metrics['mean_chance_accuracy'] = float(np.mean(masked_chance))
             chance_metrics['chance_accuracy_std'] = float(np.std(masked_chance))
@@ -771,7 +778,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
             log(f"置换 {perm_index + 1}/{n_permutations} 失败: {exc}", config)
             continue
 
-        perm_scores = perm_searchlight.scores_.get_fdata()
+        perm_scores = as_data_array(perm_searchlight.scores_)
 
         if sum_scores is None:
             sum_scores = perm_scores
@@ -1133,7 +1140,7 @@ def run_group_searchlight_analysis(config):
                                 chance_std_img.to_filename(str(chance_std_path))
                                 subject_results['chance_std_map_path'] = str(chance_std_path)
 
-                            delta_data = searchlight.scores_.get_fdata() - chance_img.get_fdata()
+                            delta_data = as_data_array(searchlight.scores_) - as_data_array(chance_img)
                             delta_img = image.new_img_like(searchlight.scores_, delta_data)
                             delta_map_path = subject_result_dir / f"{contrast_name}_delta_map.nii.gz"
                             delta_img.to_filename(str(delta_map_path))
@@ -1231,8 +1238,8 @@ def create_group_accuracy_maps(group_df, config):
 
         try:
             n_subjects = len(accuracy_maps)
-            accuracy_data = np.stack([img.get_fdata() for img in accuracy_maps], axis=0)
-            chance_data = np.stack([img.get_fdata() for img in chance_maps], axis=0)
+            accuracy_data = np.stack([as_data_array(img) for img in accuracy_maps], axis=0)
+            chance_data = np.stack([as_data_array(img) for img in chance_maps], axis=0)
             delta_data = accuracy_data - chance_data
 
             mean_accuracy_img = image.mean_img(accuracy_maps)
