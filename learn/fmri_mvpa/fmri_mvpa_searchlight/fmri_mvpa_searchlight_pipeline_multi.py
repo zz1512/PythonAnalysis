@@ -18,6 +18,8 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 import pandas as pd
 from scipy import stats
+import nibabel as nib
+from scipy.ndimage import label, generate_binary_structure
 from multiprocessing import cpu_count
 from nilearn.decoding import SearchLight
 from nilearn.maskers import NiftiMasker
@@ -1941,16 +1943,24 @@ def perform_group_analysis(all_results, config):
         if stats_df is not None:
             stats_df.to_csv(config.results_dir / "group_searchlight_mvpa_statistics.csv", index=False)
 
-        # 创建组水平图
-        create_group_accuracy_maps(group_df, config)
+        # 创建组水平图并获取汇总信息
+        map_outputs, cluster_summary, cluster_summary_path = create_group_accuracy_maps(group_df, config)
 
         # 创建可视化并获取生成的图像路径
         main_viz_path, individual_viz_path = create_enhanced_visualizations(group_df, stats_df, config)
         # 生成HTML报告
         main_viz_b64 = image_to_base64(main_viz_path) if main_viz_path else None
         individual_viz_b64 = image_to_base64(individual_viz_path) if individual_viz_path else None
-        generate_html_report(group_df, stats_df, config, main_viz_b64=main_viz_b64,
-                             individual_viz_b64=individual_viz_b64)
+        generate_html_report(
+            group_df,
+            stats_df,
+            config,
+            main_viz_b64=main_viz_b64,
+            individual_viz_b64=individual_viz_b64,
+            map_outputs=map_outputs,
+            cluster_df=cluster_summary,
+            cluster_summary_path=cluster_summary_path,
+        )
 
         log(f"\n分析完成！结果保存在: {config.results_dir}", config)
         log(f"分析被试数: {len(set(group_df['subject']))}", config)
@@ -2010,8 +2020,17 @@ def run_group_searchlight_analysis_parallel(config):
 # ============================================================================
 
 def create_group_accuracy_maps(group_df, config):
-    """创建组水平准确率图"""
+    """创建组水平准确率图及显著性结果, 返回路径信息和显著簇摘要。"""
+
     log("创建组水平准确率图", config)
+
+    accuracy_dir = config.results_dir / "accuracy_maps"
+    stats_dir = config.results_dir / "statistical_maps"
+    accuracy_dir.mkdir(parents=True, exist_ok=True)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+
+    map_outputs = {}
+    cluster_rows = []
 
     for contrast_name in group_df['contrast'].unique():
         contrast_data = group_df[group_df['contrast'] == contrast_name]
@@ -2020,7 +2039,6 @@ def create_group_accuracy_maps(group_df, config):
             log(f"跳过 {contrast_name}: 数据点不足", config)
             continue
 
-        # 加载所有个体准确率图
         accuracy_maps = []
         chance_maps = []
 
@@ -2050,38 +2068,133 @@ def create_group_accuracy_maps(group_df, config):
             continue
 
         try:
-            n_subjects = len(accuracy_maps)
             accuracy_data = np.stack([as_data_array(img) for img in accuracy_maps], axis=0)
             chance_data = np.stack([as_data_array(img) for img in chance_maps], axis=0)
             delta_data = accuracy_data - chance_data
 
             mean_accuracy_img = image.mean_img(accuracy_maps)
             mean_chance_img = image.mean_img(chance_maps)
-            mean_delta_data = np.mean(delta_data, axis=0)
+            mean_delta_data = np.nanmean(delta_data, axis=0)
 
             mean_delta_img = image.new_img_like(accuracy_maps[0], mean_delta_data)
 
-            group_dir = config.results_dir / "accuracy_maps"
-            group_dir.mkdir(parents=True, exist_ok=True)
+            flat_delta = delta_data.reshape(delta_data.shape[0], -1)
+            t_vals, p_vals = stats.ttest_1samp(flat_delta, popmean=0.0, axis=0, nan_policy='omit')
+            t_map_data = t_vals.reshape(mean_delta_data.shape)
+            p_map_data = p_vals.reshape(mean_delta_data.shape)
 
-            accuracy_out = group_dir / f"group_{contrast_name}_mean_accuracy.nii.gz"
-            chance_out = group_dir / f"group_{contrast_name}_mean_chance.nii.gz"
-            delta_out = group_dir / f"group_{contrast_name}_mean_delta.nii.gz"
+            significant_mask = (p_map_data < config.alpha_level) & (mean_delta_data > 0)
+            significant_mask = np.nan_to_num(significant_mask.astype(bool))
+
+            slug = contrast_name.replace(' ', '_').replace('/', '-')
+            accuracy_out = accuracy_dir / f"group_{slug}_mean_accuracy.nii.gz"
+            chance_out = accuracy_dir / f"group_{slug}_mean_chance.nii.gz"
+            delta_out = accuracy_dir / f"group_{slug}_mean_delta.nii.gz"
+            t_out = stats_dir / f"group_{slug}_t_map.nii.gz"
+            p_out = stats_dir / f"group_{slug}_p_map.nii.gz"
+            mask_out = stats_dir / f"group_{slug}_significant_mask.nii.gz"
+            thresh_out = stats_dir / f"group_{slug}_thresholded_delta.nii.gz"
+
+            structure = generate_binary_structure(3, 2)
+            labeled_map, n_clusters = label(significant_mask.astype(bool), structure=structure)
+            affine = accuracy_maps[0].affine
+            voxel_volume = float(abs(np.linalg.det(affine[:3, :3])))
+
+            cluster_records = []
+            filtered_mask = np.zeros_like(significant_mask, dtype=float)
+
+            for cluster_id in range(1, n_clusters + 1):
+                cluster_mask = labeled_map == cluster_id
+                if not np.any(cluster_mask):
+                    continue
+
+                if cluster_mask.sum() < getattr(config, 'min_region_size', 0):
+                    continue
+
+                filtered_mask[cluster_mask] = 1.0
+
+                cluster_delta = mean_delta_data[cluster_mask]
+                cluster_t = t_map_data[cluster_mask]
+                cluster_t_clean = np.nan_to_num(cluster_t, nan=-np.inf)
+                peak_flat_index = int(np.argmax(cluster_t_clean))
+                peak_index = np.unravel_index(peak_flat_index, cluster_mask.shape)
+                peak_mm = nib.affines.apply_affine(affine, peak_index)
+
+                peak_t_value = float(np.nanmax(cluster_t)) if np.any(np.isfinite(cluster_t)) else float('nan')
+                peak_delta_value = float(np.nanmax(cluster_delta)) if np.any(np.isfinite(cluster_delta)) else float('nan')
+                mean_delta_value = float(np.nanmean(cluster_delta)) if np.any(np.isfinite(cluster_delta)) else float('nan')
+                peak_p_value = float(p_map_data[peak_index]) if np.isfinite(p_map_data[peak_index]) else float('nan')
+
+                cluster_records.append({
+                    'contrast': contrast_name,
+                    'cluster_id': cluster_id,
+                    'n_voxels': int(cluster_mask.sum()),
+                    'cluster_volume_mm3': float(cluster_mask.sum() * voxel_volume),
+                    'mean_delta_accuracy': mean_delta_value,
+                    'peak_delta_accuracy': peak_delta_value,
+                    'peak_t_value': peak_t_value,
+                    'peak_p_value': peak_p_value,
+                    'peak_x': float(peak_mm[0]),
+                    'peak_y': float(peak_mm[1]),
+                    'peak_z': float(peak_mm[2])
+                })
+
+            thresholded_delta_data = mean_delta_data * filtered_mask
+
+            t_map_img = image.new_img_like(accuracy_maps[0], t_map_data)
+            p_map_img = image.new_img_like(accuracy_maps[0], p_map_data)
+            significant_mask_img = image.new_img_like(accuracy_maps[0], filtered_mask)
+            thresholded_delta_img = image.new_img_like(accuracy_maps[0], thresholded_delta_data)
 
             mean_accuracy_img.to_filename(str(accuracy_out))
             mean_chance_img.to_filename(str(chance_out))
             mean_delta_img.to_filename(str(delta_out))
+            t_map_img.to_filename(str(t_out))
+            p_map_img.to_filename(str(p_out))
+            significant_mask_img.to_filename(str(mask_out))
+            thresholded_delta_img.to_filename(str(thresh_out))
 
             log(f"保存组水平平均准确率图: {accuracy_out}", config)
             log(f"保存组水平平均机会水平图: {chance_out}", config)
             log(f"保存组水平平均差值图: {delta_out}", config)
+            log(f"保存统计图: t图 {t_out}, p图 {p_out}", config)
+            log(f"保存显著性掩模图: {mask_out}", config)
+            log(f"保存阈值化差值图: {thresh_out}", config)
 
-            # 后续统计计算保持不变...
-            # ... (保持原有的统计计算代码)
+            cluster_df = pd.DataFrame(cluster_records)
+            cluster_csv = None
+            if not cluster_df.empty:
+                cluster_df = cluster_df.sort_values('peak_t_value', ascending=False)
+                cluster_csv = stats_dir / f"group_{slug}_significant_clusters.csv"
+                cluster_df.to_csv(cluster_csv, index=False)
+                cluster_rows.append(cluster_df)
+                log(f"保存显著脑区表: {cluster_csv}", config)
+            else:
+                log(f"{contrast_name} 未检测到显著脑区", config)
+
+            map_outputs[contrast_name] = {
+                'mean_accuracy_map': accuracy_out,
+                'mean_chance_map': chance_out,
+                'mean_delta_map': delta_out,
+                't_map': t_out,
+                'p_map': p_out,
+                'significant_mask': mask_out,
+                'thresholded_delta_map': thresh_out,
+                'cluster_table': cluster_csv,
+            }
 
         except Exception as e:
             log(f"创建 {contrast_name} 组水平图失败: {str(e)}", config)
             continue
+
+    cluster_summary = pd.concat(cluster_rows, ignore_index=True) if cluster_rows else pd.DataFrame()
+    summary_csv = None
+    if not cluster_summary.empty:
+        summary_csv = stats_dir / "group_significant_clusters_summary.csv"
+        cluster_summary.to_csv(summary_csv, index=False)
+        log(f"保存显著脑区汇总表: {summary_csv}", config)
+
+    return map_outputs, cluster_summary, summary_csv
 
 
 # ============================================================================
