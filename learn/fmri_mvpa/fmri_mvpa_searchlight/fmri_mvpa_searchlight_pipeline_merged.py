@@ -758,7 +758,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
 
     n_permutations = getattr(config, 'within_subject_permutations', 0)
     if n_permutations is None or n_permutations <= 0:
-        return None, None
+        return None, None, None
 
     rng = np.random.default_rng(config.permutation_random_state)
     sum_scores = None
@@ -794,7 +794,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
 
     if actual_permutations == 0:
         log("警告: 未能生成任何有效的机会水平置换地图", config)
-        return None, None
+        return None, None, None
 
     mean_data = sum_scores / actual_permutations
     var_data = np.maximum(sum_sq_scores / actual_permutations - mean_data ** 2, 0)
