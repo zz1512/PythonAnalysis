@@ -17,10 +17,13 @@ fMRI MVPA Searchlight Pipeline - 完整版本
 - 数据验证和诊断
 """
 
+import copy
 import gc
 import json
 import logging
 import time
+from collections import OrderedDict
+from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -39,6 +42,127 @@ from sklearn.impute import SimpleImputer
 from visualization import create_enhanced_visualizations
 
 
+def build_common_mvpa_parameters():
+    """构建常用MVPA分析参数及其说明."""
+
+    max_parallel_jobs = max(cpu_count() - 1, 1)
+
+    return OrderedDict([
+        ("subjects", {
+            "value": [f"sub-{i:02d}" for i in range(1, 5)],
+            "description": "默认参与分析的被试ID列表"
+        }),
+        ("runs", {
+            "value": [3, 4],
+            "description": "每个被试需要分析的run编号"
+        }),
+        ("lss_root", {
+            "value": Path(r"../../../learn_LSS"),
+            "description": "存放LSS beta图像的根目录"
+        }),
+        ("mask_dir", {
+            "value": Path(r"../../../data/masks"),
+            "description": "掩模文件所在目录"
+        }),
+        ("results_dir", {
+            "value": Path(r"../../../learn_mvpa/searchlight_mvpa"),
+            "description": "Searchlight分析输出的根目录"
+        }),
+        ("searchlight_radius", {
+            "value": 3,
+            "description": "Searchlight球体半径，单位为体素"
+        }),
+        ("process_mask", {
+            "value": "gray_matter_mask.nii.gz",
+            "description": "用于限定分析范围的处理mask"
+        }),
+        ("min_region_size", {
+            "value": 10,
+            "description": "最小有效Searchlight区域的体素数量阈值"
+        }),
+        ("svm_params", {
+            "value": {"random_state": 42},
+            "description": "基础SVC分类器参数"
+        }),
+        ("svm_param_grid", {
+            "value": {"C": [0.1, 1.0, 10.0], "kernel": ["linear"]},
+            "description": "用于网格搜索的超参数组合"
+        }),
+        ("cv_folds", {
+            "value": 5,
+            "description": "交叉验证折数"
+        }),
+        ("cv_random_state", {
+            "value": 42,
+            "description": "交叉验证随机种子"
+        }),
+        ("n_permutations", {
+            "value": 1000,
+            "description": "组水平置换检验次数"
+        }),
+        ("permutation_random_state", {
+            "value": 42,
+            "description": "置换检验随机种子"
+        }),
+        ("within_subject_permutations", {
+            "value": 1000,
+            "description": "单被试机会水平估计的置换次数"
+        }),
+        ("max_exact_sign_flips_subjects", {
+            "value": 12,
+            "description": "当被试数不超过该阈值时进行精确符号翻转"
+        }),
+        ("enable_two_sided_group_tests", {
+            "value": True,
+            "description": "是否在组水平使用双侧检验"
+        }),
+        ("alpha_level", {
+            "value": 0.05,
+            "description": "显著性水平阈值"
+        }),
+        ("n_jobs", {
+            "value": min(4, max_parallel_jobs),
+            "description": "Searchlight并行处理的最大CPU核心数"
+        }),
+        ("use_parallel", {
+            "value": True,
+            "description": "是否启用并行处理"
+        }),
+        ("memory_cache", {
+            "value": "nilearn_cache",
+            "description": "Nilearn缓存目录"
+        }),
+        ("memory_level", {
+            "value": 1,
+            "description": "Nilearn缓存粒度等级"
+        }),
+        ("enable_memory_monitoring", {
+            "value": True,
+            "description": "是否记录内存使用信息"
+        }),
+        ("min_trials_per_condition", {
+            "value": 5,
+            "description": "每个条件最少需要的试次数"
+        }),
+        ("debug_mode", {
+            "value": False,
+            "description": "是否启用调试模式"
+        }),
+        ("debug_subjects", {
+            "value": [f"sub-{i:02d}" for i in range(1, 3)],
+            "description": "调试模式下重点检查的被试"
+        }),
+        ("n_permutations_debug", {
+            "value": 100,
+            "description": "调试模式使用的置换次数"
+        }),
+        ("contrasts", {
+            "value": [("metaphor_vs_space", "yy", "kj")],
+            "description": "需要评估的对比列表"
+        }),
+    ])
+
+
 # ============================================================================
 # 配置管理模块 (config.py)
 # ============================================================================
@@ -47,64 +171,8 @@ class MVPAConfig:
     """MVPA Searchlight分析配置类"""
 
     def __init__(self):
-        # 基本参数
-        self.subjects = [f"sub-{i:02d}" for i in range(1, 5)]
-        self.runs = [3, 4]  # 支持多个run
-        self.lss_root = Path(r"../../../learn_LSS")
-        self.mask_dir = Path(r"../../../data/masks")  # 使用通用mask目录
-        self.results_dir = Path(r"../../../learn_mvpa/searchlight_mvpa")
-
-        # Searchlight特定参数
-        self.searchlight_radius = 3  # searchlight半径（体素）
-        self.process_mask = "gray_matter_mask.nii.gz"  # 处理mask
-        self.min_region_size = 10  # 最小区域大小（体素数）
-
-        # 分类器参数
-        self.svm_params = {
-            'random_state': 42
-        }
-
-        # 参数网格搜索配置
-        self.svm_param_grid = {
-            'C': [0.1, 1.0, 10.0],  # 可选的C值
-            'kernel': ['linear']  # 保持线性核
-        }
-
-        # 交叉验证参数
-        self.cv_folds = 5  # searchlight通常使用较少的fold以节省计算时间
-        self.cv_random_state = 42
-
-        # 置换检验参数（仅用于组水平分析）
-        self.n_permutations = 1000  # searchlight通常使用较少的置换次数
-        self.permutation_random_state = 42
-        self.within_subject_permutations = 1000  # 每个被试估计机会水平的置换次数
-        self.max_exact_sign_flips_subjects = 12  # 被试数不超过该阈值时枚举全部符号翻转
-        self.enable_two_sided_group_tests = True  # 组水平检测使用双侧检验
-
-        # 显著性水平
-        self.alpha_level = 0.05
-
-        # 并行处理参数
-        self.n_jobs = min(4, cpu_count() - 1)
-        self.use_parallel = True
-
-        # 内存优化参数
-        self.memory_cache = 'nilearn_cache'
-        self.memory_level = 1
-
-        # 添加Searchlight特定配置：
-        self.enable_memory_monitoring = True
-        self.min_trials_per_condition = 5  # 每个条件最少trial数
-
-        # 验证参数
-        self.debug_mode = False  # 启用调试模式
-        self.debug_subjects = [f"sub-{i:02d}" for i in range(1, 3)]  # 只对前2个被试进行详细调试
-        self.n_permutations_debug = 100  # 调试用的置换测试次数
-
-        # 对比条件
-        self.contrasts = [
-            ('metaphor_vs_space', 'yy', 'kj'),  # 隐喻 vs 空间
-        ]
+        self._common_parameters = build_common_mvpa_parameters()
+        self._apply_common_parameters()
 
         # 创建结果目录
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +190,35 @@ class MVPAConfig:
 
         # 设置日志
         self._setup_logging()
+        self.log_common_parameters()
+
+    def _apply_common_parameters(self):
+        """将常用参数写入配置实例."""
+
+        for name, meta in self._common_parameters.items():
+            value = copy.deepcopy(meta["value"])
+            setattr(self, name, value)
+
+    def describe_common_parameters(self):
+        """以DataFrame形式返回常用参数说明."""
+
+        records = []
+        for name, meta in self._common_parameters.items():
+            records.append({
+                "parameter": name,
+                "value": getattr(self, name),
+                "description": meta["description"],
+            })
+        return pd.DataFrame(records)
+
+    def log_common_parameters(self):
+        """在日志中记录常用参数和说明."""
+
+        logger = logging.getLogger(__name__)
+        logger.info("核心MVPA参数配置:")
+        for name, meta in self._common_parameters.items():
+            value = getattr(self, name)
+            logger.info("  %s: %r -- %s", name, value, meta["description"])
 
     def _setup_logging(self):
         """设置日志配置"""
@@ -166,6 +263,34 @@ def log_safe(message, config):
         # 如果目标环境仍无法处理Unicode，则回退到移除不可编码字符
         safe_message = message.encode('ascii', 'ignore').decode('ascii')
         logging.info(safe_message)
+
+
+@contextmanager
+def subject_log_capture(subject_id, config):
+    """为单个被试附加独立的日志文件"""
+    logger = logging.getLogger()
+    handler = None
+    log_path = None
+
+    try:
+        log_dir = config.results_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"subject_{subject_id}.log"
+        handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+        handler.setLevel(config.log_level)
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
+    except Exception as exc:
+        logger.warning("无法创建被试日志文件 %s: %s", subject_id, exc)
+        handler = None
+        log_path = None
+
+    try:
+        yield log_path
+    finally:
+        if handler:
+            logger.removeHandler(handler)
+            handler.close()
 
 def memory_cleanup():
     """内存清理"""
@@ -1055,112 +1180,121 @@ def run_group_searchlight_analysis(config):
     for i, subject_id in enumerate(config.subjects):
         log(f"\n处理被试 ({i + 1}/{len(config.subjects)}): {subject_id}", config)
 
-        try:
-            # 加载数据
-            beta_images, trial_info = load_multi_run_lss_data(subject_id, config.runs, config)
+        with subject_log_capture(subject_id, config) as subject_log_path:
+            if subject_log_path:
+                log(f"被试日志输出: {subject_log_path}", config)
+            else:
+                log(f"警告: 无法为 {subject_id} 创建独立日志文件", config)
 
-            if beta_images is None or trial_info is None:
-                log(f"被试 {subject_id} 的LSS数据加载失败，跳过", config)
-                continue
+            try:
+                # 加载数据
+                beta_images, trial_info = load_multi_run_lss_data(subject_id, config.runs, config)
 
-            # 检查数据泄露
-            if not check_data_leakage(beta_images, trial_info, config, subject_id):
-                log(f"被试 {subject_id} 数据泄露检查失败，跳过", config)
-                continue
-
-            subject_has_results = False
-
-            # 对每个对比条件进行分析
-            for contrast_name, cond1, cond2 in config.contrasts:
-                log(f"  分析对比: {contrast_name} ({cond1} vs {cond2})", config)
-
-                # 准备分类数据
-                selected_betas, labels, trial_details = prepare_classification_data(
-                    trial_info, beta_images, cond1, cond2, config
-                )
-
-                if selected_betas is None:
-                    log(f"跳过 {subject_id} {cond1} vs {cond2}: 数据准备失败", config)
+                if beta_images is None or trial_info is None:
+                    log(f"被试 {subject_id} 的LSS数据加载失败，跳过", config)
                     continue
 
-                # 检查样本数量
-                if len(selected_betas) < 10:
-                    log(f"  样本数量不足({len(selected_betas)})，跳过", config)
+                # 检查数据泄露
+                if not check_data_leakage(beta_images, trial_info, config, subject_id):
+                    log(f"被试 {subject_id} 数据泄露检查失败，跳过", config)
                     continue
 
-                groups = trial_details['run'].fillna('unknown').astype(str).values
+                subject_has_results = False
 
-                # 运行searchlight分析
-                searchlight = run_searchlight_classification(
-                    selected_betas, labels, process_mask_path, config, groups=groups
-                )
+                # 对每个对比条件进行分析
+                for contrast_name, cond1, cond2 in config.contrasts:
+                    log(f"  分析对比: {contrast_name} ({cond1} vs {cond2})", config)
 
-                if searchlight is not None:
-                    chance_img, chance_std_img, chance_info = estimate_subject_chance_map(
-                        selected_betas,
-                        labels,
-                        process_mask_path,
-                        config,
-                        searchlight.scores_,
-                        groups=groups
+                    # 准备分类数据
+                    selected_betas, labels, trial_details = prepare_classification_data(
+                        trial_info, beta_images, cond1, cond2, config
                     )
 
-                    subject_results = analyze_searchlight_results(
-                        searchlight,
-                        config,
-                        subject_id,
-                        contrast_name,
-                        chance_img=chance_img,
-                        chance_info=chance_info
+                    if selected_betas is None:
+                        log(f"跳过 {subject_id} {cond1} vs {cond2}: 数据准备失败", config)
+                        continue
+
+                    # 检查样本数量
+                    if len(selected_betas) < 10:
+                        log(f"  样本数量不足({len(selected_betas)})，跳过", config)
+                        continue
+
+                    groups = trial_details['run'].fillna('unknown').astype(str).values
+
+                    # 运行searchlight分析
+                    searchlight = run_searchlight_classification(
+                        selected_betas, labels, process_mask_path, config, groups=groups
                     )
 
-                    if subject_results:
-                        condition_col = 'original_condition' if 'original_condition' in trial_details.columns else 'condition'
-                        if condition_col in trial_details.columns:
-                            subject_results['n_trials_cond1'] = int((trial_details[condition_col] == cond1).sum())
-                            subject_results['n_trials_cond2'] = int((trial_details[condition_col] == cond2).sum())
+                    if searchlight is not None:
+                        chance_img, chance_std_img, chance_info = estimate_subject_chance_map(
+                            selected_betas,
+                            labels,
+                            process_mask_path,
+                            config,
+                            searchlight.scores_,
+                            groups=groups
+                        )
 
-                        subject_result_dir = config.results_dir / "subject_results" / subject_id
-                        subject_result_dir.mkdir(parents=True, exist_ok=True)
+                        subject_results = analyze_searchlight_results(
+                            searchlight,
+                            config,
+                            subject_id,
+                            contrast_name,
+                            chance_img=chance_img,
+                            chance_info=chance_info
+                        )
 
-                        accuracy_map_path = subject_result_dir / f"{contrast_name}_accuracy_map.nii.gz"
-                        searchlight.scores_.to_filename(str(accuracy_map_path))
-                        subject_results['accuracy_map_path'] = str(accuracy_map_path)
+                        if subject_results:
+                            condition_col = 'original_condition' if 'original_condition' in trial_details.columns else 'condition'
+                            if condition_col in trial_details.columns:
+                                subject_results['n_trials_cond1'] = int((trial_details[condition_col] == cond1).sum())
+                                subject_results['n_trials_cond2'] = int((trial_details[condition_col] == cond2).sum())
 
-                        if chance_img is not None:
-                            chance_map_path = subject_result_dir / f"{contrast_name}_chance_map.nii.gz"
-                            chance_img.to_filename(str(chance_map_path))
-                            subject_results['chance_map_path'] = str(chance_map_path)
+                            subject_result_dir = config.results_dir / "subject_results" / subject_id
+                            subject_result_dir.mkdir(parents=True, exist_ok=True)
 
-                            if chance_info and chance_info.get('n_subject_permutations'):
-                                log(
-                                    f"    机会水平置换次数: {chance_info['n_subject_permutations']}",
-                                    config
-                                )
+                            accuracy_map_path = subject_result_dir / f"{contrast_name}_accuracy_map.nii.gz"
+                            searchlight.scores_.to_filename(str(accuracy_map_path))
+                            subject_results['accuracy_map_path'] = str(accuracy_map_path)
 
-                            if chance_std_img is not None:
-                                chance_std_path = subject_result_dir / f"{contrast_name}_chance_std_map.nii.gz"
-                                chance_std_img.to_filename(str(chance_std_path))
-                                subject_results['chance_std_map_path'] = str(chance_std_path)
+                            if chance_img is not None:
+                                chance_map_path = subject_result_dir / f"{contrast_name}_chance_map.nii.gz"
+                                chance_img.to_filename(str(chance_map_path))
+                                subject_results['chance_map_path'] = str(chance_map_path)
 
-                            delta_data = as_data_array(searchlight.scores_) - as_data_array(chance_img)
-                            delta_img = image.new_img_like(searchlight.scores_, delta_data)
-                            delta_map_path = subject_result_dir / f"{contrast_name}_delta_map.nii.gz"
-                            delta_img.to_filename(str(delta_map_path))
-                            subject_results['delta_map_path'] = str(delta_map_path)
+                                if chance_info and chance_info.get('n_subject_permutations'):
+                                    log(
+                                        f"    机会水平置换次数: {chance_info['n_subject_permutations']}",
+                                        config
+                                    )
 
-                        all_results.append(subject_results)
-                        subject_has_results = True
+                                if chance_std_img is not None:
+                                    chance_std_path = subject_result_dir / f"{contrast_name}_chance_std_map.nii.gz"
+                                    chance_std_img.to_filename(str(chance_std_path))
+                                    subject_results['chance_std_map_path'] = str(chance_std_path)
 
-            if subject_has_results:
-                processed_subjects += 1
+                                delta_data = as_data_array(searchlight.scores_) - as_data_array(chance_img)
+                                delta_img = image.new_img_like(searchlight.scores_, delta_data)
+                                delta_map_path = subject_result_dir / f"{contrast_name}_delta_map.nii.gz"
+                                delta_img.to_filename(str(delta_map_path))
+                                subject_results['delta_map_path'] = str(delta_map_path)
 
-            # 内存清理
-            memory_cleanup()
+                            if subject_log_path:
+                                subject_results['log_path'] = str(subject_log_path)
 
-        except Exception as e:
-            log(f"被试 {subject_id} 处理失败: {str(e)}", config)
-            continue
+                            all_results.append(subject_results)
+                            subject_has_results = True
+
+                if subject_has_results:
+                    processed_subjects += 1
+
+                # 内存清理
+                memory_cleanup()
+
+            except Exception as e:
+                log(f"被试 {subject_id} 处理失败: {str(e)}", config)
+                continue
 
     # 组水平分析
     if all_results:
