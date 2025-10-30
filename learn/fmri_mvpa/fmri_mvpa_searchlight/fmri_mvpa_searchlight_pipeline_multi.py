@@ -322,7 +322,7 @@ class MVPAConfig:
         self.memory_aware_parallel = True  # 内存感知的并行处理
         self.min_memory_per_subject_gb = 24  # 每个被试预估需要的内存(GB)
         self.optimize_memory = True  # 内存优化
-        self.max_chance_permutations = 0  # 限制机会水平置换次数
+        self.max_chance_permutations = 5  # 限制机会水平置换次数
         self.enable_batch_processing = True  # 启用批量处理
         self.disable_chance_maps = False  # 可选：完全禁用机会水平地图计算
 
