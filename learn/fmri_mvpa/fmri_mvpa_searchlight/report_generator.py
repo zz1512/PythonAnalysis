@@ -55,7 +55,16 @@ def generate_image_html(image_b64, alt_text):
     else:
         return f'<div class="image-placeholder" style="background-color: #f0f0f0; padding: 20px; text-align: center; margin: 10px 0; border: 1px dashed #ccc;">图片加载失败: {alt_text}</div>'
 
-def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individual_viz_b64=None):
+def generate_html_report(
+    group_df,
+    stats_df,
+    config,
+    main_viz_b64=None,
+    individual_viz_b64=None,
+    map_outputs=None,
+    cluster_df=None,
+    cluster_summary_path=None,
+):
     """
     生成Searchlight MVPA分析的HTML报告
     
@@ -65,11 +74,25 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
         config: 配置对象
         main_viz_b64: 主要可视化图片的base64编码
         individual_viz_b64: 个体结果可视化图片的base64编码
+        map_outputs: 每个对比的全脑图路径信息
+        cluster_df: 显著脑区的汇总DataFrame
+        cluster_summary_path: 显著脑区汇总表路径
     
     Returns:
         Path: 生成的HTML报告文件路径
     """
     
+    maps_section_html = generate_map_outputs_section(map_outputs, config) if map_outputs else "<p>未生成组水平全脑图。</p>"
+    cluster_section_html = generate_cluster_table(cluster_df) if cluster_df is not None and not cluster_df.empty else "<p>未检测到显著脑区。</p>"
+    summary_file_html = ""
+    if cluster_summary_path:
+        summary_path = Path(cluster_summary_path)
+        try:
+            rel_summary = summary_path.relative_to(config.results_dir)
+        except ValueError:
+            rel_summary = summary_path
+        summary_file_html = f"<p>显著簇汇总表: <code>{rel_summary.as_posix()}</code></p>"
+
     # 生成报告内容
     html_content = f"""
 <!DOCTYPE html>
@@ -275,6 +298,15 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
             </div>
         </div>
 
+        <!-- 全脑准确率图与显著脑区 -->
+        <div class="section">
+            <h2>🧠 全脑准确率图与显著脑区</h2>
+            {maps_section_html}
+            {summary_file_html}
+            <h3>显著脑区定位</h3>
+            {cluster_section_html}
+        </div>
+
         <!-- 组水平统计结果 -->
         <div class="section">
             <h2>🔬 组水平统计结果</h2>
@@ -324,7 +356,7 @@ def generate_stats_table(stats_df):
     """生成组水平统计结果表格"""
     if stats_df.empty:
         return "<p>无统计结果数据</p>"
-    
+
     table_html = """
     <div class="table-container">
         <table>
@@ -405,6 +437,114 @@ def generate_stats_table(stats_df):
     </div>
     """
     
+    return table_html
+
+
+def generate_map_outputs_section(map_outputs, config):
+    """生成全脑准确率图与统计图的文件列表"""
+
+    if not map_outputs:
+        return "<p>未生成组水平全脑图。</p>"
+
+    def _format_path(path):
+        if not path:
+            return "无"
+        path_obj = Path(path)
+        try:
+            rel_path = path_obj.relative_to(config.results_dir)
+        except ValueError:
+            rel_path = path_obj
+        return f"<code>{rel_path.as_posix()}</code>"
+
+    table_html = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>对比条件</th>
+                    <th>平均准确率图</th>
+                    <th>平均机会水平图</th>
+                    <th>平均差值图</th>
+                    <th>t统计图</th>
+                    <th>p值图</th>
+                    <th>显著性掩模</th>
+                    <th>阈值化差值图</th>
+                    <th>显著簇表</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+
+    for contrast, outputs in sorted(map_outputs.items()):
+        table_html += f"""
+                <tr>
+                    <td><strong>{contrast}</strong></td>
+                    <td>{_format_path(outputs.get('mean_accuracy_map'))}</td>
+                    <td>{_format_path(outputs.get('mean_chance_map'))}</td>
+                    <td>{_format_path(outputs.get('mean_delta_map'))}</td>
+                    <td>{_format_path(outputs.get('t_map'))}</td>
+                    <td>{_format_path(outputs.get('p_map'))}</td>
+                    <td>{_format_path(outputs.get('significant_mask'))}</td>
+                    <td>{_format_path(outputs.get('thresholded_delta_map'))}</td>
+                    <td>{_format_path(outputs.get('cluster_table'))}</td>
+                </tr>
+        """
+
+    table_html += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    return table_html
+
+
+def generate_cluster_table(cluster_df):
+    """生成显著脑区表格"""
+
+    if cluster_df is None or cluster_df.empty:
+        return "<p>未检测到显著脑区。</p>"
+
+    table_html = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>对比条件</th>
+                    <th>簇ID</th>
+                    <th>体素数量</th>
+                    <th>体积 (mm³)</th>
+                    <th>平均Δ准确率</th>
+                    <th>峰值Δ准确率</th>
+                    <th>峰值t</th>
+                    <th>峰值p</th>
+                    <th>峰值坐标 (x, y, z)</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+
+    for _, row in cluster_df.iterrows():
+        table_html += f"""
+                <tr>
+                    <td>{row['contrast']}</td>
+                    <td>{int(row['cluster_id'])}</td>
+                    <td>{int(row['n_voxels'])}</td>
+                    <td>{row['cluster_volume_mm3']:.1f}</td>
+                    <td>{row['mean_delta_accuracy']:.4f}</td>
+                    <td>{row['peak_delta_accuracy']:.4f}</td>
+                    <td>{row['peak_t_value']:.3f}</td>
+                    <td>{row['peak_p_value']:.4f}</td>
+                    <td>({row['peak_x']:.1f}, {row['peak_y']:.1f}, {row['peak_z']:.1f})</td>
+                </tr>
+        """
+
+    table_html += """
+            </tbody>
+        </table>
+    </div>
+    """
+
     return table_html
 
 def generate_individual_table(group_df):
