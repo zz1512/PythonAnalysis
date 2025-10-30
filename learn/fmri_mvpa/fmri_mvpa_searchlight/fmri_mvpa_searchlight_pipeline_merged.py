@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from scipy import stats
+from scipy.spatial import cKDTree
 from multiprocessing import cpu_count
 from nilearn.decoding import SearchLight
 from nilearn.maskers import NiftiMasker
@@ -37,6 +38,7 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.base import clone
 from report_generator import generate_html_report, image_to_base64
 from sklearn.impute import SimpleImputer
 from visualization import create_enhanced_visualizations
@@ -820,18 +822,31 @@ def check_system_resources(config):
         log("无法检测系统资源，请安装psutil: pip install psutil", config)
 
 
+def _build_cross_validator(labels, groups, config):
+    """构建与Searchlight兼容的交叉验证器."""
+
+    if groups is not None and len(np.unique(groups)) > 1:
+        return LeaveOneGroupOut()
+
+    n_samples = len(labels)
+    if n_samples < 2:
+        raise ValueError("Searchlight交叉验证需要至少2个样本")
+
+    n_splits = min(config.cv_folds, n_samples)
+    n_splits = max(n_splits, 2)
+
+    return StratifiedKFold(
+        n_splits=n_splits,
+        random_state=config.cv_random_state,
+        shuffle=True
+    )
+
+
 def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
     """内部函数，用于拟合SearchLight估计器"""
     classifier = SVC(**config.svm_params)
 
-    if groups is not None and len(np.unique(groups)) > 1:
-        cv = LeaveOneGroupOut()
-    else:
-        cv = StratifiedKFold(
-            n_splits=min(config.cv_folds, len(labels)),
-            random_state=config.cv_random_state,
-            shuffle=True
-        )
+    cv = _build_cross_validator(labels, groups, config)
 
     searchlight = SearchLight(
         mask_img=process_mask_path,
@@ -877,6 +892,81 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
         return None
 
 
+def _prepare_searchlight_permutation_cache(beta_images, process_mask_path, config):
+    """预计算Searchlight置换所需的掩模数据和邻域索引."""
+
+    masker = NiftiMasker(
+        mask_img=process_mask_path,
+        memory=getattr(config, "memory_cache", None),
+        memory_level=getattr(config, "memory_level", 0),
+        standardize=False
+    )
+
+    masked_data = masker.fit_transform(beta_images)
+
+    mask_img = masker.mask_img_
+    mask_data = mask_img.get_fdata().astype(bool)
+
+    if masked_data.size == 0 or not np.any(mask_data):
+        return None
+
+    voxel_coords = np.column_stack(np.where(mask_data))
+
+    if voxel_coords.size == 0:
+        return None
+
+    tree = cKDTree(voxel_coords)
+    neighbor_lists = tree.query_ball_point(voxel_coords, r=config.searchlight_radius)
+
+    min_region_size = getattr(config, "min_region_size", 1)
+
+    sphere_indices = {}
+    for center_idx, neighbors in enumerate(neighbor_lists):
+        if len(neighbors) < min_region_size:
+            continue
+        sphere_indices[center_idx] = np.asarray(neighbors, dtype=int)
+
+    if not sphere_indices:
+        return None
+
+    return {
+        "masked_data": masked_data,
+        "masker": masker,
+        "sphere_indices": sphere_indices
+    }
+
+
+def _compute_searchlight_scores_from_cache(cache, labels, config, groups=None):
+    """使用预计算的掩模和邻域索引计算searchlight得分."""
+
+    masked_data = cache["masked_data"]
+    sphere_indices = cache["sphere_indices"]
+
+    cv = _build_cross_validator(labels, groups, config)
+    classifier = SVC(**config.svm_params)
+
+    n_voxels = masked_data.shape[1]
+    scores = np.full(n_voxels, np.nan, dtype=float)
+
+    for center_idx, neighbor_idx in sphere_indices.items():
+        sphere_data = masked_data[:, neighbor_idx]
+        if sphere_data.shape[1] < getattr(config, "min_region_size", 1):
+            continue
+
+        try:
+            fold_scores = cross_val_score(
+                clone(classifier),
+                sphere_data,
+                labels,
+                cv=cv
+            )
+            scores[center_idx] = float(np.mean(fold_scores))
+        except Exception:
+            scores[center_idx] = np.nan
+
+    return scores
+
+
 def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, template_img,
                                 groups=None):
     """通过标签置换估计单个被试的机会水平地图"""
@@ -885,35 +975,46 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
     if n_permutations is None or n_permutations <= 0:
         return None, None, None
 
+    cache = _prepare_searchlight_permutation_cache(beta_images, process_mask_path, config)
+    if cache is None:
+        log("无法构建Searchlight置换缓存，跳过机会水平估计", config)
+        return None, None, None
+
+    masker = cache["masker"]
+
     rng = np.random.default_rng(config.permutation_random_state)
     sum_scores = None
     sum_sq_scores = None
+    voxel_counts = None
     actual_permutations = 0
 
     for perm_index in range(n_permutations):
         permuted_labels = permute_labels_within_groups(labels, groups, rng)
 
         try:
-            perm_searchlight = _fit_searchlight(
-                beta_images,
+            perm_scores = _compute_searchlight_scores_from_cache(
+                cache,
                 permuted_labels,
-                process_mask_path,
                 config,
-                groups=groups,
-                verbose=0
+                groups=groups
             )
         except Exception as exc:  # pragma: no cover - 记录并继续
             log(f"置换 {perm_index + 1}/{n_permutations} 失败: {exc}", config)
             continue
 
-        perm_scores = as_data_array(perm_searchlight.scores_)
+        valid_mask = ~np.isnan(perm_scores)
+        if not np.any(valid_mask):
+            log(f"置换 {perm_index + 1}/{n_permutations} 未产生有效得分", config)
+            continue
 
         if sum_scores is None:
-            sum_scores = perm_scores
-            sum_sq_scores = perm_scores ** 2
-        else:
-            sum_scores += perm_scores
-            sum_sq_scores += perm_scores ** 2
+            sum_scores = np.zeros_like(perm_scores, dtype=float)
+            sum_sq_scores = np.zeros_like(perm_scores, dtype=float)
+            voxel_counts = np.zeros_like(perm_scores, dtype=float)
+
+        sum_scores[valid_mask] += perm_scores[valid_mask]
+        sum_sq_scores[valid_mask] += perm_scores[valid_mask] ** 2
+        voxel_counts[valid_mask] += 1
 
         actual_permutations += 1
 
@@ -921,17 +1022,28 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
         log("警告: 未能生成任何有效的机会水平置换地图", config)
         return None, None, None
 
-    mean_data = sum_scores / actual_permutations
-    var_data = np.maximum(sum_sq_scores / actual_permutations - mean_data ** 2, 0)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mean_data = np.divide(sum_scores, voxel_counts, where=voxel_counts > 0)
+
+    mean_data = np.nan_to_num(mean_data, nan=0.0)
+
+    with np.errstate(invalid='ignore', divide='ignore'):
+        variance = np.divide(sum_sq_scores, voxel_counts, where=voxel_counts > 0) - mean_data ** 2
+
+    var_data = np.maximum(np.nan_to_num(variance, nan=0.0), 0)
     std_data = np.sqrt(var_data)
 
-    chance_img = image.new_img_like(template_img, mean_data)
-    chance_std_img = image.new_img_like(template_img, std_data)
+    chance_img_mask_space = masker.inverse_transform(mean_data)
+    chance_std_mask_space = masker.inverse_transform(std_data)
+
+    chance_img = image.new_img_like(template_img, chance_img_mask_space.get_fdata())
+    chance_std_img = image.new_img_like(template_img, chance_std_mask_space.get_fdata())
 
     return chance_img, chance_std_img, {
         'n_subject_permutations': actual_permutations,
         'chance_mean_data': mean_data,
-        'chance_std_data': std_data
+        'chance_std_data': std_data,
+        'voxel_counts': voxel_counts
     }
 
 
