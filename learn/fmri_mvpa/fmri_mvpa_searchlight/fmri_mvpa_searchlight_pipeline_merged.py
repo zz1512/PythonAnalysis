@@ -129,7 +129,7 @@ class MVPAConfig:
             level=self.log_level,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(self.log_file),
+                logging.FileHandler(self.log_file, encoding='utf-8'),
                 logging.StreamHandler()
             ]
         )
@@ -160,9 +160,12 @@ def log(message, config):
 
 def log_safe(message, config):
     """安全的日志记录，完全禁用特殊字符"""
-    # 移除所有非ASCII字符
-    safe_message = message.encode('ascii', 'ignore').decode('ascii')
-    logging.info(safe_message)
+    try:
+        logging.info(message)
+    except UnicodeEncodeError:
+        # 如果目标环境仍无法处理Unicode，则回退到移除不可编码字符
+        safe_message = message.encode('ascii', 'ignore').decode('ascii')
+        logging.info(safe_message)
 
 def memory_cleanup():
     """内存清理"""
