@@ -7,6 +7,9 @@ import gc
 import json
 import logging
 import time
+import sys
+import io
+import locale
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -370,13 +373,12 @@ class MVPAConfig:
 
     def _setup_logging(self):
         """设置日志配置"""
+        file_handler, console_handler = _create_logging_handlers(self.log_file)
         logging.basicConfig(
             level=self.log_level,
             format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(self.log_file, encoding='utf-8'),
-                logging.StreamHandler()
-            ]
+            handlers=[file_handler, console_handler],
+            force=True,
         )
 
     def save_config(self, filepath):
@@ -398,6 +400,56 @@ class MVPAConfig:
 # ============================================================================
 # 工具函数模块 - 添加并行处理支持
 # ============================================================================
+
+_CONSOLE_STREAM = None
+
+
+def _get_console_stream():
+    """返回适配当前控制台编码的输出流，避免中文日志乱码。"""
+
+    global _CONSOLE_STREAM
+
+    if _CONSOLE_STREAM is not None:
+        return _CONSOLE_STREAM
+
+    stream = sys.stdout
+    preferred_encoding = locale.getpreferredencoding(False) or "utf-8"
+
+    try:
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding=preferred_encoding, errors="replace")
+            _CONSOLE_STREAM = stream
+            return _CONSOLE_STREAM
+    except Exception:
+        pass
+
+    buffer = getattr(stream, "buffer", None)
+    if buffer is not None:
+        try:
+            stream = io.TextIOWrapper(
+                buffer,
+                encoding=preferred_encoding,
+                errors="replace",
+                line_buffering=True,
+            )
+        except Exception:
+            stream = sys.stdout
+
+    _CONSOLE_STREAM = stream
+
+    if stream is not sys.stdout:
+        sys.stdout = stream
+
+    return _CONSOLE_STREAM
+
+
+def _create_logging_handlers(log_file):
+    """统一构建日志处理器，文件写入UTF-8 BOM，控制台使用本地编码。"""
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8-sig")
+    console_handler = logging.StreamHandler(_get_console_stream())
+    return file_handler, console_handler
+
 
 def log(message, config):
     """记录日志信息"""
@@ -1632,13 +1684,12 @@ def process_single_subject_wrapper(task_params):
 
         # 设置子进程日志（避免日志冲突）
         log_file = config.results_dir / "logs" / f"subject_{subject_id}.log"
+        file_handler, console_handler = _create_logging_handlers(log_file)
         logging.basicConfig(
             level=config.log_level,
             format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
+            handlers=[file_handler, console_handler],
+            force=True,
         )
 
         return process_single_subject(subject_id, config, process_mask_path)
