@@ -641,6 +641,7 @@ def generate_rsa_report(group_stats, config):
     <html>
     <head>
         <title>RSA Analysis Report</title>
+        <meta charset="utf-8">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 40px; }}
             h1, h2, h3 {{ color: #333; }}

@@ -405,9 +405,19 @@ def log(message, config):
 
 
 def log_safe(message, config):
-    """安全的日志记录，完全禁用特殊字符"""
-    # 移除所有非ASCII字符
-    safe_message = message.encode('ascii', 'ignore').decode('ascii')
+    """安全的日志记录，同时保留中文等非ASCII字符"""
+    # 将消息转换为字符串并替换掉换行符，避免打乱日志格式
+    message_str = str(message).replace('\r', ' ').replace('\n', ' ')
+
+    # 过滤掉不可打印的控制字符，其余字符（包括中文、emoji）保留
+    safe_chars = []
+    for ch in message_str:
+        if ch.isprintable() or ch in '\t':
+            safe_chars.append(ch)
+        else:
+            safe_chars.append(' ')
+
+    safe_message = ''.join(safe_chars)
     logging.info(safe_message)
 
 
