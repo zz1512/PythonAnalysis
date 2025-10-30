@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import psutil
@@ -5,9 +7,13 @@ import gc
 import json
 import logging
 import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from scipy import stats
 from multiprocessing import cpu_count
 from nilearn.decoding import SearchLight
@@ -24,13 +30,269 @@ from visualization import create_enhanced_visualizations
 
 
 # ============================================================================
+# 常用MVPA分析参数定义
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class CommonParamDefinition:
+    """描述常用MVPA参数的默认值及其说明。"""
+
+    description: str
+    default: Any = None
+    default_factory: Optional[Callable[["MVPAConfig"], Any]] = None
+
+    def resolve(self, config: "MVPAConfig") -> Any:
+        """根据配置解析默认值。"""
+
+        if self.default_factory is not None:
+            return self.default_factory(config)
+        return self.default
+
+
+COMMON_MVPA_ANALYSIS_PARAMS = OrderedDict([
+    (
+        "searchlight_radius",
+        CommonParamDefinition(
+            default=3,
+            description="Searchlight球体半径（以体素为单位），控制局部分类的空间邻域大小。",
+        ),
+    ),
+    (
+        "process_mask",
+        CommonParamDefinition(
+            default="gray_matter_mask.nii.gz",
+            description="用于限定分析区域的mask文件名称，确保只在目标脑区进行计算。",
+        ),
+    ),
+    (
+        "min_region_size",
+        CommonParamDefinition(
+            default=10,
+            description="允许报告的最小体素簇大小，过滤噪声体素。",
+        ),
+    ),
+    (
+        "svm_params",
+        CommonParamDefinition(
+            default={"random_state": 42},
+            description="Searchlight分类器的核心SVM配置，默认仅固定随机种子以确保可重复。",
+        ),
+    ),
+    (
+        "svm_param_grid",
+        CommonParamDefinition(
+            default={"C": [0.1, 1.0, 10.0], "kernel": ["linear"]},
+            description="可选的SVM超参数网格，用于在调试或细化模型时进行交叉验证调优。",
+        ),
+    ),
+    (
+        "cv_folds",
+        CommonParamDefinition(
+            default=5,
+            description="交叉验证折数，控制Searchlight在每个球体上的训练-验证划分。",
+        ),
+    ),
+    (
+        "cv_random_state",
+        CommonParamDefinition(
+            default=42,
+            description="交叉验证拆分的随机种子，保证折叠划分的一致性。",
+        ),
+    ),
+    (
+        "n_permutations",
+        CommonParamDefinition(
+            default=500,
+            description="组水平统计的置换次数，用于估计全局零分布。",
+        ),
+    ),
+    (
+        "permutation_random_state",
+        CommonParamDefinition(
+            default=42,
+            description="置换测试使用的随机种子，以获得可重复的chance估计。",
+        ),
+    ),
+    (
+        "within_subject_permutations",
+        CommonParamDefinition(
+            default=100,
+            description="单被试机会水平估计的置换次数。可根据探索性分析需求进行调整。",
+        ),
+    ),
+    (
+        "max_exact_sign_flips_subjects",
+        CommonParamDefinition(
+            default=12,
+            description="当被试数量不超过该阈值时，组水平统计会尝试枚举全部符号翻转组合。",
+        ),
+    ),
+    (
+        "enable_two_sided_group_tests",
+        CommonParamDefinition(
+            default=True,
+            description="是否在组水平分析中执行双侧检验。",
+        ),
+    ),
+    (
+        "permutation_strategy",
+        CommonParamDefinition(
+            default="analytic",
+            description="机会水平估计策略，可选analytic/permutation/montecarlo。",
+        ),
+    ),
+    (
+        "enable_mask_cache",
+        CommonParamDefinition(
+            default=True,
+            description="是否缓存Searchlight球体掩模以复用邻域结构。",
+        ),
+    ),
+    (
+        "monte_carlo_null_samples",
+        CommonParamDefinition(
+            default=500,
+            description="当使用蒙特卡洛策略时抽样的零分布样本数量。",
+        ),
+    ),
+    (
+        "enable_beta_cache",
+        CommonParamDefinition(
+            default=True,
+            description="是否缓存拼接后的beta图像，以减少重复磁盘读取。",
+        ),
+    ),
+    (
+        "alpha_level",
+        CommonParamDefinition(
+            default=0.05,
+            description="显著性阈值，用于推断统计显著性。",
+        ),
+    ),
+    (
+        "n_jobs",
+        CommonParamDefinition(
+            default_factory=lambda _: max(1, min(4, cpu_count() - 1)),
+            description="Searchlight分析并行处理使用的工作进程数量。",
+        ),
+    ),
+    (
+        "use_parallel",
+        CommonParamDefinition(
+            default=True,
+            description="是否启用并行处理以加速Searchlight计算。",
+        ),
+    ),
+])
+
+
+def get_common_mvpa_analysis_params() -> OrderedDict[str, CommonParamDefinition]:
+    """获取常用MVPA分析参数定义的拷贝。"""
+
+    return OrderedDict(COMMON_MVPA_ANALYSIS_PARAMS)
+
+
+def _resolve_common_param_default(config: "MVPAConfig", meta: Any) -> Any:
+    """解析常用参数的默认值，支持default和default_factory。"""
+
+    if isinstance(meta, CommonParamDefinition):
+        return meta.resolve(config)
+
+    if isinstance(meta, dict):
+        if "default_factory" in meta:
+            return meta["default_factory"](config)
+        return meta.get("default")
+
+    return None
+
+
+def apply_common_mvpa_analysis_params(config: "MVPAConfig", overrides: Optional[Dict[str, Any]] = None,
+                                      log_messages: bool = False) -> OrderedDict[str, Dict[str, Any]]:
+    """为配置对象设置常用的MVPA分析参数，并附带文本描述。"""
+
+    overrides = overrides or {}
+    applied = OrderedDict()
+    params = get_common_mvpa_analysis_params()
+
+    if not hasattr(config, "param_descriptions"):
+        config.param_descriptions = {}
+
+    for name, meta in params.items():
+        value = overrides.get(name, _resolve_common_param_default(config, meta))
+        setattr(config, name, value)
+
+        description = getattr(meta, "description", None)
+        if description is None and isinstance(meta, dict):
+            description = meta.get("description")
+        config.param_descriptions[name] = description
+        applied[name] = {"value": value, "description": description}
+
+        if log_messages:
+            log(f"参数 {name}={value}: {description}", config)
+
+    return applied
+
+
+def describe_common_mvpa_analysis_params(applied_params: OrderedDict[str, Dict[str, Any]]) -> list[str]:
+    """将常用参数说明格式化为可读文本列表。"""
+
+    if not applied_params:
+        return []
+
+    lines = ["常用MVPA分析参数设置:"]
+    for name, meta in applied_params.items():
+        lines.append(f"  - {name}: {meta['value']} -> {meta['description']}")
+
+    return lines
+
+
+# ============================================================================
+# 受控缓存实现
+# ============================================================================
+
+
+class BoundedLRUCache(OrderedDict):
+    """提供带上限的LRU缓存，用于控制内存增长。"""
+
+    def __init__(self, max_items: int):
+        super().__init__()
+        self.max_items = max(1, int(max_items))
+
+    def configure(self, max_items: int) -> None:
+        """动态调整缓存容量。"""
+
+        self.max_items = max(1, int(max_items))
+        self._trim()
+
+    def _trim(self) -> None:
+        while len(self) > self.max_items:
+            self.popitem(last=False)
+
+    def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+        if key in self:
+            self.move_to_end(key)
+            return super().__getitem__(key)
+        return default
+
+    def __setitem__(self, key: Any, value: Any) -> None:  # type: ignore[override]
+        if key in self:
+            super().__delitem__(key)
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        self._trim()
+
+
+# ============================================================================
 # 配置管理模块 - 添加并行处理参数
 # ============================================================================
 
 class MVPAConfig:
     """MVPA Searchlight分析配置类 - 并行优化版本"""
 
-    def __init__(self):
+    def __init__(self, overrides=None):
+        overrides = overrides or {}
+
         # 基本参数
         self.subjects = [f"sub-{i:02d}" for i in range(1, 4)]
         self.runs = [3, 4]  # 支持多个run
@@ -38,39 +300,20 @@ class MVPAConfig:
         self.mask_dir = Path(r"../../../data/masks")  # 使用通用mask目录
         self.results_dir = Path(r"../../../learn_mvpa/searchlight_mvpa")
 
-        # Searchlight特定参数
-        self.searchlight_radius = 3  # searchlight半径（体素）
-        self.process_mask = "gray_matter_mask.nii.gz"  # 处理mask
-        self.min_region_size = 10  # 最小区域大小（体素数）
+        # 常用Searchlight参数：统一设置并附带描述
+        self.param_descriptions = {}
+        self.common_param_values = apply_common_mvpa_analysis_params(
+            self,
+            overrides=overrides,
+            log_messages=False
+        )
 
-        # 分类器参数
-        self.svm_params = {
-            'random_state': 42
-        }
+        # 缓存容量控制
+        self.mask_cache_max_items = overrides.get('mask_cache_max_items', 8)
+        self.beta_cache_max_items = overrides.get('beta_cache_max_items', 4)
+        configure_cache_limits(self)
 
-        # 参数网格搜索配置
-        self.svm_param_grid = {
-            'C': [0.1, 1.0, 10.0],  # 可选的C值
-            'kernel': ['linear']  # 保持线性核
-        }
-
-        # 交叉验证参数
-        self.cv_folds = 5  # searchlight通常使用较少的fold以节省计算时间
-        self.cv_random_state = 42
-
-        # 置换检验参数（仅用于组水平分析）
-        self.n_permutations = 500  # searchlight通常使用较少的置换次数
-        self.permutation_random_state = 42
-        self.within_subject_permutations = 100  # 每个被试估计机会水平的置换次数
-        self.max_exact_sign_flips_subjects = 12  # 被试数不超过该阈值时枚举全部符号翻转
-        self.enable_two_sided_group_tests = True  # 组水平检测使用双侧检验
-
-        # 显著性水平
-        self.alpha_level = 0.05
-
-        # 并行处理参数
-        self.n_jobs = min(4, cpu_count() - 1)
-        self.use_parallel = True
+        # 并行处理参数（针对被试和批量任务）
 
         # 新增并行处理参数
         self.parallel_subjects = True  # 启用被试并行处理
@@ -117,6 +360,13 @@ class MVPAConfig:
 
         # 设置日志
         self._setup_logging()
+        self.log_common_parameters()
+
+    def log_common_parameters(self):
+        """输出常用参数的说明，方便跟踪配置。"""
+
+        for line in describe_common_mvpa_analysis_params(self.common_param_values):
+            log(line, self)
 
     def _setup_logging(self):
         """设置日志配置"""
@@ -171,6 +421,99 @@ def as_data_array(img):
     if hasattr(img, "get_fdata"):
         return img.get_fdata()
     return np.asarray(img)
+
+
+SEARCHLIGHT_MASK_CACHE = BoundedLRUCache(max_items=8)
+BETA_IMAGE_CACHE = BoundedLRUCache(max_items=4)
+
+
+def configure_cache_limits(config: "MVPAConfig") -> None:
+    """根据配置动态调整全局缓存容量。"""
+
+    mask_limit = getattr(config, 'mask_cache_max_items', SEARCHLIGHT_MASK_CACHE.max_items)
+    beta_limit = getattr(config, 'beta_cache_max_items', BETA_IMAGE_CACHE.max_items)
+
+    SEARCHLIGHT_MASK_CACHE.configure(mask_limit)
+    BETA_IMAGE_CACHE.configure(beta_limit)
+
+    if not getattr(config, 'enable_mask_cache', True):
+        SEARCHLIGHT_MASK_CACHE.clear()
+    if not getattr(config, 'enable_beta_cache', True):
+        BETA_IMAGE_CACHE.clear()
+
+
+def clear_global_caches() -> None:
+    """清空全局缓存，避免跨任务污染。"""
+
+    SEARCHLIGHT_MASK_CACHE.clear()
+    BETA_IMAGE_CACHE.clear()
+
+
+def get_cached_beta_image(beta_images, use_cache=True):
+    """根据文件列表缓存并返回拼接后的beta 4D图像。"""
+
+    if not beta_images:
+        return None
+
+    cache_key = tuple(str(path) for path in beta_images)
+
+    cached_img = BETA_IMAGE_CACHE.get(cache_key) if use_cache else None
+    if cached_img is not None:
+        return cached_img
+
+    try:
+        beta_img = image.concat_imgs(beta_images)
+    except Exception as exc:
+        logging.debug(f"beta图像拼接失败: {exc}")
+        return None
+
+    if use_cache:
+        BETA_IMAGE_CACHE[cache_key] = beta_img
+
+    return beta_img
+
+
+def prepare_beta_data(beta_images, config):
+    """为SearchLight准备输入数据，可复用缓存以避免重复IO。"""
+
+    use_cache = getattr(config, 'enable_beta_cache', False)
+
+    if not beta_images:
+        return beta_images
+
+    if use_cache:
+        beta_img = get_cached_beta_image(beta_images, use_cache=True)
+        if beta_img is not None:
+            return beta_img
+        log("beta图像缓存失败，回退至逐文件加载", config)
+
+    return beta_images
+
+
+def get_cached_mask_structures(process_mask_path, template_img=None, use_cache=True):
+    """根据配置缓存并返回mask及相关结构。"""
+    cache_key = str(process_mask_path)
+
+    cached = SEARCHLIGHT_MASK_CACHE.get(cache_key) if use_cache else None
+    if cached is not None:
+        if template_img is not None:
+            cached['reference_img'] = template_img
+        return cached
+
+    mask_img = image.load_img(process_mask_path)
+    mask_data = as_data_array(mask_img) > 0
+    reference_img = template_img if template_img is not None else mask_img
+
+    cached = {
+        'mask_img': mask_img,
+        'mask_data': mask_data,
+        'reference_img': reference_img
+    }
+
+    if use_cache:
+        SEARCHLIGHT_MASK_CACHE[cache_key] = cached
+
+    return cached
 
 
 def permute_labels_within_groups(labels, groups, rng):
@@ -283,13 +626,16 @@ def config_to_dict(config):
     attributes = [
         'subjects', 'runs', 'lss_root', 'mask_dir', 'results_dir',
         'searchlight_radius', 'process_mask', 'min_region_size',
-        'svm_params', 'cv_folds', 'cv_random_state',
+        'svm_params', 'svm_param_grid', 'cv_folds', 'cv_random_state',
         'n_permutations', 'permutation_random_state', 'within_subject_permutations',
-        'alpha_level', 'n_jobs', 'contrasts', 'max_workers',
+        'max_exact_sign_flips_subjects', 'enable_two_sided_group_tests', 'permutation_strategy',
+        'enable_mask_cache', 'monte_carlo_null_samples', 'enable_beta_cache',
+        'alpha_level', 'n_jobs', 'use_parallel', 'contrasts', 'max_workers',
         'parallel_subjects', 'memory_aware_parallel', 'min_memory_per_subject_gb',
         'optimize_memory', 'max_chance_permutations', 'enable_batch_processing',
         'disable_chance_maps', 'memory_cache', 'memory_level', 'enable_memory_monitoring',
-        'min_trials_per_condition', 'debug_mode', 'debug_subjects', 'n_permutations_debug'
+        'min_trials_per_condition', 'debug_mode', 'debug_subjects', 'n_permutations_debug',
+        'param_descriptions', 'common_param_values'
     ]
 
     for attr in attributes:
@@ -306,14 +652,25 @@ def config_to_dict(config):
 
 def dict_to_config(config_dict):
     """从字典重建配置对象"""
-    config = MVPAConfig()
+
+    overrides = {
+        key: config_dict[key]
+        for key in COMMON_MVPA_ANALYSIS_PARAMS.keys()
+        if key in config_dict
+    }
+    config = MVPAConfig(overrides=overrides)
 
     for key, value in config_dict.items():
+        if key in COMMON_MVPA_ANALYSIS_PARAMS:
+            continue
+
         # 将字符串路径转换回Path对象
         if key in ['lss_root', 'mask_dir', 'results_dir'] and isinstance(value, str):
             setattr(config, key, Path(value))
         else:
             setattr(config, key, value)
+
+    configure_cache_limits(config)
 
     return config
 
@@ -645,6 +1002,10 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
     try:
         classifier = SVC(**config.svm_params)
 
+        if beta_images is None:
+            log("错误: 未提供有效的beta数据", config)
+            return None
+
         if groups is not None and len(np.unique(groups)) > 1:
             cv = LeaveOneGroupOut()
         else:
@@ -677,6 +1038,8 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
             log("错误: SearchLight scores_数据为空", config)
             return None
 
+        setattr(searchlight, '_cached_beta_source', beta_images)
+
         return searchlight
 
     except Exception as e:
@@ -696,8 +1059,10 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
             config
         )
         start_time = time.time()
+        beta_source = prepare_beta_data(beta_images, config)
+
         searchlight = _fit_searchlight(
-            beta_images,
+            beta_source,
             labels,
             process_mask_path,
             config,
@@ -715,25 +1080,97 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
         return None
 
 
-def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, template_img,
-                                groups=None):
-    """通过标签置换估计单个被试的机会水平地图 - 完全重写版本"""
+def _estimate_chance_via_analytic(mask_data, reference_img, labels, config, strategy):
+    """使用解析或快速蒙特卡洛方法估计机会水平。"""
 
     try:
-        n_permutations = getattr(config, 'within_subject_permutations', 10)
-        if n_permutations <= 0:
-            return None, None, None
-
-        # 首先运行一次searchlight获取模板
+        n_samples = max(len(labels), 1)
         rng = np.random.default_rng(config.permutation_random_state)
 
-        # 获取参考图像
-        reference_img = image.load_img(beta_images[0])
-        mask_img = image.load_img(process_mask_path)
-        mask_data = as_data_array(mask_img) > 0
+        if strategy == 'montecarlo':
+            draws = getattr(config, 'monte_carlo_null_samples', 500)
+            draws = max(int(draws), 1)
+            # 对整体准确率进行快速蒙特卡洛抽样
+            simulated = rng.binomial(n_samples, 0.5, size=draws) / float(n_samples)
+            mean_val = float(np.mean(simulated))
+            std_val = float(np.std(simulated, ddof=1)) if draws > 1 else 0.0
+        else:
+            # 解析估计: 假设二分类准确率服从0.5的二项分布
+            mean_val = 0.5
+            std_val = float(np.sqrt(0.25 / float(n_samples)))
 
-        # 初始化存储
-        all_perm_scores = []
+        full_mean_data = np.zeros(mask_data.shape, dtype=float)
+        full_std_data = np.zeros(mask_data.shape, dtype=float)
+
+        full_mean_data[mask_data] = mean_val
+        full_std_data[mask_data] = std_val
+
+        chance_img = image.new_img_like(reference_img, full_mean_data)
+        chance_std_img = image.new_img_like(reference_img, full_std_data)
+
+        return chance_img, chance_std_img, {
+            'n_subject_permutations': 0,
+            'chance_mean_data': full_mean_data,
+            'chance_std_data': full_std_data,
+            'strategy': strategy,
+            'effective_samples': int(n_samples)
+        }
+
+    except Exception as exc:
+        log(f"解析机会水平估计失败: {exc}", config)
+        return None, None, None
+
+
+def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, template_img=None,
+                                groups=None, searchlight=None):
+    """通过标签置换或快速近似估计单个被试的机会水平地图"""
+
+    try:
+        strategy = getattr(config, 'permutation_strategy', 'permutation')
+
+        if searchlight is not None and hasattr(searchlight, 'mask_img_'):
+            template_img = template_img or getattr(searchlight, 'scores_', None)
+            mask_img_source = searchlight.mask_img_
+        else:
+            mask_img_source = None
+
+        cached = get_cached_mask_structures(
+            process_mask_path,
+            template_img=template_img if template_img is not None else mask_img_source,
+            use_cache=getattr(config, 'enable_mask_cache', True)
+        )
+
+        mask_data = cached['mask_data']
+        reference_img = cached['reference_img']
+
+        beta_source = None
+        if searchlight is not None and hasattr(searchlight, '_cached_beta_source'):
+            beta_source = getattr(searchlight, '_cached_beta_source')
+
+        if beta_source is None:
+            beta_source = prepare_beta_data(beta_images, config)
+
+        if beta_source is None:
+            log("无法准备用于置换的beta数据，跳过机会水平估计", config)
+            return None, None, None
+
+        if strategy in ('analytic', 'montecarlo'):
+            log(f"使用{strategy}策略估计机会水平（跳过置换）", config)
+            return _estimate_chance_via_analytic(mask_data, reference_img, labels, config, strategy)
+
+        n_permutations = getattr(config, 'within_subject_permutations', 10)
+        max_cap = getattr(config, 'max_chance_permutations', 0)
+        if max_cap and max_cap > 0:
+            n_permutations = min(n_permutations, max_cap)
+
+        if n_permutations <= 0:
+            log("置换次数为0，跳过机会水平估计", config)
+            return None, None, None
+
+        rng = np.random.default_rng(config.permutation_random_state)
+
+        mean_accumulator = None
+        m2_accumulator = None
         actual_permutations = 0
 
         for perm_index in range(n_permutations):
@@ -741,7 +1178,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
 
             try:
                 perm_searchlight = _fit_searchlight(
-                    beta_images,
+                    beta_source,
                     permuted_labels,
                     process_mask_path,
                     config,
@@ -749,20 +1186,26 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
                     verbose=0
                 )
 
-                # 确保得到有效结果
                 if (perm_searchlight is not None and
                         hasattr(perm_searchlight, 'scores_') and
                         hasattr(perm_searchlight.scores_, 'get_fdata')):
 
                     perm_scores = as_data_array(perm_searchlight.scores_)
 
-                    # 只保存mask区域的数据以减少内存使用
                     if mask_data.shape == perm_scores.shape:
                         masked_scores = perm_scores[mask_data]
-                        all_perm_scores.append(masked_scores)
+                        masked_scores = masked_scores.astype(float, copy=False)
+
+                        if mean_accumulator is None:
+                            mean_accumulator = np.zeros_like(masked_scores, dtype=float)
+                            m2_accumulator = np.zeros_like(masked_scores, dtype=float)
+
                         actual_permutations += 1
+                        delta = masked_scores - mean_accumulator
+                        mean_accumulator += delta / actual_permutations
+                        m2_accumulator += delta * (masked_scores - mean_accumulator)
                     else:
-                        log(f"警告: mask形状不匹配", config)
+                        log("警告: mask形状不匹配，跳过当前置换结果", config)
 
             except Exception as exc:
                 log(f"置换 {perm_index + 1}/{n_permutations} 失败: {exc}", config)
@@ -772,19 +1215,24 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
             log("警告: 未能生成任何有效的置换结果", config)
             return None, None, None
 
-        # 计算统计量
-        all_perm_scores = np.array(all_perm_scores)  # shape: (n_perm, n_voxels)
-        mean_data = np.mean(all_perm_scores, axis=0)
-        std_data = np.std(all_perm_scores, axis=0, ddof=1)
+        if mean_accumulator is None:
+            log("未能计算任何有效的置换统计，跳过机会水平图", config)
+            return None, None, None
 
-        # 重建完整图像
+        mean_data = mean_accumulator
+
+        if actual_permutations > 1 and m2_accumulator is not None:
+            variance = np.maximum(m2_accumulator / (actual_permutations - 1), 0)
+            std_data = np.sqrt(variance)
+        else:
+            std_data = np.zeros_like(mean_data)
+
         full_mean_data = np.zeros(mask_data.shape)
         full_std_data = np.zeros(mask_data.shape)
 
         full_mean_data[mask_data] = mean_data
         full_std_data[mask_data] = std_data
 
-        # 创建Niimg对象
         try:
             chance_img = image.new_img_like(reference_img, full_mean_data)
             chance_std_img = image.new_img_like(reference_img, full_std_data)
@@ -795,7 +1243,8 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
         return chance_img, chance_std_img, {
             'n_subject_permutations': actual_permutations,
             'chance_mean_data': full_mean_data,
-            'chance_std_data': full_std_data
+            'chance_std_data': full_std_data,
+            'strategy': 'permutation'
         }
 
     except Exception as e:
@@ -970,7 +1419,8 @@ def process_searchlight_results_batch(beta_images, labels, process_mask_path, co
 
     # 并行处理机会水平估计和结果分析
     chance_img, chance_std_img, chance_info = estimate_subject_chance_map(
-        beta_images, labels, process_mask_path, config, searchlight.scores_, groups
+        beta_images, labels, process_mask_path, config,
+        template_img=searchlight.scores_, groups=groups, searchlight=searchlight
     )
 
     # 分析结果
