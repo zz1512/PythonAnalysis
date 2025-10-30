@@ -309,7 +309,9 @@ def generate_html_report(group_df, stats_df, config, main_viz_b64=None, individu
     report_path = config.results_dir / "searchlight_mvpa_report.html"
     
     try:
-        with open(report_path, 'w', encoding='utf-8') as f:
+        # 使用带BOM的UTF-8编码写入，确保在Windows系统（尤其是旧版记事本）中
+        # 也能正确识别中文字符，避免出现乱码。
+        with open(report_path, 'w', encoding='utf-8-sig') as f:
             f.write(html_content)
         print(f"HTML报告已生成: {report_path}")
     except Exception as e:
