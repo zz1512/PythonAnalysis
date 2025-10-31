@@ -9,7 +9,6 @@ import logging
 import time
 import sys
 import io
-import locale
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -331,6 +330,12 @@ class MVPAConfig:
         self.enable_batch_processing = True  # 启用批量处理
         self.disable_chance_maps = False  # 可选：完全禁用机会水平地图计算
 
+        # 显著性分析阈值
+        self.classification_significance_threshold = overrides.get(
+            'classification_significance_threshold',
+            0.5,
+        )
+
         # 内存优化参数
         self.memory_cache = 'nilearn_cache'
         self.memory_level = 1
@@ -362,6 +367,14 @@ class MVPAConfig:
         # 日志设置
         self.log_level = logging.INFO
         self.log_file = self.results_dir / "logs" / "analysis.log"
+
+        # 组层面空间配准与多重比较设置
+        group_ref = overrides.get('group_reference_image')
+        self.group_reference_image = Path(group_ref) if group_ref else None
+        self.group_interpolation = overrides.get('group_interpolation', 'continuous')
+        self.primary_correction = overrides.get('primary_correction', 'fdr')
+        chinese_font_path = overrides.get('chinese_font_path')
+        self.chinese_font_path = Path(chinese_font_path) if chinese_font_path else None
 
         # 设置日志
         self._setup_logging()
@@ -407,7 +420,7 @@ _CONSOLE_STREAM = None
 
 
 def _get_console_stream():
-    """返回适配当前控制台编码的输出流，避免中文日志乱码。"""
+    """返回UTF-8编码的输出流，确保控制台日志不会出现乱码。"""
 
     global _CONSOLE_STREAM
 
@@ -415,11 +428,12 @@ def _get_console_stream():
         return _CONSOLE_STREAM
 
     stream = sys.stdout
-    preferred_encoding = locale.getpreferredencoding(False) or "utf-8"
+    target_encoding = "utf-8"
 
+    # 尝试直接重配置现有stdout
     try:
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding=preferred_encoding, errors="replace")
+            stream.reconfigure(encoding=target_encoding, errors="replace")
             _CONSOLE_STREAM = stream
             return _CONSOLE_STREAM
     except Exception:
@@ -430,7 +444,7 @@ def _get_console_stream():
         try:
             stream = io.TextIOWrapper(
                 buffer,
-                encoding=preferred_encoding,
+                encoding=target_encoding,
                 errors="replace",
                 line_buffering=True,
             )
@@ -446,10 +460,13 @@ def _get_console_stream():
 
 
 def _create_logging_handlers(log_file):
-    """统一构建日志处理器，文件写入UTF-8 BOM，控制台使用本地编码。"""
+    """统一构建日志处理器，文件和控制台均使用UTF-8编码。"""
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8-sig")
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
     console_handler = logging.StreamHandler(_get_console_stream())
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
     return file_handler, console_handler
 
 
@@ -485,6 +502,143 @@ def as_data_array(img):
     if hasattr(img, "get_fdata"):
         return img.get_fdata()
     return np.asarray(img)
+
+
+def get_group_reference_image(config: "MVPAConfig", fallback_img):
+    """获取组层面的参考图像，用于重采样对齐。"""
+
+    reference_path = getattr(config, 'group_reference_image', None)
+    if reference_path:
+        try:
+            reference_img = image.load_img(str(reference_path))
+            log(f"使用自定义组参考图像: {reference_path}", config)
+            return reference_img
+        except Exception as exc:
+            log(f"加载组参考图像失败 {reference_path}: {exc}，改用首个被试图像", config)
+
+    return fallback_img
+
+
+def resample_image_to_reference(img, reference_img, interpolation="continuous"):
+    """将输入图像重采样到参考图像空间。"""
+
+    if img.shape == reference_img.shape and np.allclose(img.affine, reference_img.affine):
+        return img
+
+    return image.resample_to_img(img, reference_img, interpolation=interpolation)
+
+
+def compute_fdr_mask(p_map_data, alpha):
+    """使用Benjamini-Hochberg程序计算FDR校正显著性掩模。"""
+
+    flat_p = np.asarray(p_map_data, dtype=float).ravel()
+    finite_mask = np.isfinite(flat_p)
+    if not finite_mask.any():
+        return np.zeros_like(p_map_data, dtype=bool), np.nan
+
+    pvals = flat_p[finite_mask]
+    order = np.argsort(pvals)
+    ranked = pvals[order]
+    m = ranked.size
+    thresholds = alpha * (np.arange(1, m + 1) / m)
+    passed = ranked <= thresholds
+
+    if not np.any(passed):
+        fdr_mask = np.zeros_like(flat_p, dtype=bool)
+        fdr_mask[finite_mask] = False
+        return fdr_mask.reshape(p_map_data.shape), np.nan
+
+    max_index = np.max(np.where(passed))
+    critical_p = float(ranked[max_index])
+    selected = pvals <= critical_p
+
+    mask_flat = np.zeros_like(flat_p, dtype=bool)
+    mask_flat[finite_mask] = selected
+    return mask_flat.reshape(p_map_data.shape), critical_p
+
+
+def compute_fwe_mask(p_map_data, alpha):
+    """使用Bonferroni矫正计算FWE显著性掩模。"""
+
+    flat_p = np.asarray(p_map_data, dtype=float).ravel()
+    finite_mask = np.isfinite(flat_p)
+    n_tests = int(np.sum(finite_mask))
+
+    if n_tests == 0:
+        return np.zeros_like(p_map_data, dtype=bool), np.nan
+
+    threshold = alpha / n_tests
+    mask_flat = np.zeros_like(flat_p, dtype=bool)
+    mask_flat[finite_mask] = flat_p[finite_mask] <= threshold
+
+    return mask_flat.reshape(p_map_data.shape), float(threshold)
+
+
+def summarize_clusters(mask, mean_delta_data, t_map_data, p_map_data, affine, voxel_volume, config, contrast_name, correction_label):
+    """根据显著性掩模提取聚类信息。"""
+
+    structure = generate_binary_structure(3, 2)
+    mask_bool = np.asarray(mask, dtype=bool)
+
+    if not np.any(mask_bool):
+        return np.zeros_like(mask_bool, dtype=float), []
+
+    labeled_map, n_clusters = label(mask_bool, structure=structure)
+    filtered_mask = np.zeros_like(mask_bool, dtype=float)
+    cluster_records = []
+
+    min_region_size = int(getattr(config, 'min_region_size', 0))
+
+    for cluster_id in range(1, n_clusters + 1):
+        cluster_mask = labeled_map == cluster_id
+        if not np.any(cluster_mask):
+            continue
+
+        if cluster_mask.sum() < min_region_size:
+            continue
+
+        filtered_mask[cluster_mask] = 1.0
+
+        cluster_delta = mean_delta_data[cluster_mask]
+        cluster_t = t_map_data[cluster_mask]
+        cluster_p = p_map_data[cluster_mask]
+
+        cluster_coords = np.argwhere(cluster_mask)
+        cluster_t_clean = np.nan_to_num(cluster_t, nan=-np.inf)
+
+        if cluster_coords.size == 0:
+            continue
+
+        if np.all(np.isneginf(cluster_t_clean)):
+            peak_idx = 0
+        else:
+            peak_idx = int(np.argmax(cluster_t_clean))
+
+        peak_coord = cluster_coords[peak_idx]
+        peak_mm = nib.affines.apply_affine(affine, peak_coord)
+
+        peak_t_value = float(cluster_t[peak_idx]) if np.isfinite(cluster_t[peak_idx]) else float(np.nanmax(cluster_t))
+        peak_delta_value = float(np.nanmax(cluster_delta)) if np.any(np.isfinite(cluster_delta)) else float('nan')
+        mean_delta_value = float(np.nanmean(cluster_delta)) if np.any(np.isfinite(cluster_delta)) else float('nan')
+        peak_p_candidates = cluster_p[np.isfinite(cluster_p)]
+        peak_p_value = float(peak_p_candidates.min()) if peak_p_candidates.size > 0 else float('nan')
+
+        cluster_records.append({
+            'contrast': contrast_name,
+            'correction': correction_label,
+            'cluster_id': cluster_id,
+            'n_voxels': int(cluster_mask.sum()),
+            'cluster_volume_mm3': float(cluster_mask.sum() * voxel_volume),
+            'mean_delta_accuracy': mean_delta_value,
+            'peak_delta_accuracy': peak_delta_value,
+            'peak_t_value': peak_t_value,
+            'peak_p_value': peak_p_value,
+            'peak_x': float(peak_mm[0]),
+            'peak_y': float(peak_mm[1]),
+            'peak_z': float(peak_mm[2])
+        })
+
+    return filtered_mask, cluster_records
 
 
 SEARCHLIGHT_MASK_CACHE = BoundedLRUCache(max_items=8)
@@ -1944,13 +2098,25 @@ def perform_group_analysis(all_results, config):
             stats_df.to_csv(config.results_dir / "group_searchlight_mvpa_statistics.csv", index=False)
 
         # 创建组水平图并获取汇总信息
-        map_outputs, cluster_summary, cluster_summary_path = create_group_accuracy_maps(group_df, config)
+        (
+            map_outputs,
+            cluster_summary,
+            cluster_summary_path,
+            significance_summary,
+            significance_summary_path,
+        ) = create_group_accuracy_maps(group_df, config)
 
         # 创建可视化并获取生成的图像路径
-        main_viz_path, individual_viz_path = create_enhanced_visualizations(group_df, stats_df, config)
+        main_viz_path, individual_viz_path, significance_viz_path = create_enhanced_visualizations(
+            group_df,
+            stats_df,
+            config,
+            significance_summary=significance_summary,
+        )
         # 生成HTML报告
         main_viz_b64 = image_to_base64(main_viz_path) if main_viz_path else None
         individual_viz_b64 = image_to_base64(individual_viz_path) if individual_viz_path else None
+        significance_viz_b64 = image_to_base64(significance_viz_path) if significance_viz_path else None
         generate_html_report(
             group_df,
             stats_df,
@@ -1960,6 +2126,9 @@ def perform_group_analysis(all_results, config):
             map_outputs=map_outputs,
             cluster_df=cluster_summary,
             cluster_summary_path=cluster_summary_path,
+            significance_summary_df=significance_summary,
+            significance_summary_path=significance_summary_path,
+            significance_viz_b64=significance_viz_b64,
         )
 
         log(f"\n分析完成！结果保存在: {config.results_dir}", config)
@@ -2031,6 +2200,7 @@ def create_group_accuracy_maps(group_df, config):
 
     map_outputs = {}
     cluster_rows = []
+    significance_rows = []
 
     for contrast_name in group_df['contrast'].unique():
         contrast_data = group_df[group_df['contrast'] == contrast_name]
@@ -2068,23 +2238,69 @@ def create_group_accuracy_maps(group_df, config):
             continue
 
         try:
-            accuracy_data = np.stack([as_data_array(img) for img in accuracy_maps], axis=0)
-            chance_data = np.stack([as_data_array(img) for img in chance_maps], axis=0)
+            interpolation = getattr(config, 'group_interpolation', 'continuous')
+            reference_img = get_group_reference_image(config, accuracy_maps[0])
+
+            resampled_accuracy = [
+                resample_image_to_reference(img, reference_img, interpolation=interpolation)
+                for img in accuracy_maps
+            ]
+            resampled_chance = [
+                resample_image_to_reference(img, reference_img, interpolation=interpolation)
+                for img in chance_maps
+            ]
+
+            accuracy_data = np.stack([as_data_array(img) for img in resampled_accuracy], axis=0)
+            chance_data = np.stack([as_data_array(img) for img in resampled_chance], axis=0)
             delta_data = accuracy_data - chance_data
 
-            mean_accuracy_img = image.mean_img(accuracy_maps)
-            mean_chance_img = image.mean_img(chance_maps)
+            mean_accuracy_data = np.nanmean(accuracy_data, axis=0)
+            mean_chance_data = np.nanmean(chance_data, axis=0)
             mean_delta_data = np.nanmean(delta_data, axis=0)
 
-            mean_delta_img = image.new_img_like(accuracy_maps[0], mean_delta_data)
+            threshold = float(getattr(config, 'classification_significance_threshold', 0.5))
+            classification_mask = mean_accuracy_data > threshold
+            classification_voxel_count = int(np.sum(classification_mask))
+
+            if classification_voxel_count == 0:
+                log(
+                    f"跳过 {contrast_name}: 平均准确率超过 {threshold:.2f} 的体素为0，无法执行显著性分析",
+                    config,
+                )
+                continue
+
+            log(
+                f"{contrast_name} 平均准确率超过 {threshold:.2f} 的体素数: {classification_voxel_count}",
+                config,
+            )
+
+            mean_accuracy_img = image.new_img_like(reference_img, mean_accuracy_data)
+            mean_chance_img = image.new_img_like(reference_img, mean_chance_data)
+            mean_delta_img = image.new_img_like(reference_img, mean_delta_data)
 
             flat_delta = delta_data.reshape(delta_data.shape[0], -1)
-            t_vals, p_vals = stats.ttest_1samp(flat_delta, popmean=0.0, axis=0, nan_policy='omit')
+            mask_flat = classification_mask.reshape(-1)
+            masked_flat = flat_delta.copy()
+            masked_flat[:, ~mask_flat] = np.nan
+
+            t_vals, p_vals = stats.ttest_1samp(
+                masked_flat,
+                popmean=0.0,
+                axis=0,
+                nan_policy='omit',
+            )
             t_map_data = t_vals.reshape(mean_delta_data.shape)
             p_map_data = p_vals.reshape(mean_delta_data.shape)
 
-            significant_mask = (p_map_data < config.alpha_level) & (mean_delta_data > 0)
-            significant_mask = np.nan_to_num(significant_mask.astype(bool))
+            t_map_data = np.where(classification_mask, t_map_data, 0.0)
+            p_map_data = np.where(classification_mask, p_map_data, np.nan)
+
+            positive_effect_mask = (mean_delta_data > 0) & classification_mask
+            uncorrected_mask = (p_map_data < config.alpha_level) & positive_effect_mask
+            fdr_mask, fdr_threshold = compute_fdr_mask(p_map_data, config.alpha_level)
+            fdr_mask = fdr_mask & positive_effect_mask
+            fwe_mask, fwe_threshold = compute_fwe_mask(p_map_data, config.alpha_level)
+            fwe_mask = fwe_mask & positive_effect_mask
 
             slug = contrast_name.replace(' ', '_').replace('/', '-')
             accuracy_out = accuracy_dir / f"group_{slug}_mean_accuracy.nii.gz"
@@ -2092,85 +2308,132 @@ def create_group_accuracy_maps(group_df, config):
             delta_out = accuracy_dir / f"group_{slug}_mean_delta.nii.gz"
             t_out = stats_dir / f"group_{slug}_t_map.nii.gz"
             p_out = stats_dir / f"group_{slug}_p_map.nii.gz"
-            mask_out = stats_dir / f"group_{slug}_significant_mask.nii.gz"
-            thresh_out = stats_dir / f"group_{slug}_thresholded_delta.nii.gz"
+            threshold_label = f"{threshold:.2f}".replace('.', 'p')
+            classification_mask_out = stats_dir / f"group_{slug}_classification_gt_{threshold_label}.nii.gz"
 
-            structure = generate_binary_structure(3, 2)
-            labeled_map, n_clusters = label(significant_mask.astype(bool), structure=structure)
-            affine = accuracy_maps[0].affine
+            classification_mask_img = image.new_img_like(
+                reference_img,
+                classification_mask.astype(np.uint8),
+            )
+            classification_mask_img.to_filename(str(classification_mask_out))
+            log(
+                f"保存分类阈值掩模(>{threshold:.2f}): {classification_mask_out}",
+                config,
+            )
+
+            correction_masks = {
+                'uncorrected': {'mask': uncorrected_mask, 'threshold': config.alpha_level},
+                'fdr': {'mask': fdr_mask, 'threshold': fdr_threshold},
+                'fwe': {'mask': fwe_mask, 'threshold': fwe_threshold},
+            }
+
+            affine = reference_img.affine
             voxel_volume = float(abs(np.linalg.det(affine[:3, :3])))
 
-            cluster_records = []
-            filtered_mask = np.zeros_like(significant_mask, dtype=float)
+            correction_outputs = {}
 
-            for cluster_id in range(1, n_clusters + 1):
-                cluster_mask = labeled_map == cluster_id
-                if not np.any(cluster_mask):
-                    continue
+            for correction_label, info in correction_masks.items():
+                mask_data = np.nan_to_num(info['mask'].astype(bool))
+                filtered_mask, clusters = summarize_clusters(
+                    mask_data,
+                    mean_delta_data,
+                    t_map_data,
+                    p_map_data,
+                    affine,
+                    voxel_volume,
+                    config,
+                    contrast_name,
+                    correction_label,
+                )
 
-                if cluster_mask.sum() < getattr(config, 'min_region_size', 0):
-                    continue
+                mask_img = image.new_img_like(reference_img, filtered_mask)
+                thresh_delta = mean_delta_data * filtered_mask
+                thresholded_img = image.new_img_like(reference_img, thresh_delta)
 
-                filtered_mask[cluster_mask] = 1.0
+                mask_out = stats_dir / f"group_{slug}_significant_mask_{correction_label}.nii.gz"
+                thresh_out = stats_dir / f"group_{slug}_thresholded_delta_{correction_label}.nii.gz"
 
-                cluster_delta = mean_delta_data[cluster_mask]
-                cluster_t = t_map_data[cluster_mask]
-                cluster_t_clean = np.nan_to_num(cluster_t, nan=-np.inf)
-                peak_flat_index = int(np.argmax(cluster_t_clean))
-                peak_index = np.unravel_index(peak_flat_index, cluster_mask.shape)
-                peak_mm = nib.affines.apply_affine(affine, peak_index)
+                mask_img.to_filename(str(mask_out))
+                thresholded_img.to_filename(str(thresh_out))
 
-                peak_t_value = float(np.nanmax(cluster_t)) if np.any(np.isfinite(cluster_t)) else float('nan')
-                peak_delta_value = float(np.nanmax(cluster_delta)) if np.any(np.isfinite(cluster_delta)) else float('nan')
-                mean_delta_value = float(np.nanmean(cluster_delta)) if np.any(np.isfinite(cluster_delta)) else float('nan')
-                peak_p_value = float(p_map_data[peak_index]) if np.isfinite(p_map_data[peak_index]) else float('nan')
+                log(
+                    f"保存{correction_label.upper()}校正显著性掩模: {mask_out}",
+                    config
+                )
+                log(
+                    f"保存{correction_label.upper()}校正阈值化差值图: {thresh_out}",
+                    config
+                )
 
-                cluster_records.append({
+                cluster_csv = None
+                n_significant_voxels = int(np.sum(filtered_mask))
+                mean_significant_delta = (
+                    float(np.nanmean(mean_delta_data[filtered_mask.astype(bool)]))
+                    if n_significant_voxels > 0
+                    else float('nan')
+                )
+                peak_significant_accuracy = (
+                    float(np.nanmax(mean_accuracy_data[filtered_mask.astype(bool)]))
+                    if n_significant_voxels > 0
+                    else float('nan')
+                )
+                if clusters:
+                    cluster_df = pd.DataFrame(clusters).sort_values('peak_t_value', ascending=False)
+                    cluster_csv = stats_dir / f"group_{slug}_significant_clusters_{correction_label}.csv"
+                    cluster_df.to_csv(cluster_csv, index=False)
+                    cluster_rows.append(cluster_df)
+                    log(f"保存{correction_label.upper()}校正显著脑区表: {cluster_csv}", config)
+                else:
+                    log(f"{contrast_name} 在 {correction_label.upper()} 校正下未检测到显著脑区", config)
+
+                correction_outputs[correction_label] = {
+                    'mask_path': mask_out,
+                    'thresholded_delta_path': thresh_out,
+                    'clusters': clusters,
+                    'threshold': info['threshold'],
+                    'cluster_table': cluster_csv,
+                    'n_voxels': n_significant_voxels,
+                    'proportion_of_classification_voxels': (
+                        n_significant_voxels / classification_voxel_count
+                        if classification_voxel_count > 0 else 0.0
+                    ),
+                    'mean_significant_delta': mean_significant_delta,
+                    'peak_significant_accuracy': peak_significant_accuracy,
+                }
+
+                significance_rows.append({
                     'contrast': contrast_name,
-                    'cluster_id': cluster_id,
-                    'n_voxels': int(cluster_mask.sum()),
-                    'cluster_volume_mm3': float(cluster_mask.sum() * voxel_volume),
-                    'mean_delta_accuracy': mean_delta_value,
-                    'peak_delta_accuracy': peak_delta_value,
-                    'peak_t_value': peak_t_value,
-                    'peak_p_value': peak_p_value,
-                    'peak_x': float(peak_mm[0]),
-                    'peak_y': float(peak_mm[1]),
-                    'peak_z': float(peak_mm[2])
+                    'correction': correction_label,
+                    'classification_threshold': threshold,
+                    'n_voxels_above_threshold': classification_voxel_count,
+                    'n_significant_voxels': n_significant_voxels,
+                    'proportion_significant': (
+                        n_significant_voxels / classification_voxel_count
+                        if classification_voxel_count > 0 else 0.0
+                    ),
+                    'mean_significant_delta': mean_significant_delta,
+                    'peak_significant_accuracy': peak_significant_accuracy,
+                    'cluster_table': cluster_csv,
                 })
 
-            thresholded_delta_data = mean_delta_data * filtered_mask
-
-            t_map_img = image.new_img_like(accuracy_maps[0], t_map_data)
-            p_map_img = image.new_img_like(accuracy_maps[0], p_map_data)
-            significant_mask_img = image.new_img_like(accuracy_maps[0], filtered_mask)
-            thresholded_delta_img = image.new_img_like(accuracy_maps[0], thresholded_delta_data)
+            t_map_img = image.new_img_like(reference_img, t_map_data)
+            p_map_img = image.new_img_like(reference_img, p_map_data)
 
             mean_accuracy_img.to_filename(str(accuracy_out))
             mean_chance_img.to_filename(str(chance_out))
             mean_delta_img.to_filename(str(delta_out))
             t_map_img.to_filename(str(t_out))
             p_map_img.to_filename(str(p_out))
-            significant_mask_img.to_filename(str(mask_out))
-            thresholded_delta_img.to_filename(str(thresh_out))
 
             log(f"保存组水平平均准确率图: {accuracy_out}", config)
             log(f"保存组水平平均机会水平图: {chance_out}", config)
-            log(f"保存组水平平均差值图: {delta_out}", config)
+            log(f"保存组水平均差值图: {delta_out}", config)
             log(f"保存统计图: t图 {t_out}, p图 {p_out}", config)
-            log(f"保存显著性掩模图: {mask_out}", config)
-            log(f"保存阈值化差值图: {thresh_out}", config)
+            log(f"FDR 临界p值: {fdr_threshold if np.isfinite(fdr_threshold) else '无显著体素'}", config)
+            log(f"FWE (Bonferroni) 阈值: {fwe_threshold if np.isfinite(fwe_threshold) else '无显著体素'}", config)
 
-            cluster_df = pd.DataFrame(cluster_records)
-            cluster_csv = None
-            if not cluster_df.empty:
-                cluster_df = cluster_df.sort_values('peak_t_value', ascending=False)
-                cluster_csv = stats_dir / f"group_{slug}_significant_clusters.csv"
-                cluster_df.to_csv(cluster_csv, index=False)
-                cluster_rows.append(cluster_df)
-                log(f"保存显著脑区表: {cluster_csv}", config)
-            else:
-                log(f"{contrast_name} 未检测到显著脑区", config)
+            primary_correction = getattr(config, 'primary_correction', 'fdr')
+            primary_outputs = correction_outputs.get(primary_correction) or correction_outputs.get('uncorrected')
 
             map_outputs[contrast_name] = {
                 'mean_accuracy_map': accuracy_out,
@@ -2178,11 +2441,14 @@ def create_group_accuracy_maps(group_df, config):
                 'mean_delta_map': delta_out,
                 't_map': t_out,
                 'p_map': p_out,
-                'significant_mask': mask_out,
-                'thresholded_delta_map': thresh_out,
-                'cluster_table': cluster_csv,
+                'classification_mask': classification_mask_out,
+                'classification_threshold': threshold,
+                'n_voxels_above_threshold': classification_voxel_count,
+                'significant_mask': primary_outputs['mask_path'] if primary_outputs else None,
+                'thresholded_delta_map': primary_outputs['thresholded_delta_path'] if primary_outputs else None,
+                'cluster_table': primary_outputs['cluster_table'] if primary_outputs else None,
+                'corrections': correction_outputs,
             }
-
         except Exception as e:
             log(f"创建 {contrast_name} 组水平图失败: {str(e)}", config)
             continue
@@ -2194,7 +2460,14 @@ def create_group_accuracy_maps(group_df, config):
         cluster_summary.to_csv(summary_csv, index=False)
         log(f"保存显著脑区汇总表: {summary_csv}", config)
 
-    return map_outputs, cluster_summary, summary_csv
+    significance_summary = pd.DataFrame(significance_rows)
+    significance_summary_csv = None
+    if not significance_summary.empty:
+        significance_summary_csv = stats_dir / "group_significant_voxel_summary.csv"
+        significance_summary.to_csv(significance_summary_csv, index=False)
+        log(f"保存分类阈值显著性汇总表: {significance_summary_csv}", config)
+
+    return map_outputs, cluster_summary, summary_csv, significance_summary, significance_summary_csv
 
 
 # ============================================================================

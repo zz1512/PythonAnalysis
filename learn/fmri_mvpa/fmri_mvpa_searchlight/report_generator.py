@@ -64,6 +64,9 @@ def generate_html_report(
     map_outputs=None,
     cluster_df=None,
     cluster_summary_path=None,
+    significance_summary_df=None,
+    significance_summary_path=None,
+    significance_viz_b64=None,
 ):
     """
     生成Searchlight MVPA分析的HTML报告
@@ -77,6 +80,9 @@ def generate_html_report(
         map_outputs: 每个对比的全脑图路径信息
         cluster_df: 显著脑区的汇总DataFrame
         cluster_summary_path: 显著脑区汇总表路径
+        significance_summary_df: 分类阈值筛选后的显著体素汇总表
+        significance_summary_path: 分类阈值显著体素汇总表路径
+        significance_viz_b64: 分类阈值显著性图的base64编码
     
     Returns:
         Path: 生成的HTML报告文件路径
@@ -92,6 +98,16 @@ def generate_html_report(
         except ValueError:
             rel_summary = summary_path
         summary_file_html = f"<p>显著簇汇总表: <code>{rel_summary.as_posix()}</code></p>"
+
+    significance_section_html = generate_significant_voxel_table(significance_summary_df) if significance_summary_df is not None and not significance_summary_df.empty else "<p>没有体素在分类阈值以上达到统计显著。</p>"
+    significance_summary_file_html = ""
+    if significance_summary_path:
+        sig_summary_path = Path(significance_summary_path)
+        try:
+            rel_sig_summary = sig_summary_path.relative_to(config.results_dir)
+        except ValueError:
+            rel_sig_summary = sig_summary_path
+        significance_summary_file_html = f"<p>分类阈值显著性汇总表: <code>{rel_sig_summary.as_posix()}</code></p>"
 
     # 生成报告内容
     html_content = f"""
@@ -307,6 +323,16 @@ def generate_html_report(
             {cluster_section_html}
         </div>
 
+        <!-- 分类阈值显著性 -->
+        <div class="section">
+            <h2>🎯 分类阈值显著性汇总 (准确率 &gt; {getattr(config, 'classification_significance_threshold', 0.5):.2f})</h2>
+            <div class="visualization">
+                {generate_image_html(significance_viz_b64, "分类阈值显著性可视化")}
+            </div>
+            {significance_section_html}
+            {significance_summary_file_html}
+        </div>
+
         <!-- 组水平统计结果 -->
         <div class="section">
             <h2>🔬 组水平统计结果</h2>
@@ -467,6 +493,9 @@ def generate_map_outputs_section(map_outputs, config):
                     <th>平均差值图</th>
                     <th>t统计图</th>
                     <th>p值图</th>
+                    <th>分类阈值</th>
+                    <th>&gt;阈值体素数</th>
+                    <th>分类阈值掩模</th>
                     <th>显著性掩模</th>
                     <th>阈值化差值图</th>
                     <th>显著簇表</th>
@@ -476,6 +505,12 @@ def generate_map_outputs_section(map_outputs, config):
     """
 
     for contrast, outputs in sorted(map_outputs.items()):
+        threshold_value = outputs.get('classification_threshold')
+        if isinstance(threshold_value, (int, float)):
+            threshold_text = f"{threshold_value:.2f}"
+        else:
+            threshold_text = 'N/A'
+        voxel_count = int(outputs.get('n_voxels_above_threshold', 0))
         table_html += f"""
                 <tr>
                     <td><strong>{contrast}</strong></td>
@@ -484,6 +519,9 @@ def generate_map_outputs_section(map_outputs, config):
                     <td>{_format_path(outputs.get('mean_delta_map'))}</td>
                     <td>{_format_path(outputs.get('t_map'))}</td>
                     <td>{_format_path(outputs.get('p_map'))}</td>
+                    <td>{threshold_text}</td>
+                    <td>{voxel_count}</td>
+                    <td>{_format_path(outputs.get('classification_mask'))}</td>
                     <td>{_format_path(outputs.get('significant_mask'))}</td>
                     <td>{_format_path(outputs.get('thresholded_delta_map'))}</td>
                     <td>{_format_path(outputs.get('cluster_table'))}</td>
@@ -536,6 +574,70 @@ def generate_cluster_table(cluster_df):
                     <td>{row['peak_t_value']:.3f}</td>
                     <td>{row['peak_p_value']:.4f}</td>
                     <td>({row['peak_x']:.1f}, {row['peak_y']:.1f}, {row['peak_z']:.1f})</td>
+                </tr>
+        """
+
+    table_html += """
+            </tbody>
+        </table>
+    </div>
+        """
+
+    return table_html
+
+
+def generate_significant_voxel_table(summary_df):
+    """生成分类阈值显著体素汇总表"""
+
+    if summary_df is None or summary_df.empty:
+        return "<p>没有体素在分类阈值以上达到统计显著。</p>"
+
+    display_df = summary_df.copy()
+    display_df['proportion_percent'] = display_df['proportion_significant'] * 100.0
+
+    table_html = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>对比条件</th>
+                    <th>校正方式</th>
+                    <th>分类阈值</th>
+                    <th>&gt;阈值体素数</th>
+                    <th>显著体素数</th>
+                    <th>显著体素占比</th>
+                    <th>显著体素平均Δ准确</th>
+                    <th>显著体素峰值准确率</th>
+                    <th>显著簇表</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+
+    for _, row in display_df.iterrows():
+        row_class = 'significant' if row['n_significant_voxels'] > 0 else 'not-significant'
+        cluster_table = row.get('cluster_table')
+        if isinstance(cluster_table, Path):
+            cluster_text = cluster_table.as_posix()
+        elif isinstance(cluster_table, str) and cluster_table:
+            cluster_text = cluster_table
+        else:
+            cluster_text = '无'
+        mean_delta = row.get('mean_significant_delta')
+        mean_delta_text = f"{mean_delta:.4f}" if pd.notna(mean_delta) else 'NaN'
+        peak_accuracy = row.get('peak_significant_accuracy')
+        peak_accuracy_text = f"{peak_accuracy:.4f}" if pd.notna(peak_accuracy) else 'NaN'
+        table_html += f"""
+                <tr class="{row_class}">
+                    <td>{row['contrast']}</td>
+                    <td>{row['correction'].upper()}</td>
+                    <td>{row['classification_threshold']:.2f}</td>
+                    <td>{int(row['n_voxels_above_threshold'])}</td>
+                    <td>{int(row['n_significant_voxels'])}</td>
+                    <td>{row['proportion_percent']:.2f}%</td>
+                    <td>{mean_delta_text}</td>
+                    <td>{peak_accuracy_text}</td>
+                    <td>{cluster_text}</td>
                 </tr>
         """
 

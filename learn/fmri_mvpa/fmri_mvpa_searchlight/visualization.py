@@ -14,18 +14,53 @@ def log(message, config):
     """简单的日志函数"""
     print(f"[LOG] {message}")
 
-def setup_chinese_fonts():
-    """设置中文字体支持"""
-    try:
-        # 尝试设置中文字体
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Helvetica']
-        plt.rcParams['axes.unicode_minus'] = False
-        print("中文字体设置成功")
-    except Exception as e:
-        print(f"中文字体设置失败，使用默认字体: {e}")
-        plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+def setup_chinese_fonts(config=None):
+    """设置中文字体支持，优先使用配置文件提供的字体。"""
 
-def create_enhanced_visualizations(group_df, stats_df, config):
+    custom_font = None
+    if config is not None:
+        custom_path = getattr(config, 'chinese_font_path', None)
+        if custom_path:
+            font_path = Path(custom_path)
+            if font_path.exists():
+                try:
+                    fm.fontManager.addfont(str(font_path))
+                    custom_font = fm.FontProperties(fname=str(font_path)).get_name()
+                    plt.rcParams['font.sans-serif'] = [custom_font] + list(plt.rcParams.get('font.sans-serif', []))
+                    plt.rcParams['font.family'] = ['sans-serif']
+                    plt.rcParams['axes.unicode_minus'] = False
+                    print(f"使用自定义中文字体: {custom_font}")
+                    return custom_font
+                except Exception as e:
+                    print(f"加载自定义中文字体失败 {font_path}: {e}")
+
+    font_candidates = [
+        'SimHei',
+        'Microsoft YaHei',
+        'PingFang SC',
+        'Hiragino Sans GB',
+        'WenQuanYi Micro Hei',
+        'Noto Sans CJK SC',
+        'Arial Unicode MS',
+        'DejaVu Sans',
+        'sans-serif'
+    ]
+
+    available_fonts = {f.name for f in fm.fontManager.ttflist}
+
+    for font_name in font_candidates:
+        if font_name == 'sans-serif' or font_name in available_fonts:
+            plt.rcParams['font.sans-serif'] = [font_name] + list(plt.rcParams.get('font.sans-serif', []))
+            plt.rcParams['font.family'] = ['sans-serif']
+            plt.rcParams['axes.unicode_minus'] = False
+            print(f"使用字体: {font_name}")
+            return font_name
+
+    print("警告：未找到合适的中文字体，图表中的中文可能显示异常")
+    plt.rcParams['axes.unicode_minus'] = False
+    return None
+
+def create_enhanced_visualizations(group_df, stats_df, config, significance_summary=None):
     """
     创建增强的Searchlight MVPA可视化图表
     
@@ -39,7 +74,7 @@ def create_enhanced_visualizations(group_df, stats_df, config):
     """
     
     # 设置中文字体
-    setup_chinese_fonts()
+    setup_chinese_fonts(config)
     
     # 设置绘图风格
     plt.style.use('default')
@@ -47,11 +82,14 @@ def create_enhanced_visualizations(group_df, stats_df, config):
     
     # 创建主要可视化
     main_viz_path = create_main_visualization(group_df, stats_df, config)
-    
+
     # 创建个体结果可视化
     individual_viz_path = create_individual_visualization(group_df, config)
-    
-    return main_viz_path, individual_viz_path
+
+    # 创建显著体素汇总可视化
+    significance_viz_path = create_significant_voxel_visualization(significance_summary, config)
+
+    return main_viz_path, individual_viz_path, significance_viz_path
 
 def create_main_visualization(group_df, stats_df, config):
     """
@@ -409,6 +447,86 @@ def create_significance_summary(stats_df, ax):
     except Exception as e:
         ax.text(0.5, 0.5, f'绘图错误: {str(e)}', ha='center', va='center', transform=ax.transAxes)
 
+def create_significant_voxel_visualization(significance_summary, config):
+    """创建显著体素的统计可视化"""
+
+    if significance_summary is None:
+        log("显著性汇总为空，跳过显著性可视化", config)
+        return None
+
+    try:
+        summary_df = pd.DataFrame(significance_summary).copy()
+        if summary_df.empty:
+            log("显著性汇总数据为空，跳过显著性可视化", config)
+            return None
+
+        setup_chinese_fonts(config)
+
+        # 构建透视表用于绘图
+        count_pivot = summary_df.pivot_table(
+            index='contrast',
+            columns='correction',
+            values='n_significant_voxels',
+            aggfunc='first'
+        ).fillna(0)
+
+        proportion_pivot = summary_df.pivot_table(
+            index='contrast',
+            columns='correction',
+            values='proportion_significant',
+            aggfunc='first'
+        ).fillna(0) * 100.0
+
+        threshold_info = summary_df.groupby('contrast')[
+            ['classification_threshold', 'n_voxels_above_threshold']
+        ].first()
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        count_pivot.plot(kind='bar', ax=axes[0], alpha=0.85, edgecolor='black')
+        axes[0].set_title('显著体素数量 (准确率 > 阈值)', fontsize=12, fontweight='bold')
+        axes[0].set_xlabel('对比条件', fontsize=10)
+        axes[0].set_ylabel('显著体素数', fontsize=10)
+        axes[0].grid(True, axis='y', alpha=0.3)
+        axes[0].legend(title='校正方式')
+
+        proportion_pivot.plot(kind='bar', ax=axes[1], alpha=0.85, edgecolor='black')
+        axes[1].set_title('显著体素占比 (相对于>阈值体素)', fontsize=12, fontweight='bold')
+        axes[1].set_xlabel('对比条件', fontsize=10)
+        axes[1].set_ylabel('占比 (%)', fontsize=10)
+        axes[1].grid(True, axis='y', alpha=0.3)
+        axes[1].legend(title='校正方式')
+
+        # 在第二个子图添加阈值信息表
+        table_data = [
+            [contrast,
+             f"> {row['classification_threshold']:.2f}",
+             int(row['n_voxels_above_threshold'])]
+            for contrast, row in threshold_info.iterrows()
+        ]
+        table = axes[1].table(
+            cellText=table_data,
+            colLabels=['对比条件', '分类阈值', '>阈值体素数'],
+            loc='bottom',
+            bbox=[0.0, -0.55, 1.0, 0.45]
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+
+        plt.tight_layout(rect=[0, 0.15, 1, 1])
+
+        viz_path = config.results_dir / "searchlight_significance_visualization.png"
+        plt.savefig(viz_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+
+        log(f"显著性汇总可视化已保存: {viz_path}", config)
+        return viz_path
+
+    except Exception as e:
+        print(f"创建显著性可视化失败: {str(e)}")
+        plt.close('all')
+        return None
+
 def create_individual_contrast_plot(contrast_data, ax, contrast_name):
     """为单个对比条件创建个体结果图"""
     try:
@@ -466,7 +584,7 @@ def create_individual_searchlight_plots(group_df, config):
         print("个体数据为空，跳过个体searchlight图")
         return []
     
-    setup_chinese_fonts()
+    setup_chinese_fonts(config)
     plot_paths = []
     
     try:
