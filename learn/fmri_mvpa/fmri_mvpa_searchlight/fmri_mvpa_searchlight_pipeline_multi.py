@@ -24,12 +24,10 @@ from nilearn.decoding import SearchLight
 from nilearn.maskers import NiftiMasker
 from nilearn import image
 from sklearn.svm import SVC
-from sklearn.feature_selection import VarianceThreshold
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from report_generator import generate_html_report, image_to_base64
-from sklearn.impute import SimpleImputer
 from visualization import create_enhanced_visualizations
 
 
@@ -79,8 +77,16 @@ COMMON_MVPA_ANALYSIS_PARAMS = OrderedDict([
     (
         "svm_params",
         CommonParamDefinition(
-            default={"random_state": 42},
-            description="Searchlight分类器的核心SVM配置，默认仅固定随机种子以确保可重复。",
+            default={
+                "C": 1.0,
+                "kernel": "linear",
+                "class_weight": "balanced",
+                "random_state": 42,
+            },
+            description=(
+                "Searchlight分类器使用线性SVM并进行权重平衡，"\
+                "符合心理学MVPA常用的线性判别设定。"
+            ),
         ),
     ),
     (
@@ -311,6 +317,18 @@ class MVPAConfig:
             overrides=overrides,
             log_messages=False
         )
+
+        # 与经典心理学MVPA分析一致的关键配置
+        self.cv_strategy = overrides.get(
+            'cv_strategy',
+            'leave-one-run-out (按run)'
+        )
+        self.balance_trials = overrides.get('balance_trials', True)
+        self.balance_random_state = overrides.get(
+            'balance_random_state',
+            self.cv_random_state
+        )
+        self.chance_level = overrides.get('chance_level', 0.5)
 
         # 缓存容量控制
         self.mask_cache_max_items = overrides.get('mask_cache_max_items', 8)
@@ -1179,14 +1197,22 @@ def load_multi_run_lss_data(subject, runs, config):
 # Searchlight核心功能 - 优化版本
 # ============================================================================
 
-def build_classification_pipeline(config, n_features):
+def build_classification_pipeline(config, n_features=None):
     """构建Searchlight分类pipeline"""
+    svm_params = dict(getattr(config, 'svm_params', {}))
+    # 确保符合心理学界常用的线性SVM设定
+    svm_params.setdefault('kernel', 'linear')
+    svm_params.setdefault('C', 1.0)
+    svm_params.setdefault('class_weight', 'balanced')
+
     steps = [
-        ('imputer', SimpleImputer(strategy='mean')),  # 处理可能的缺失值
-        ('variance_filter', VarianceThreshold(threshold=0.0)),  # 只移除零方差特征
-        ('scaler', StandardScaler()),  # 标准化
-        ('classifier', SVC(**config.svm_params))  # 分类器
+        ('scaler', StandardScaler()),  # Searchlight球体内逐特征z分数标准化
+        ('classifier', SVC(**svm_params))
     ]
+
+    if getattr(config, 'debug_mode', False):
+        log(f"构建线性SVM pipeline: {svm_params}", config)
+
     return Pipeline(steps)
 
 
@@ -1218,7 +1244,7 @@ def check_system_resources(config):
 def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
     """内部函数，用于拟合SearchLight估计器 - 增强错误处理"""
     try:
-        classifier = SVC(**config.svm_params)
+        estimator = build_classification_pipeline(config, n_features=None)
 
         if beta_images is None:
             log("错误: 未提供有效的beta数据", config)
@@ -1236,7 +1262,7 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
         searchlight = SearchLight(
             mask_img=process_mask_path,
             radius=config.searchlight_radius,
-            estimator=classifier,
+            estimator=estimator,
             cv=cv,
             scoring='accuracy',
             n_jobs=config.n_jobs,
@@ -1583,11 +1609,14 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
 
     if condition_col not in trial_info.columns:
         log(f"错误: 未找到条件列 '{condition_col}'", config)
-        return None, None, None
+        return None, None, None, None
 
     # 筛选指定条件的trial
     cond1_trials = trial_info[trial_info[condition_col] == cond1]
     cond2_trials = trial_info[trial_info[condition_col] == cond2]
+
+    cond1_total = len(cond1_trials)
+    cond2_total = len(cond2_trials)
 
     log(f"条件 '{cond1}': {len(cond1_trials)} 个trial", config)
     log(f"条件 '{cond2}': {len(cond2_trials)} 个trial", config)
@@ -1595,10 +1624,60 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     # 检查是否有足够的trial
     if len(cond1_trials) < 5 or len(cond2_trials) < 5:
         log(f"警告: 条件样本不足 (需要至少5个), {cond1}: {len(cond1_trials)}, {cond2}: {len(cond2_trials)}", config)
-        return None, None, None
+        return None, None, None, None
 
-    # 合并trial信息
-    selected_trials = pd.concat([cond1_trials, cond2_trials], ignore_index=True)
+    trial_summary = {
+        'n_trials_cond1_total': cond1_total,
+        'n_trials_cond2_total': cond2_total,
+        'balancing_applied': False,
+        'balance_strategy': 'none'
+    }
+
+    cond1_selected = cond1_trials
+    cond2_selected = cond2_trials
+
+    if getattr(config, 'balance_trials', False):
+        min_count = min(cond1_total, cond2_total)
+        if min_count <= 0:
+            log(f"警告: 试图进行trial平衡但条件存在空trial集合", config)
+            return None, None, None, None
+
+        if cond1_total != cond2_total:
+            rng = np.random.default_rng(getattr(config, 'balance_random_state', None))
+
+            def sample_trials(df, n):
+                if len(df) <= n:
+                    return df
+                indices = df.index.to_numpy()
+                selected = rng.choice(indices, size=n, replace=False)
+                return df.loc[np.sort(selected)]
+
+            cond1_selected = sample_trials(cond1_trials, min_count)
+            cond2_selected = sample_trials(cond2_trials, min_count)
+
+            trial_summary['balancing_applied'] = True
+            trial_summary['balance_strategy'] = 'downsample-match'
+            log(
+                f"  启用trial平衡: {cond1}->{len(cond1_selected)} / {cond1_total}, "
+                f"{cond2}->{len(cond2_selected)} / {cond2_total}",
+                config
+            )
+        else:
+            log("  trial数量已平衡，使用全部trial", config)
+    else:
+        if cond1_total != cond2_total:
+            log(
+                f"  未启用trial平衡: {cond1}={cond1_total}, {cond2}={cond2_total}",
+                config
+            )
+
+    # 合并trial信息并按照时间顺序排序
+    selected_trials = pd.concat([cond1_selected, cond2_selected], axis=0)
+    selected_trials = selected_trials.sort_values('combined_trial_index').reset_index(drop=True)
+    selected_trials['selected_for_classification'] = True
+
+    trial_summary['n_trials_cond1_used'] = int((selected_trials[condition_col] == cond1).sum())
+    trial_summary['n_trials_cond2_used'] = int((selected_trials[condition_col] == cond2).sum())
 
     # 获取对应的beta图像
     selected_indices = selected_trials['combined_trial_index'].values
@@ -1607,19 +1686,22 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     if np.any(selected_indices >= len(beta_images)) or np.any(selected_indices < 0):
         log(f"错误: 索引越界，索引范围: {selected_indices.min()}-{selected_indices.max()}, beta文件数: {len(beta_images)}",
             config)
-        return None, None, None
+        return None, None, None, None
 
     selected_betas = [beta_images[i] for i in selected_indices]
 
     # 创建标签 (0: cond1, 1: cond2)
     labels = np.concatenate([
-        np.zeros(len(cond1_trials), dtype=int),
-        np.ones(len(cond2_trials), dtype=int)
+        np.zeros(len(cond1_selected), dtype=int),
+        np.ones(len(cond2_selected), dtype=int)
     ])
 
-    log(f"准备分类数据完成: {len(selected_betas)} 个trial, 标签分布: {np.bincount(labels)}", config)
+    log(
+        f"准备分类数据完成: {len(selected_betas)} 个trial, 标签分布: {np.bincount(labels)}",
+        config
+    )
 
-    return selected_betas, labels, selected_trials
+    return selected_betas, labels, selected_trials, trial_summary
 
 
 # ============================================================================
@@ -1628,7 +1710,8 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
 
 def process_searchlight_results_batch(beta_images, labels, process_mask_path, config,
                                       searchlight, subject_id, contrast_name,
-                                      groups=None, trial_details=None, cond1=None, cond2=None):
+                                      groups=None, trial_details=None, cond1=None, cond2=None,
+                                      trial_summary=None):
     """批量处理Searchlight结果 - 减少重复计算"""
 
     # 预先获取必要数据
@@ -1653,6 +1736,19 @@ def process_searchlight_results_batch(beta_images, labels, process_mask_path, co
         if condition_col in trial_details.columns:
             subject_results['n_trials_cond1'] = int((trial_details[condition_col] == cond1).sum())
             subject_results['n_trials_cond2'] = int((trial_details[condition_col] == cond2).sum())
+
+    if subject_results:
+        subject_results['chance_level'] = getattr(config, 'chance_level', 0.5)
+
+        if trial_summary:
+            subject_results.update({
+                'n_trials_cond1_total': trial_summary.get('n_trials_cond1_total'),
+                'n_trials_cond2_total': trial_summary.get('n_trials_cond2_total'),
+                'n_trials_cond1_used': trial_summary.get('n_trials_cond1_used'),
+                'n_trials_cond2_used': trial_summary.get('n_trials_cond2_used'),
+                'trial_balanced': trial_summary.get('balancing_applied', False),
+                'trial_balance_strategy': trial_summary.get('balance_strategy'),
+            })
 
     return chance_img, chance_std_img, chance_info, subject_results
 
@@ -1714,11 +1810,11 @@ def process_single_subject(subject_id, config, process_mask_path):
             log(f"  分析对比: {contrast_name} ({cond1} vs {cond2})", config)
 
             # 准备分类数据
-            selected_betas, labels, trial_details = prepare_classification_data(
+            selected_betas, labels, trial_details, trial_summary = prepare_classification_data(
                 trial_info, beta_images, cond1, cond2, config
             )
 
-            if selected_betas is None:
+            if selected_betas is None or trial_summary is None:
                 log(f"跳过 {subject_id} {cond1} vs {cond2}: 数据准备失败", config)
                 continue
 
@@ -1746,7 +1842,7 @@ def process_single_subject(subject_id, config, process_mask_path):
 
             result = process_searchlight_for_subject(
                 searchlight, selected_betas, labels, process_mask_path, config,
-                subject_id, contrast_name, groups, trial_details, cond1, cond2
+                subject_id, contrast_name, groups, trial_details, cond1, cond2, trial_summary
             )
 
             if result:
@@ -1766,7 +1862,8 @@ def process_single_subject(subject_id, config, process_mask_path):
 
 
 def process_searchlight_for_subject(searchlight, beta_images, labels, process_mask_path, config,
-                                    subject_id, contrast_name, groups, trial_details, cond1, cond2):
+                                    subject_id, contrast_name, groups, trial_details,
+                                    cond1, cond2, trial_summary):
     """处理单个被试的searchlight结果 - 修复版本"""
 
     try:
@@ -1806,7 +1903,7 @@ def process_searchlight_for_subject(searchlight, beta_images, labels, process_ma
         chance_img, chance_std_img, chance_info, subject_results = process_searchlight_results_batch(
             beta_images, labels, process_mask_path, config, searchlight,
             subject_id, contrast_name, groups=groups, trial_details=trial_details,
-            cond1=cond1, cond2=cond2
+            cond1=cond1, cond2=cond2, trial_summary=trial_summary
         )
 
         if subject_results:
@@ -1838,15 +1935,8 @@ def process_single_subject_wrapper(task_params):
         subject_id = task_params['subject_id']
         process_mask_path = task_params['process_mask_path']
 
-        # 设置子进程日志（避免日志冲突）
-        log_file = config.results_dir / "logs" / f"subject_{subject_id}.log"
-        file_handler, console_handler = _create_logging_handlers(log_file)
-        logging.basicConfig(
-            level=config.log_level,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[file_handler, console_handler],
-            force=True,
-        )
+        # 设置子进程日志，直接复用主分析日志
+        config._setup_logging()
 
         return process_single_subject(subject_id, config, process_mask_path)
 
@@ -2085,7 +2175,24 @@ def perform_group_analysis(all_results, config):
     if all_results:
         log(f"\n开始组水平统计分析，共 {len(all_results)} 个结果", config)
         group_df = pd.DataFrame(all_results)
-        group_df.to_csv(config.results_dir / "individual_searchlight_mvpa_results.csv", index=False)
+
+        # 仅保留心理学论文中最常报告的核心指标用于CSV输出
+        essential_individual_cols = [
+            'subject',
+            'contrast',
+            'chance_level',
+            'n_trials_cond1_used',
+            'n_trials_cond2_used',
+            'trial_balanced',
+        ]
+        individual_csv_cols = [
+            col for col in essential_individual_cols if col in group_df.columns
+        ]
+        individual_csv = group_df[individual_csv_cols].copy() if individual_csv_cols else group_df.copy()
+        individual_csv.to_csv(
+            config.results_dir / "individual_searchlight_mvpa_results.csv",
+            index=False,
+        )
 
         # 验证必要的字段存在
         if 'accuracy' not in group_df.columns:
@@ -2095,7 +2202,25 @@ def perform_group_analysis(all_results, config):
         # 执行组水平统计分析
         stats_df = perform_group_statistics_corrected(group_df, config)
         if stats_df is not None:
-            stats_df.to_csv(config.results_dir / "group_searchlight_mvpa_statistics.csv", index=False)
+            essential_group_cols = [
+                'contrast',
+                'n_subjects',
+                't_statistic',
+                't_pvalue',
+                'permutation_pvalue',
+                'cohens_d',
+                'significant_t_test',
+                'significant_permutation',
+                'n_group_permutations',
+            ]
+            stats_csv_cols = [
+                col for col in essential_group_cols if col in stats_df.columns
+            ]
+            stats_csv = stats_df[stats_csv_cols].copy() if stats_csv_cols else stats_df.copy()
+            stats_csv.to_csv(
+                config.results_dir / "group_searchlight_mvpa_statistics.csv",
+                index=False,
+            )
 
         # 创建组水平图并获取汇总信息
         (
@@ -2199,8 +2324,11 @@ def create_group_accuracy_maps(group_df, config):
     stats_dir.mkdir(parents=True, exist_ok=True)
 
     map_outputs = {}
-    cluster_rows = []
     significance_rows = []
+    primary_correction = getattr(config, 'primary_correction', 'fdr')
+    primary_cluster_frames = []
+    contrasts_with_primary_clusters = set()
+    primary_cluster_csv = None
 
     for contrast_name in group_df['contrast'].unique():
         contrast_data = group_df[group_df['contrast'] == contrast_name]
@@ -2274,9 +2402,7 @@ def create_group_accuracy_maps(group_df, config):
                 config,
             )
 
-            mean_accuracy_img = image.new_img_like(reference_img, mean_accuracy_data)
-            mean_chance_img = image.new_img_like(reference_img, mean_chance_data)
-            mean_delta_img = image.new_img_like(reference_img, mean_delta_data)
+            activation_img = image.new_img_like(reference_img, mean_delta_data)
 
             flat_delta = delta_data.reshape(delta_data.shape[0], -1)
             mask_flat = classification_mask.reshape(-1)
@@ -2303,9 +2429,7 @@ def create_group_accuracy_maps(group_df, config):
             fwe_mask = fwe_mask & positive_effect_mask
 
             slug = contrast_name.replace(' ', '_').replace('/', '-')
-            accuracy_out = accuracy_dir / f"group_{slug}_mean_accuracy.nii.gz"
-            chance_out = accuracy_dir / f"group_{slug}_mean_chance.nii.gz"
-            delta_out = accuracy_dir / f"group_{slug}_mean_delta.nii.gz"
+            activation_out = accuracy_dir / f"group_{slug}_activation_map.nii.gz"
             t_out = stats_dir / f"group_{slug}_t_map.nii.gz"
             p_out = stats_dir / f"group_{slug}_p_map.nii.gz"
             threshold_label = f"{threshold:.2f}".replace('.', 'p')
@@ -2379,10 +2503,40 @@ def create_group_accuracy_maps(group_df, config):
                 )
                 if clusters:
                     cluster_df = pd.DataFrame(clusters).sort_values('peak_t_value', ascending=False)
-                    cluster_csv = stats_dir / f"group_{slug}_significant_clusters_{correction_label}.csv"
-                    cluster_df.to_csv(cluster_csv, index=False)
-                    cluster_rows.append(cluster_df)
-                    log(f"保存{correction_label.upper()}校正显著脑区表: {cluster_csv}", config)
+                    if correction_label == primary_correction:
+                        essential_cluster_cols = [
+                            'contrast',
+                            'correction',
+                            'cluster_id',
+                            'n_voxels',
+                            'cluster_volume_mm3',
+                            'mean_delta_accuracy',
+                            'peak_delta_accuracy',
+                            'peak_t_value',
+                            'peak_p_value',
+                            'peak_x',
+                            'peak_y',
+                            'peak_z',
+                        ]
+                        filtered_cluster_cols = [
+                            col for col in essential_cluster_cols if col in cluster_df.columns
+                        ]
+                        cluster_subset = (
+                            cluster_df[filtered_cluster_cols].copy()
+                            if filtered_cluster_cols
+                            else cluster_df.copy()
+                        )
+                        primary_cluster_frames.append(cluster_subset)
+                        contrasts_with_primary_clusters.add(contrast_name)
+                        log(
+                            f"记录{correction_label.upper()}校正显著脑区核心指标: {len(cluster_subset)} 个簇",
+                            config,
+                        )
+                    else:
+                        log(
+                            f"{contrast_name} 在 {correction_label.upper()} 校正下检测到显著脑区，结果仅用于报告展示，不单独导出CSV",
+                            config,
+                        )
                 else:
                     log(f"{contrast_name} 在 {correction_label.upper()} 校正下未检测到显著脑区", config)
 
@@ -2419,15 +2573,11 @@ def create_group_accuracy_maps(group_df, config):
             t_map_img = image.new_img_like(reference_img, t_map_data)
             p_map_img = image.new_img_like(reference_img, p_map_data)
 
-            mean_accuracy_img.to_filename(str(accuracy_out))
-            mean_chance_img.to_filename(str(chance_out))
-            mean_delta_img.to_filename(str(delta_out))
+            activation_img.to_filename(str(activation_out))
             t_map_img.to_filename(str(t_out))
             p_map_img.to_filename(str(p_out))
 
-            log(f"保存组水平平均准确率图: {accuracy_out}", config)
-            log(f"保存组水平平均机会水平图: {chance_out}", config)
-            log(f"保存组水平均差值图: {delta_out}", config)
+            log(f"保存组水平激活图(Δ准确率): {activation_out}", config)
             log(f"保存统计图: t图 {t_out}, p图 {p_out}", config)
             log(f"FDR 临界p值: {fdr_threshold if np.isfinite(fdr_threshold) else '无显著体素'}", config)
             log(f"FWE (Bonferroni) 阈值: {fwe_threshold if np.isfinite(fwe_threshold) else '无显著体素'}", config)
@@ -2436,9 +2586,7 @@ def create_group_accuracy_maps(group_df, config):
             primary_outputs = correction_outputs.get(primary_correction) or correction_outputs.get('uncorrected')
 
             map_outputs[contrast_name] = {
-                'mean_accuracy_map': accuracy_out,
-                'mean_chance_map': chance_out,
-                'mean_delta_map': delta_out,
+                'activation_map': activation_out,
                 't_map': t_out,
                 'p_map': p_out,
                 'classification_mask': classification_mask_out,
@@ -2453,21 +2601,40 @@ def create_group_accuracy_maps(group_df, config):
             log(f"创建 {contrast_name} 组水平图失败: {str(e)}", config)
             continue
 
-    cluster_summary = pd.concat(cluster_rows, ignore_index=True) if cluster_rows else pd.DataFrame()
-    summary_csv = None
-    if not cluster_summary.empty:
-        summary_csv = stats_dir / "group_significant_clusters_summary.csv"
-        cluster_summary.to_csv(summary_csv, index=False)
-        log(f"保存显著脑区汇总表: {summary_csv}", config)
+    primary_cluster_df = (
+        pd.concat(primary_cluster_frames, ignore_index=True)
+        if primary_cluster_frames
+        else pd.DataFrame()
+    )
+    if not primary_cluster_df.empty:
+        primary_cluster_csv = stats_dir / "group_primary_significant_clusters.csv"
+        primary_cluster_df.to_csv(primary_cluster_csv, index=False)
+        log(f"保存主要校正显著脑区表: {primary_cluster_csv}", config)
+
+        for contrast, outputs in map_outputs.items():
+            if contrast in contrasts_with_primary_clusters:
+                outputs['cluster_table'] = primary_cluster_csv
+                corrections = outputs.get('corrections') or {}
+                if primary_correction in corrections:
+                    corrections[primary_correction]['cluster_table'] = primary_cluster_csv
+
+        for row in significance_rows:
+            if (
+                row.get('contrast') in contrasts_with_primary_clusters
+                and row.get('correction') == primary_correction
+            ):
+                row['cluster_table'] = primary_cluster_csv
 
     significance_summary = pd.DataFrame(significance_rows)
     significance_summary_csv = None
-    if not significance_summary.empty:
-        significance_summary_csv = stats_dir / "group_significant_voxel_summary.csv"
-        significance_summary.to_csv(significance_summary_csv, index=False)
-        log(f"保存分类阈值显著性汇总表: {significance_summary_csv}", config)
 
-    return map_outputs, cluster_summary, summary_csv, significance_summary, significance_summary_csv
+    return (
+        map_outputs,
+        primary_cluster_df,
+        primary_cluster_csv,
+        significance_summary,
+        significance_summary_csv,
+    )
 
 
 # ============================================================================
