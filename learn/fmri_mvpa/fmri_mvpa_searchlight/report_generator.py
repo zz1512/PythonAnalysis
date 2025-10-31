@@ -42,7 +42,7 @@ def image_to_base64(image_path):
 def generate_image_html(image_b64, alt_text):
     """
     生成图片HTML代码，处理加载失败的情况
-    
+
     Args:
         image_b64: base64编码的图片数据
         alt_text: 图片的alt文本
@@ -54,6 +54,74 @@ def generate_image_html(image_b64, alt_text):
         return f'<img src="data:image/png;base64,{image_b64}" alt="{alt_text}" style="max-width: 100%; height: auto; margin: 10px 0;">'
     else:
         return f'<div class="image-placeholder" style="background-color: #f0f0f0; padding: 20px; text-align: center; margin: 10px 0; border: 1px dashed #ccc;">图片加载失败: {alt_text}</div>'
+
+
+def describe_cross_validation(config):
+    """根据配置对象生成交叉验证描述。"""
+
+    strategy = getattr(config, 'cv_strategy', None)
+    if strategy:
+        return str(strategy)
+
+    cv_folds = getattr(config, 'cv_folds', None)
+    if cv_folds:
+        return f"{cv_folds}-fold StratifiedKFold"
+
+    return "未指定"
+
+
+def describe_classifier(config):
+    """生成分类器描述。"""
+
+    params = getattr(config, 'svm_params', {}) or {}
+    kernel = params.get('kernel', 'linear')
+    c_val = params.get('C', '1.0')
+    class_weight = params.get('class_weight', 'balanced')
+
+    if kernel == 'linear':
+        return f"线性SVM (C={c_val}, class_weight={class_weight})"
+
+    return f"SVM (kernel={kernel}, C={c_val})"
+
+
+def generate_methodology_section(config):
+    """生成方法概述部分。"""
+
+    chance_level = getattr(config, 'chance_level', 0.5)
+    balance_enabled = getattr(config, 'balance_trials', False)
+    balance_text = (
+        "在每个条件内随机下采样至相同trial数，控制类别先验。"
+        if balance_enabled
+        else "使用全部可用trial，保留原始分布。"
+    )
+
+    permutation_strategy = getattr(config, 'permutation_strategy', 'analytic')
+    within_perm = getattr(config, 'within_subject_permutations', 'N/A')
+
+    items = [
+        f"Searchlight半径 {getattr(config, 'searchlight_radius', 'N/A')} 体素，分析范围由 {getattr(config, 'process_mask', 'N/A')} 限定。",
+        f"分类器: {describe_classifier(config)}，每个球体内特征进行z分数标准化。",
+        f"交叉验证: {describe_cross_validation(config)}。",
+        f"样本平衡: {'已启用' if balance_enabled else '未启用'}，{balance_text}",
+        (
+            f"机会水平设置为 {chance_level:.2f}，"\
+            "组水平对准确率-机会值差异执行单样本t检验与符号翻转置换。"
+        ),
+        (
+            f"被试内机会水平估计采用 {permutation_strategy} 策略"
+            f" (置换次数 {within_perm})。"
+        ),
+    ]
+
+    list_items = "".join(f"<li>{item}</li>" for item in items)
+
+    return (
+        "<div class=\"summary-stats\">"
+        "<ul>"
+        f"{list_items}"
+        "</ul>"
+        "</div>"
+    )
 
 def generate_html_report(
     group_df,
@@ -108,6 +176,10 @@ def generate_html_report(
         except ValueError:
             rel_sig_summary = sig_summary_path
         significance_summary_file_html = f"<p>分类阈值显著性汇总表: <code>{rel_sig_summary.as_posix()}</code></p>"
+
+    method_section_html = generate_methodology_section(config)
+    cv_description = describe_cross_validation(config)
+    chance_level = getattr(config, 'chance_level', 0.5)
 
     # 生成报告内容
     html_content = f"""
@@ -290,8 +362,9 @@ def generate_html_report(
                 <div class="info-card">
                     <h4>分析参数</h4>
                     <p><strong>Searchlight半径:</strong> {config.searchlight_radius} 体素</p>
-                    <p><strong>交叉验证:</strong> {config.cv_folds} fold</p>
+                    <p><strong>交叉验证:</strong> {cv_description}</p>
                     <p><strong>处理Mask:</strong> {config.process_mask}</p>
+                    <p><strong>机会水平:</strong> {chance_level:.2f}</p>
                 </div>
                 <div class="info-card">
                     <h4>对比条件</h4>
@@ -304,6 +377,12 @@ def generate_html_report(
                     <p><strong>总分析数:</strong> {len(group_df) if not group_df.empty else 0}</p>
                 </div>
             </div>
+        </div>
+
+        <!-- 方法概述 -->
+        <div class="section">
+            <h2>🔍 分析方法概述</h2>
+            {method_section_html}
         </div>
 
         <!-- 主要结果可视化 -->
@@ -390,12 +469,8 @@ def generate_stats_table(stats_df):
                 <tr>
                     <th>对比条件</th>
                     <th>被试数</th>
-                    <th>平均准确率</th>
-                    <th>平均机会水平</th>
-                    <th>平均差值</th>
-                    <th>差值SEM</th>
-                    <th>差值95% CI</th>
                     <th>t统计量(Δ)</th>
+                    <th>t检验p值</th>
                     <th>符号翻转p值</th>
                     <th>置换次数</th>
                     <th>效应量(d)</th>
@@ -411,31 +486,15 @@ def generate_stats_table(stats_df):
         row_class = 'significant' if is_significant else 'not-significant'
         
         # 准确率颜色
-        acc = row['mean_accuracy']
-        if acc >= 0.6:
-            acc_class = 'accuracy-high'
-        elif acc >= 0.55:
-            acc_class = 'accuracy-medium'
-        else:
-            acc_class = 'accuracy-low'
-        
         significance_symbol = '✓' if is_significant else '✗'
-        
-        ci_lower_delta = row.get('ci_lower_delta', np.nan)
-        ci_upper_delta = row.get('ci_upper_delta', np.nan)
-        sem_delta = row.get('sem_delta_accuracy', row.get('sem_accuracy', np.nan))
         permutations = row.get('n_group_permutations', np.nan)
 
         table_html += f"""
                 <tr class="{row_class}">
                     <td><strong>{row['contrast']}</strong></td>
                     <td>{row['n_subjects']}</td>
-                    <td class="{acc_class} metric">{row['mean_accuracy']:.4f}</td>
-                    <td>{row.get('mean_chance_accuracy', np.nan):.4f}</td>
-                    <td>{row.get('mean_delta_accuracy', np.nan):.4f}</td>
-                    <td>{sem_delta:.4f}</td>
-                    <td>[{ci_lower_delta:.3f}, {ci_upper_delta:.3f}]</td>
                     <td>{row['t_statistic']:.3f}</td>
+                    <td>{row.get('t_pvalue', np.nan):.4f}</td>
                     <td>{row.get('sign_flip_pvalue', row.get('permutation_pvalue', np.nan)):.4f}</td>
                     <td>{int(permutations) if np.isfinite(permutations) else 'N/A'}</td>
                     <td>{row['cohens_d']:.3f}</td>
@@ -488,16 +547,14 @@ def generate_map_outputs_section(map_outputs, config):
             <thead>
                 <tr>
                     <th>对比条件</th>
-                    <th>平均准确率图</th>
-                    <th>平均机会水平图</th>
-                    <th>平均差值图</th>
+                    <th>全脑激活图 (Δ准确率)</th>
                     <th>t统计图</th>
                     <th>p值图</th>
                     <th>分类阈值</th>
                     <th>&gt;阈值体素数</th>
                     <th>分类阈值掩模</th>
                     <th>显著性掩模</th>
-                    <th>阈值化差值图</th>
+                    <th>阈值化激活图</th>
                     <th>显著簇表</th>
                 </tr>
             </thead>
@@ -514,9 +571,7 @@ def generate_map_outputs_section(map_outputs, config):
         table_html += f"""
                 <tr>
                     <td><strong>{contrast}</strong></td>
-                    <td>{_format_path(outputs.get('mean_accuracy_map'))}</td>
-                    <td>{_format_path(outputs.get('mean_chance_map'))}</td>
-                    <td>{_format_path(outputs.get('mean_delta_map'))}</td>
+                    <td>{_format_path(outputs.get('activation_map'))}</td>
                     <td>{_format_path(outputs.get('t_map'))}</td>
                     <td>{_format_path(outputs.get('p_map'))}</td>
                     <td>{threshold_text}</td>
@@ -662,11 +717,9 @@ def generate_individual_table(group_df):
                 <tr>
                     <th>被试</th>
                     <th>对比条件</th>
-                    <th>条件1样本数</th>
-                    <th>条件2样本数</th>
-                    <th>平均准确率</th>
-                    <th>平均机会水平</th>
-                    <th>平均差值</th>
+                    <th>条件1样本 (用/总)</th>
+                    <th>条件2样本 (用/总)</th>
+                    <th>启用平衡</th>
                     <th>准确率图</th>
                     <th>机会水平图</th>
                     <th>差值图</th>
@@ -676,17 +729,23 @@ def generate_individual_table(group_df):
     """
 
     for _, row in group_df.iterrows():
-        acc = row.get('mean_accuracy', row.get('accuracy', np.nan))
-        if acc >= 0.6:
-            acc_class = 'accuracy-high'
-        elif acc >= 0.55:
-            acc_class = 'accuracy-medium'
-        else:
-            acc_class = 'accuracy-low'
-
         accuracy_map = row.get('accuracy_map_path')
         chance_map = row.get('chance_map_path')
         delta_map = row.get('delta_map_path')
+
+        cond1_used = row.get('n_trials_cond1_used', row.get('n_trials_cond1', 'N/A'))
+        cond2_used = row.get('n_trials_cond2_used', row.get('n_trials_cond2', 'N/A'))
+        cond1_total = row.get('n_trials_cond1_total', cond1_used)
+        cond2_total = row.get('n_trials_cond2_total', cond2_used)
+
+        def format_count(used, total):
+            if used == 'N/A' or used is None:
+                return 'N/A'
+            if total in ('N/A', None):
+                return f"{used}"
+            return f"{used} / {total}"
+
+        balance_label = '是' if row.get('trial_balanced') else '否'
 
         def make_link(path):
             if path:
@@ -698,11 +757,9 @@ def generate_individual_table(group_df):
                 <tr>
                     <td><strong>{row.get('subject', 'N/A')}</strong></td>
                     <td>{row.get('contrast', 'N/A')}</td>
-                    <td>{row.get('n_trials_cond1', 'N/A')}</td>
-                    <td>{row.get('n_trials_cond2', 'N/A')}</td>
-                    <td class="{acc_class} metric">{acc:.4f}</td>
-                    <td>{row.get('mean_chance_accuracy', np.nan):.4f}</td>
-                    <td>{row.get('mean_delta_accuracy', np.nan):.4f}</td>
+                    <td>{format_count(cond1_used, cond1_total)}</td>
+                    <td>{format_count(cond2_used, cond2_total)}</td>
+                    <td>{balance_label}</td>
                     <td>{make_link(accuracy_map)}</td>
                     <td>{make_link(chance_map)}</td>
                     <td>{make_link(delta_map)}</td>
@@ -726,8 +783,10 @@ def generate_config_section(config):
                 <h4>🎯 分析参数</h4>
                 <p><strong>Searchlight半径:</strong> {radius} 体素</p>
                 <p><strong>最小区域大小:</strong> {min_size} 体素</p>
-                <p><strong>交叉验证折数:</strong> {cv_folds}</p>
+                <p><strong>交叉验证:</strong> {cv_desc}</p>
                 <p><strong>处理Mask:</strong> {mask}</p>
+                <p><strong>机会水平:</strong> {chance:.2f}</p>
+                <p><strong>样本平衡:</strong> {balance_label}</p>
             </div>
             <div class="config-item">
                 <h4>📁 数据路径</h4>
@@ -753,11 +812,13 @@ def generate_config_section(config):
     """.format(
         radius=config.searchlight_radius,
         min_size=config.min_region_size,
-        cv_folds=config.cv_folds,
+        cv_desc=describe_cross_validation(config),
         mask=config.process_mask,
         lss_root=config.lss_root.name,
         mask_dir=config.mask_dir.name,
         results_dir=config.results_dir.name,
+        chance=getattr(config, 'chance_level', 0.5),
+        balance_label='已启用' if getattr(config, 'balance_trials', False) else '未启用',
         n_jobs=config.n_jobs,
         n_perm=config.n_permutations,
         within_perm=getattr(config, 'within_subject_permutations', 'N/A'),
