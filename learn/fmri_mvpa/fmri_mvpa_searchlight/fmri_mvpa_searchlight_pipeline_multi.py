@@ -480,7 +480,11 @@ def _get_console_stream():
 def _create_logging_handlers(log_file):
     """统一构建日志处理器，文件和控制台均使用UTF-8编码。"""
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # Windows 上常用的文本编辑器（如记事本）在没有 BOM 的情况下会将 UTF-8
+    # 日志文件误判为 ANSI，从而导致中文字符显示为乱码。使用 ``utf-8-sig``
+    # 可以在文件开头写入 BOM，帮助编辑器正确识别编码。对于已存在的日志
+    # 文件不会重复写入 BOM，因而对跨平台读取没有副作用。
+    file_handler = logging.FileHandler(log_file, encoding="utf-8-sig")
     console_handler = logging.StreamHandler(_get_console_stream())
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
