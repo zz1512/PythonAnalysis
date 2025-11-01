@@ -64,7 +64,7 @@ COMMON_MVPA_ANALYSIS_PARAMS = OrderedDict([
     (
         "process_mask",
         CommonParamDefinition(
-            default="gray_matter_mask.nii.gz",
+            default="cortical_gray_matter_mask.nii.gz",
             description="用于限定分析区域的mask文件名称，确保只在目标脑区进行计算。",
         ),
     ),
@@ -315,7 +315,7 @@ class MVPAConfig:
         # 与经典心理学MVPA分析一致的关键配置
         self.cv_strategy = overrides.get(
             'cv_strategy',
-            'leave-one-run-out (按run)'
+            'stratified-kfold'
         )
         self.balance_trials = overrides.get('balance_trials', True)
         self.balance_random_state = overrides.get(
@@ -335,7 +335,7 @@ class MVPAConfig:
         self.parallel_subjects = True  # 启用被试并行处理
         self.max_workers = 3  # 最大并行进程数
         self.chunk_size = 1  # 每个进程处理1个被试
-        self.memory_aware_parallel = True  # 内存感知的并行处理
+        self.memory_aware_parallel = False  # 内存感知的并行处理
         self.min_memory_per_subject_gb = 24  # 每个被试预估需要的内存(GB)
         self.optimize_memory = True  # 内存优化
         self.max_chance_permutations = 5  # 限制机会水平置换次数
@@ -1501,7 +1501,7 @@ def validate_searchlight_inputs(beta_source, labels, process_mask_path, config):
 
 
 def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
-    """内部函数，用于拟合SearchLight估计器 - 增强错误处理"""
+    """内部函数，用于拟合SearchLight估计器 - 增强错误处理（修复groups警告）"""
 
     estimator = build_classification_pipeline(config, n_features=None)
 
@@ -1522,22 +1522,25 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
     groups_array = np.asarray(groups) if groups is not None else None
 
     try:
+        # Check the cross-validation strategy and pass groups only when necessary
         cv = create_cv_strategy(config, groups_array, labels)
-    except ValueError as exc:
-        raise SearchlightError(str(exc)) from exc
 
-    searchlight = SearchLight(
-        mask_img=process_mask_path,
-        radius=config.searchlight_radius,
-        estimator=estimator,
-        cv=cv,
-        scoring='accuracy',
-        n_jobs=config.n_jobs,
-        verbose=verbose
-    )
+        searchlight = SearchLight(
+            mask_img=process_mask_path,
+            radius=config.searchlight_radius,
+            estimator=estimator,
+            cv=cv,
+            scoring='accuracy',
+            n_jobs=config.n_jobs,
+            verbose=verbose
+        )
 
-    try:
-        searchlight.fit(beta_images, labels, groups=groups_array)
+        # Only pass groups if the strategy requires it
+        if isinstance(cv, (StratifiedKFold, KFold)):
+            searchlight.fit(beta_images, labels)  # No groups needed here
+        else:
+            searchlight.fit(beta_images, labels, groups=groups_array)  # Pass groups only for necessary strategies
+
     except MemoryError as exc:
         raise SearchlightError(f"SearchLight拟合失败 (内存不足): {exc}") from exc
     except ValueError as exc:
@@ -1597,7 +1600,7 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
 
 def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, template_img=None,
                                 groups=None, searchlight=None, subject_id=None):
-    """通过标签置换估计单个被试的机会水平地图。"""
+    """通过标签置换估计单个被试的机会水平地图（修正版，支持nilearn>=0.10）。"""
 
     try:
         strategy = getattr(config, 'permutation_strategy', 'permutation')
@@ -1607,6 +1610,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
                 config
             )
 
+        # 准备mask结构
         if searchlight is not None and hasattr(searchlight, 'mask_img_'):
             template_img = template_img or getattr(searchlight, 'scores_', None)
             mask_img_source = searchlight.mask_img_
@@ -1622,22 +1626,21 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
         mask_data = cached['mask_data']
         reference_img = cached['reference_img']
 
+        # 获取beta数据
         beta_source = None
         if searchlight is not None and hasattr(searchlight, '_cached_beta_source'):
             beta_source = getattr(searchlight, '_cached_beta_source')
-
         if beta_source is None:
             beta_source = prepare_beta_data(beta_images, config)
-
         if beta_source is None:
             log("无法准备用于置换的beta数据，跳过机会水平估计", config)
             return None, None, None
 
+        # 置换次数控制
         n_permutations = getattr(config, 'within_subject_permutations', 10)
         max_cap = getattr(config, 'max_chance_permutations', 0)
         if max_cap and max_cap > 0:
             n_permutations = min(n_permutations, max_cap)
-
         if n_permutations <= 0:
             log("置换次数为0，跳过机会水平估计", config)
             return None, None, None
@@ -1661,41 +1664,50 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
                     verbose=0
                 )
 
-                if (perm_searchlight is not None and
-                        hasattr(perm_searchlight, 'scores_') and
-                        hasattr(perm_searchlight.scores_, 'get_fdata')):
+                if perm_searchlight is None or not hasattr(perm_searchlight, 'scores_'):
+                    log(f"置换 {perm_index + 1}/{n_permutations}：Searchlight返回空结果", config)
+                    continue
 
-                    perm_scores = as_data_array(perm_searchlight.scores_)
+                # 🧩 新增修复：确保scores_为Niimg对象
+                if not hasattr(perm_searchlight.scores_, 'get_fdata'):
+                    try:
+                        reference_img_local = image.load_img(process_mask_path)
+                        perm_searchlight.scores_ = image.new_img_like(
+                            reference_img_local,
+                            as_data_array(perm_searchlight.scores_)
+                        )
+                        log(f"置换 {perm_index + 1}/{n_permutations}：自动转换scores_为Niimg", config)
+                    except Exception as conv_err:
+                        log(f"置换 {perm_index + 1}：scores_转换失败 - {conv_err}", config)
+                        continue
 
-                    if mask_data.shape == perm_scores.shape:
-                        masked_scores = perm_scores[mask_data]
-                        masked_scores = masked_scores.astype(float, copy=False)
+                perm_scores = as_data_array(perm_searchlight.scores_)
 
-                        if mean_accumulator is None:
-                            mean_accumulator = np.zeros_like(masked_scores, dtype=float)
-                            m2_accumulator = np.zeros_like(masked_scores, dtype=float)
+                if mask_data.shape == perm_scores.shape:
+                    masked_scores = perm_scores[mask_data].astype(float, copy=False)
 
-                        actual_permutations += 1
-                        delta = masked_scores - mean_accumulator
-                        mean_accumulator += delta / actual_permutations
-                        m2_accumulator += delta * (masked_scores - mean_accumulator)
-                    else:
-                        log("警告: mask形状不匹配，跳过当前置换结果", config)
+                    if mean_accumulator is None:
+                        mean_accumulator = np.zeros_like(masked_scores, dtype=float)
+                        m2_accumulator = np.zeros_like(masked_scores, dtype=float)
+
+                    actual_permutations += 1
+                    delta = masked_scores - mean_accumulator
+                    mean_accumulator += delta / actual_permutations
+                    m2_accumulator += delta * (masked_scores - mean_accumulator)
+                else:
+                    log(f"置换 {perm_index + 1}：mask形状不匹配，跳过", config)
 
             except Exception as exc:
                 log(f"置换 {perm_index + 1}/{n_permutations} 失败: {exc}", config)
                 continue
 
-        if actual_permutations == 0:
-            log("警告: 未能生成任何有效的置换结果", config)
+        # 没有任何有效结果
+        if actual_permutations == 0 or mean_accumulator is None:
+            log("⚠️ 未能生成任何有效的置换结果（scores_类型问题已修复后可重试）", config)
             return None, None, None
 
-        if mean_accumulator is None:
-            log("未能计算任何有效的置换统计，跳过机会水平图", config)
-            return None, None, None
-
+        # 均值与标准差图
         mean_data = mean_accumulator
-
         if actual_permutations > 1 and m2_accumulator is not None:
             variance = np.maximum(m2_accumulator / (actual_permutations - 1), 0)
             std_data = np.sqrt(variance)
@@ -1704,7 +1716,6 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
 
         full_mean_data = np.zeros(mask_data.shape)
         full_std_data = np.zeros(mask_data.shape)
-
         full_mean_data[mask_data] = mean_data
         full_std_data[mask_data] = std_data
 
@@ -1715,6 +1726,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
             log(f"创建机会水平图像失败: {str(e)}", config)
             return None, None, None
 
+        log(f"✅ {subject_id}: 成功生成 {actual_permutations} 次置换的机会水平图", config)
         return chance_img, chance_std_img, {
             'n_subject_permutations': actual_permutations,
             'chance_mean_data': full_mean_data,
@@ -2530,7 +2542,6 @@ def perform_group_analysis(all_results, config):
             significance_summary_path=significance_summary_path,
             significance_viz_b64=significance_viz_b64,
         )
-
         log(f"\n分析完成！结果保存在: {config.results_dir}", config)
         log(f"分析被试数: {len(set(group_df['subject']))}", config)
         log(f"对比数量: {len(config.contrasts)}", config)

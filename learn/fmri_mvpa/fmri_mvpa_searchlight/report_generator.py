@@ -137,325 +137,143 @@ def generate_html_report(
     significance_viz_b64=None,
 ):
     """
-    生成Searchlight MVPA分析的HTML报告
-    
-    Args:
-        group_df: 个体结果DataFrame
-        stats_df: 组水平统计结果DataFrame
-        config: 配置对象
-        main_viz_b64: 主要可视化图片的base64编码
-        individual_viz_b64: 个体结果可视化图片的base64编码
-        map_outputs: 每个对比的全脑图路径信息
-        cluster_df: 显著脑区的汇总DataFrame
-        cluster_summary_path: 显著脑区汇总表路径
-        significance_summary_df: 分类阈值筛选后的显著体素汇总表
-        significance_summary_path: 分类阈值显著体素汇总表路径
-        significance_viz_b64: 分类阈值显著性图的base64编码
-    
-    Returns:
-        Path: 生成的HTML报告文件路径
+    生成静态增强版 HTML 报告（改进样式+结构化布局+中文显示）
     """
-    
-    maps_section_html = generate_map_outputs_section(map_outputs, config) if map_outputs else "<p>未生成组水平全脑图。</p>"
-    cluster_section_html = generate_cluster_table(cluster_df) if cluster_df is not None and not cluster_df.empty else "<p>未检测到显著脑区。</p>"
-    summary_file_html = ""
-    if cluster_summary_path:
-        summary_path = Path(cluster_summary_path)
-        try:
-            rel_summary = summary_path.relative_to(config.results_dir)
-        except ValueError:
-            rel_summary = summary_path
-        summary_file_html = f"<p>显著簇汇总表: <code>{rel_summary.as_posix()}</code></p>"
 
-    significance_section_html = generate_significant_voxel_table(significance_summary_df) if significance_summary_df is not None and not significance_summary_df.empty else "<p>没有体素在分类阈值以上达到统计显著。</p>"
-    significance_summary_file_html = ""
-    if significance_summary_path:
-        sig_summary_path = Path(significance_summary_path)
-        try:
-            rel_sig_summary = sig_summary_path.relative_to(config.results_dir)
-        except ValueError:
-            rel_sig_summary = sig_summary_path
-        significance_summary_file_html = f"<p>分类阈值显著性汇总表: <code>{rel_sig_summary.as_posix()}</code></p>"
+    import datetime
+    from io import StringIO
 
-    method_section_html = generate_methodology_section(config)
-    cv_description = describe_cross_validation(config)
-    chance_level = getattr(config, 'chance_level', 0.5)
+    # ========== 参数概览 ==========
+    param_table_html = "<table class='param-table'>"
+    for k, v in getattr(config, "common_param_values", {}).items():
+        val = v["value"]
+        desc = v["description"]
+        param_table_html += f"<tr><td><b>{k}</b></td><td>{val}</td><td>{desc}</td></tr>"
+    param_table_html += "</table>"
 
-    # 生成报告内容
-    html_content = f"""
+    # ========== 组结果表 ==========
+    group_table_html = ""
+    if stats_df is not None and not stats_df.empty:
+        buf = StringIO()
+        stats_df.to_html(buf, index=False, justify="center", border=0)
+        group_table_html = buf.getvalue()
+
+    # ========== 聚类结果表 ==========
+    cluster_table_html = ""
+    if cluster_df is not None and not cluster_df.empty:
+        buf = StringIO()
+        cluster_df.to_html(buf, index=False, justify="center", border=0)
+        cluster_table_html = buf.getvalue()
+
+    # ========== 显著性结果表 ==========
+    sig_table_html = ""
+    if significance_summary_df is not None and not significance_summary_df.empty:
+        buf = StringIO()
+        significance_summary_df.to_html(buf, index=False, justify="center", border=0)
+        sig_table_html = buf.getvalue()
+
+    # ========== 图片部分 ==========
+    def image_html(b64, title):
+        if not b64:
+            return ""
+        return f"<div class='img-block'><h4>{title}</h4><img src='data:image/png;base64,{b64}'></div>"
+
+    main_viz_html = image_html(main_viz_b64, "组水平结果图（Mean Accuracy Map）")
+    individual_viz_html = image_html(individual_viz_b64, "单被试结果汇总图")
+    significance_viz_html = image_html(significance_viz_b64, "显著性统计可视化")
+
+    # ========== 输出HTML结构 ==========
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    html = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>fMRI Searchlight MVPA 分析报告</title>
-    <style>
-        body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }}
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-        }}
-        .header {{
-            text-align: center;
-            margin-bottom: 40px;
-            padding-bottom: 20px;
-            border-bottom: 3px solid #007acc;
-        }}
-        .header h1 {{
-            color: #007acc;
-            margin-bottom: 10px;
-            font-size: 2.5em;
-        }}
-        .header .subtitle {{
-            color: #666;
-            font-size: 1.2em;
-        }}
-        .section {{
-            margin-bottom: 40px;
-        }}
-        .section h2 {{
-            color: #007acc;
-            border-bottom: 2px solid #007acc;
-            padding-bottom: 10px;
-            margin-bottom: 20px;
-        }}
-        .section h3 {{
-            color: #333;
-            margin-top: 25px;
-            margin-bottom: 15px;
-        }}
-        .info-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }}
-        .info-card {{
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #007acc;
-        }}
-        .info-card h4 {{
-            margin-top: 0;
-            color: #007acc;
-        }}
-        .table-container {{
-            overflow-x: auto;
-            margin: 20px 0;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-            background-color: white;
-        }}
-        th, td {{
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }}
-        th {{
-            background-color: #007acc;
-            color: white;
-            font-weight: bold;
-        }}
-        tr:nth-child(even) {{
-            background-color: #f2f2f2;
-        }}
-        tr:hover {{
-            background-color: #e8f4f8;
-        }}
-        .significant {{
-            background-color: #d4edda !important;
-            font-weight: bold;
-        }}
-        .not-significant {{
-            background-color: #f8d7da !important;
-        }}
-        .metric {{
-            font-size: 1.1em;
-            font-weight: bold;
-        }}
-        .accuracy-high {{
-            color: #28a745;
-        }}
-        .accuracy-medium {{
-            color: #ffc107;
-        }}
-        .accuracy-low {{
-            color: #dc3545;
-        }}
-        .visualization {{
-            text-align: center;
-            margin: 30px 0;
-        }}
-        .image-placeholder {{
-            background-color: #f0f0f0;
-            padding: 40px;
-            text-align: center;
-            margin: 20px 0;
-            border: 2px dashed #ccc;
-            border-radius: 8px;
-            color: #666;
-        }}
-        .summary-stats {{
-            background-color: #e3f2fd;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-        }}
-        .footer {{
-            margin-top: 50px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-            text-align: center;
-            color: #666;
-            font-size: 0.9em;
-        }}
-        .config-section {{
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-        }}
-        .config-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 15px;
-        }}
-        .config-item {{
-            background-color: white;
-            padding: 15px;
-            border-radius: 5px;
-            border-left: 3px solid #007acc;
-        }}
-    </style>
+<meta charset="utf-8">
+<title>Searchlight MVPA 报告</title>
+<style>
+body {{
+    font-family: "Microsoft YaHei", "SimHei", "Noto Sans CJK SC", sans-serif;
+    background-color: #f6f8fa;
+    color: #222;
+    line-height: 1.6;
+    padding: 20px;
+}}
+h1, h2, h3, h4 {{ color: #003366; }}
+.section {{
+    margin-top: 25px;
+    padding: 15px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}}
+.param-table {{
+    border-collapse: collapse;
+    width: 100%;
+}}
+.param-table td {{
+    border-bottom: 1px solid #ccc;
+    padding: 6px 8px;
+    vertical-align: top;
+}}
+img {{
+    max-width: 95%;
+    margin: 10px auto;
+    border-radius: 8px;
+    display: block;
+}}
+footer {{
+    margin-top: 40px;
+    font-size: 0.85em;
+    color: #666;
+    text-align: center;
+}}
+</style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🧠 fMRI Searchlight MVPA 分析报告</h1>
-            <div class="subtitle">多体素模式分析 - Searchlight方法</div>
-            <div class="subtitle">生成时间: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
-        </div>
+<h1>Searchlight MVPA 报告</h1>
+<p>生成时间：{now}</p>
 
-        <!-- 分析概览 -->
-        <div class="section">
-            <h2>📊 分析概览</h2>
-            <div class="info-grid">
-                <div class="info-card">
-                    <h4>被试信息</h4>
-                    <p><strong>总被试数:</strong> {len(group_df['subject'].unique()) if not group_df.empty else 0}</p>
-                    <p><strong>有效被试:</strong> {', '.join(sorted(group_df['subject'].unique())) if not group_df.empty else '无'}</p>
-                </div>
-                <div class="info-card">
-                    <h4>分析参数</h4>
-                    <p><strong>Searchlight半径:</strong> {config.searchlight_radius} 体素</p>
-                    <p><strong>交叉验证:</strong> {cv_description}</p>
-                    <p><strong>处理Mask:</strong> {config.process_mask}</p>
-                    <p><strong>机会水平:</strong> {chance_level:.2f}</p>
-                </div>
-                <div class="info-card">
-                    <h4>对比条件</h4>
-                    <p><strong>对比数量:</strong> {len(config.contrasts)}</p>
-                    <p><strong>条件:</strong> {', '.join([f"{c[1]} vs {c[2]}" for c in config.contrasts])}</p>
-                </div>
-                <div class="info-card">
-                    <h4>结果文件</h4>
-                    <p><strong>结果目录:</strong> {config.results_dir.name}</p>
-                    <p><strong>总分析数:</strong> {len(group_df) if not group_df.empty else 0}</p>
-                </div>
-            </div>
-        </div>
+<div class="section">
+    <h2>分析参数摘要</h2>
+    {param_table_html}
+</div>
 
-        <!-- 方法概述 -->
-        <div class="section">
-            <h2>🔍 分析方法概述</h2>
-            {method_section_html}
-        </div>
+<div class="section">
+    <h2>单被试结果汇总</h2>
+    {individual_viz_html}
+</div>
 
-        <!-- 主要结果可视化 -->
-        <div class="section">
-            <h2>📈 主要结果可视化</h2>
-            <div class="visualization">
-                {generate_image_html(main_viz_b64, "主要结果可视化")}
-            </div>
-        </div>
+<div class="section">
+    <h2>组水平分析结果</h2>
+    {main_viz_html}
+    <h3>统计汇总表</h3>
+    {group_table_html}
+</div>
 
-        <!-- 全脑准确率图与显著脑区 -->
-        <div class="section">
-            <h2>🧠 全脑准确率图与显著脑区</h2>
-            {maps_section_html}
-            {summary_file_html}
-            <h3>显著脑区定位</h3>
-            {cluster_section_html}
-        </div>
+<div class="section">
+    <h2>显著性统计与脑区聚类</h2>
+    {significance_viz_html}
+    <h3>显著性汇总</h3>
+    {sig_table_html}
+    <h3>聚类结果（显著脑区）</h3>
+    {cluster_table_html}
+</div>
 
-        <!-- 分类阈值显著性 -->
-        <div class="section">
-            <h2>🎯 分类阈值显著性汇总 (准确率 &gt; {getattr(config, 'classification_significance_threshold', 0.5):.2f})</h2>
-            <div class="visualization">
-                {generate_image_html(significance_viz_b64, "分类阈值显著性可视化")}
-            </div>
-            {significance_section_html}
-            {significance_summary_file_html}
-        </div>
-
-        <!-- 组水平统计结果 -->
-        <div class="section">
-            <h2>🔬 组水平统计结果</h2>
-            {generate_stats_table(stats_df) if not stats_df.empty else '<p>无统计结果</p>'}
-        </div>
-
-        <!-- 个体结果详情 -->
-        <div class="section">
-            <h2>👤 个体结果详情</h2>
-            <div class="visualization">
-                {generate_image_html(individual_viz_b64, "个体结果可视化")}
-            </div>
-            {generate_individual_table(group_df) if not group_df.empty else '<p>无个体结果</p>'}
-        </div>
-
-        <!-- 分析配置 -->
-        <div class="section">
-            <h2>⚙️ 分析配置</h2>
-            {generate_config_section(config)}
-        </div>
-
-        <div class="footer">
-            <p>报告由 fMRI Searchlight MVPA Pipeline 自动生成</p>
-            <p>如有问题，请检查日志文件: {config.log_file}</p>
-        </div>
-    </div>
+<footer>
+    <p>报告生成自 {config.results_dir}</p>
+    <p>Searchlight 半径: {config.searchlight_radius} 体素 | α = {config.alpha_level}</p>
+</footer>
 </body>
 </html>
 """
 
-    # 保存HTML报告
-    report_path = config.results_dir / "searchlight_mvpa_report.html"
-    
-    try:
-        # 使用带BOM的UTF-8编码写入，确保在Windows系统（尤其是旧版记事本）中
-        # 也能正确识别中文字符，避免出现乱码。
-        with open(report_path, 'w', encoding='utf-8-sig') as f:
-            f.write(html_content)
-        print(f"HTML报告已生成: {report_path}")
-    except Exception as e:
-        print(f"生成HTML报告失败: {str(e)}")
-        return None
-    
-    return report_path
+    # 写出文件
+    output_path = config.results_dir / "searchlight_mvpa_report.html"
+    with open(output_path, "w", encoding="utf-8-sig") as f:
+        f.write(html)
+
+    log(f"✅ 报告已生成: {output_path}", config)
+    return output_path
 
 def generate_stats_table(stats_df):
     """生成组水平统计结果表格"""

@@ -1,6 +1,8 @@
 # visualization.py
 # 可视化模块 - Searchlight版本
-
+import matplotlib
+matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Noto Sans CJK SC']
+matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import seaborn as sns
@@ -62,34 +64,140 @@ def setup_chinese_fonts(config=None):
 
 def create_enhanced_visualizations(group_df, stats_df, config, significance_summary=None):
     """
-    创建增强的Searchlight MVPA可视化图表
-    
-    Args:
-        group_df: 个体结果DataFrame
-        stats_df: 组水平统计结果DataFrame
-        config: 配置对象
-    
-    Returns:
-        tuple: (主要可视化路径, 个体可视化路径)
+    改进版：生成更美观、更有解释力的静态可视化结果
+    - 支持中文字体
+    - 组平均准确率与个体准确率并列显示
+    - 添加显著性标注（星号或阈值线）
+    - 输出base64编码图像以供HTML报告使用
     """
-    
-    # 设置中文字体
-    setup_chinese_fonts(config)
-    
-    # 设置绘图风格
-    plt.style.use('default')
-    sns.set_palette("husl")
-    
-    # 创建主要可视化
-    main_viz_path = create_main_visualization(group_df, stats_df, config)
 
-    # 创建个体结果可视化
-    individual_viz_path = create_individual_visualization(group_df, config)
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import base64
 
-    # 创建显著体素汇总可视化
-    significance_viz_path = create_significant_voxel_visualization(significance_summary, config)
+    # ======================
+    # 通用绘图样式设置
+    # ======================
+    import matplotlib
+    matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Noto Sans CJK SC']
+    matplotlib.rcParams['axes.unicode_minus'] = False
+    plt.style.use('seaborn-v0_8-whitegrid')
+    sns.set_palette("colorblind")
 
-    return main_viz_path, individual_viz_path, significance_viz_path
+    # ======================
+    # 一、组水平统计图
+    # ======================
+    fig, axes = plt.subplots(2, 1, figsize=(9, 10))
+    plt.subplots_adjust(hspace=0.4)
+
+    # 上图：组水平准确率
+    ax1 = axes[0]
+    if stats_df is not None and not stats_df.empty:
+        sns.barplot(
+            data=stats_df,
+            x='contrast',
+            y='mean_accuracy',
+            hue=None,
+            ci='sd',
+            ax=ax1,
+            palette=sns.color_palette("RdYlBu_r", len(stats_df))
+        )
+        ax1.axhline(0.5, color='gray', linestyle='--', lw=1.5, label='机会水平 (0.5)')
+        ax1.set_title("组水平平均准确率（Mean Accuracy by Contrast）", fontsize=14, weight='bold')
+        ax1.set_ylabel("平均准确率", fontsize=12)
+        ax1.set_xlabel("对比条件", fontsize=11)
+        ax1.legend(loc='upper right')
+
+        # 添加显著性标注（p<0.05加星号）
+        for i, row in enumerate(stats_df.itertuples()):
+            pval = getattr(row, 't_pvalue', 1.0)
+            y = getattr(row, 'mean_accuracy', 0.0)
+            if pval < 0.001:
+                mark = '***'
+            elif pval < 0.01:
+                mark = '**'
+            elif pval < 0.05:
+                mark = '*'
+            else:
+                mark = ''
+            if mark:
+                ax1.text(i, y + 0.02, mark, ha='center', va='bottom', color='red', fontsize=12)
+
+    else:
+        ax1.text(0.5, 0.5, "无有效组水平结果", ha='center', va='center', fontsize=13)
+        ax1.axis('off')
+
+    # ======================
+    # 二、单被试结果散点图
+    # ======================
+    ax2 = axes[1]
+    if group_df is not None and not group_df.empty:
+        sns.stripplot(
+            data=group_df,
+            x='contrast',
+            y='accuracy',
+            hue='subject',
+            jitter=True,
+            dodge=True,
+            size=6,
+            alpha=0.8,
+            ax=ax2
+        )
+        ax2.axhline(0.5, color='gray', linestyle='--', lw=1.3)
+        ax2.set_title("单被试准确率分布（Individual Accuracy Scatter）", fontsize=14, weight='bold')
+        ax2.set_ylabel("准确率", fontsize=12)
+        ax2.set_xlabel("对比条件", fontsize=11)
+        ax2.legend(title='被试', bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
+    else:
+        ax2.text(0.5, 0.5, "无单被试数据", ha='center', va='center', fontsize=13)
+        ax2.axis('off')
+
+    # ======================
+    # 保存主图（组水平 + 单被试）
+    # ======================
+    main_path = config.results_dir / "searchlight_main_visualization.png"
+    plt.tight_layout()
+    fig.savefig(main_path, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+
+    # ======================
+    # 三、显著性图（如果有）
+    # ======================
+    significance_path = None
+    if significance_summary is not None and not significance_summary.empty:
+        plt.figure(figsize=(9, 5))
+        sig_data = significance_summary.copy()
+        sns.barplot(
+            data=sig_data,
+            x='contrast',
+            y='n_significant_voxels',
+            hue='correction',
+            palette='coolwarm'
+        )
+        plt.axhline(0, color='gray', lw=1)
+        plt.title("显著性体素数（Significant Voxels per Contrast）", fontsize=14, weight='bold')
+        plt.ylabel("显著体素数")
+        plt.xlabel("对比条件")
+        plt.legend(title="校正类型")
+        significance_path = config.results_dir / "searchlight_significance_visualization.png"
+        plt.tight_layout()
+        plt.savefig(significance_path, dpi=200, bbox_inches='tight')
+        plt.close()
+
+    # ======================
+    # 转换为base64以便HTML报告嵌入
+    # ======================
+    def fig_to_b64(path):
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8") if path.exists() else None
+
+    main_b64 = fig_to_b64(main_path)
+    individual_b64 = main_b64  # 同一张图兼容旧字段
+    significance_b64 = fig_to_b64(significance_path) if significance_path else None
+
+    log(f"✅ 可视化图像已生成: {main_path}", config)
+    return main_path, main_path, significance_path
+
 
 def create_main_visualization(group_df, stats_df, config):
     """
