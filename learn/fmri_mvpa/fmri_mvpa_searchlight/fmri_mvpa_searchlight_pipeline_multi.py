@@ -1254,11 +1254,44 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
             log("错误: 未提供有效的beta数据", config)
             return None
 
+        labels = np.asarray(labels)
+        unique_labels = np.unique(labels)
+        if unique_labels.size < 2:
+            log(
+                "错误: 标签只有一个类别，无法进行分类分析。"
+                "请检查条件选择是否正确。",
+                config,
+            )
+            return None
+
+        label_counts = np.bincount(labels)
+        min_class_samples = int(label_counts.min()) if label_counts.size > 0 else 0
+        if min_class_samples < 2:
+            log(
+                f"错误: 最小类别样本数不足 (需要>=2)，当前计数: {label_counts.tolist()}",
+                config,
+            )
+            return None
+
         if groups is not None and len(np.unique(groups)) > 1:
             cv = LeaveOneGroupOut()
         else:
+            max_valid_splits = min(
+                config.cv_folds,
+                len(labels),
+                min_class_samples
+            )
+
+            if max_valid_splits < 2:
+                log(
+                    f"错误: 无法创建有效的交叉验证折数。"
+                    f" 样本总数: {len(labels)}, 类别计数: {label_counts.tolist()}",
+                    config,
+                )
+                return None
+
             cv = StratifiedKFold(
-                n_splits=min(config.cv_folds, len(labels)),
+                n_splits=max_valid_splits,
                 random_state=config.cv_random_state,
                 shuffle=True
             )
