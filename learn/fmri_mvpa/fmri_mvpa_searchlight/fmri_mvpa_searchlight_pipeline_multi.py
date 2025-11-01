@@ -1532,6 +1532,24 @@ def create_cv_strategy(config, groups, labels):
         )
         groups = None  # 后续改用 StratifiedKFold
 
+        max_valid_splits = min(
+            getattr(config, "cv_folds", 5),
+            len(labels),
+            min_class_samples,
+        )
+        if max_valid_splits < 2:
+            raise ValueError(
+                "无法创建有效的StratifiedKFold折数以作为leave-one-group的回退方案。"
+            )
+
+        cv = StratifiedKFold(
+            n_splits=max_valid_splits,
+            random_state=getattr(config, "cv_random_state", None),
+            shuffle=True,
+        )
+        _validate_cv_fold_sizes(cv, labels, None, config)
+        return cv, None
+
     if 'group-kfold' in strategy or 'groupkfold' in strategy:
         if groups is None:
             raise ValueError("GroupKFold策略需要提供groups信息。")
