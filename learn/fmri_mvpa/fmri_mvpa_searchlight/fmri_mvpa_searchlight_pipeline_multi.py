@@ -2153,18 +2153,18 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
     import numpy as np
     from sklearn.model_selection import GroupKFold, LeaveOneGroupOut, StratifiedKFold, KFold
     # 1️⃣ run 分布（仅做信息展示）
-    log(f"\n1️⃣ Run分布:")
+    log(f"\n1️⃣ Run分布:", config)
     if groups is not None:
         g_arr = np.asarray(groups)
         runs, counts = np.unique(g_arr, return_counts=True)
         for r, c in zip(runs, counts):
             lbl_dist = np.bincount(np.asarray(labels)[g_arr == r])
-            log(f"   Run {r}: {c} trials, 标签分布 {lbl_dist}")
+            log(f"   Run {r}: {c} trials, 标签分布 {lbl_dist}", config)
     else:
-        log("   ⚠️ groups=None，无法展示 run 分布")
+        log("   ⚠️ groups=None，无法展示 run 分布", config)
 
     # 2️⃣ CV 策略
-    log(f"\n2️⃣ 交叉验证策略:")
+    log(f"\n2️⃣ 交叉验证策略:", config)
     cv = create_cv_strategy(config, groups, labels)
     try:
         # 仅在 group-based 时传 groups
@@ -2174,18 +2174,18 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
         )
     except TypeError:
         n_splits = cv.get_n_splits()
-    log(f"   策略类型: {type(cv).__name__}")
-    log(f"   折数: {n_splits}")
+    log(f"   策略类型: {type(cv).__name__}", config)
+    log(f"   折数: {n_splits}", config)
 
     # 3️⃣ 分割检查（仅 group-based 才检查 run 重叠）
     tail = "" if group_based else "（非 group 策略，run 跨训练/测试是预期，不构成泄露）"
-    log(f"\n3️⃣ CV分割检查(前2折){tail}:")
+    log(f"\n3️⃣ CV分割检查(前2折){tail}:", config)
     for i, (tr_idx, te_idx) in enumerate(
         cv.split(np.zeros_like(labels), labels, (groups if group_based else None))
     ):
         if i >= 2:
             break
-        log(f"\n   Fold {i + 1}:")
+        log(f"\n   Fold {i + 1}:", config)
         if groups is not None:
             tr_runs = set(np.asarray(groups)[tr_idx])
             te_runs = set(np.asarray(groups)[te_idx])
@@ -2194,26 +2194,26 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
 
         if group_based:
             overlap = tr_runs & te_runs
-            log(f"      训练集runs: {tr_runs}")
-            log(f"      测试集runs: {te_runs}")
-            log("      ✅ 无泄露" if not overlap else f"      ❌ 数据泄露! 重叠runs: {overlap}")
+            log(f"      训练集runs: {tr_runs}", config)
+            log(f"      测试集runs: {te_runs}", config)
+            log("      ✅ 无泄露" if not overlap else f"      ❌ 数据泄露! 重叠runs: {overlap}", config)
         else:
-            log("      使用 KFold/StratifiedKFold，允许 run 在训练/测试同时出现。")
+            log("      使用 KFold/StratifiedKFold，允许 run 在训练/测试同时出现。", config)
 
-        log(f"      训练集样本: {len(tr_idx)}, 测试集样本: {len(te_idx)}")
+        log(f"      训练集样本: {len(tr_idx)}, 测试集样本: {len(te_idx)}", config)
 
     # 4️⃣ 机会水平设置
-    log(f"\n4️⃣ 机会水平估计设置:")
-    log(f"   置换次数: {getattr(config, 'within_subject_permutations', 'N/A')}")
-    log(f"   最大限制: {getattr(config, 'max_chance_permutations', 'N/A')}")
+    log(f"\n4️⃣ 机会水平估计设置:", config)
+    log(f"   置换次数: {getattr(config, 'within_subject_permutations', 'N/A')}", config)
+    log(f"   最大限制: {getattr(config, 'max_chance_permutations', 'N/A')}", config)
     actual_perms = min(
         getattr(config, 'within_subject_permutations', 100),
         getattr(config, 'max_chance_permutations', 999999)
     )
     if actual_perms < 5:
-        log(f"   ⚠️ 警告: 实际置换次数({actual_perms})过少!")
+        log(f"   ⚠️ 警告: 实际置换次数({actual_perms})过少!", config)
     else:
-        log(f"   ✅ 实际置换次数: {actual_perms}")
+        log(f"   ✅ 实际置换次数: {actual_perms}", config)
 
 def process_searchlight_for_subject(searchlight, beta_images, labels, process_mask_path, config,
                                     subject_id, contrast_name, groups, trial_details,
