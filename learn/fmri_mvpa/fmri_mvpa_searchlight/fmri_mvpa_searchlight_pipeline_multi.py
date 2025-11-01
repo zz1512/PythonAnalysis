@@ -9,6 +9,7 @@ import logging
 import time
 import sys
 import io
+import hashlib
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,7 @@ from nilearn.decoding import SearchLight
 from nilearn.maskers import NiftiMasker
 from nilearn import image
 from sklearn.svm import SVC
-from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold
+from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, LeaveOneGroupOut, GroupKFold, KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from report_generator import generate_html_report, image_to_base64
@@ -146,24 +147,10 @@ COMMON_MVPA_ANALYSIS_PARAMS = OrderedDict([
         ),
     ),
     (
-        "permutation_strategy",
-        CommonParamDefinition(
-            default="analytic",
-            description="机会水平估计策略，可选analytic/permutation/montecarlo。",
-        ),
-    ),
-    (
         "enable_mask_cache",
         CommonParamDefinition(
             default=True,
             description="是否缓存Searchlight球体掩模以复用邻域结构。",
-        ),
-    ),
-    (
-        "monte_carlo_null_samples",
-        CommonParamDefinition(
-            default=500,
-            description="当使用蒙特卡洛策略时抽样的零分布样本数量。",
         ),
     ),
     (
@@ -689,6 +676,18 @@ def clear_global_caches() -> None:
     BETA_IMAGE_CACHE.clear()
 
 
+def apply_subprocess_cache_policy(config: "MVPAConfig") -> None:
+    """在子进程中禁用大内存缓存，防止并行时的重复占用。"""
+
+    if mp.current_process().name == 'MainProcess':
+        return
+
+    if getattr(config, 'enable_mask_cache', True) or getattr(config, 'enable_beta_cache', True):
+        config.enable_mask_cache = False
+        config.enable_beta_cache = False
+        configure_cache_limits(config)
+
+
 def get_cached_beta_image(beta_images, use_cache=True):
     """根据文件列表缓存并返回拼接后的beta 4D图像。"""
 
@@ -754,6 +753,28 @@ def get_cached_mask_structures(process_mask_path, template_img=None, use_cache=T
         SEARCHLIGHT_MASK_CACHE[cache_key] = cached
 
     return cached
+
+
+def _create_subject_rng(config, subject_id=None):
+    """为单被试生成稳定且彼此独立的随机数生成器。"""
+
+    base_seed = getattr(config, 'permutation_random_state', None)
+    try:
+        base_seed_int = int(base_seed) if base_seed is not None else None
+    except (TypeError, ValueError):
+        base_seed_int = None
+
+    if subject_id is None:
+        return np.random.default_rng(base_seed_int)
+
+    subject_hash = int(hashlib.sha1(str(subject_id).encode('utf-8')).hexdigest(), 16) % (2 ** 32)
+
+    if base_seed_int is None:
+        combined_seed = subject_hash
+    else:
+        combined_seed = (base_seed_int + subject_hash) % (2 ** 32)
+
+    return np.random.default_rng(combined_seed)
 
 
 def permute_labels_within_groups(labels, groups, rng):
@@ -868,8 +889,8 @@ def config_to_dict(config):
         'searchlight_radius', 'process_mask', 'min_region_size',
         'svm_params', 'svm_param_grid', 'cv_folds', 'cv_random_state',
         'n_permutations', 'permutation_random_state', 'within_subject_permutations',
-        'max_exact_sign_flips_subjects', 'enable_two_sided_group_tests', 'permutation_strategy',
-        'enable_mask_cache', 'monte_carlo_null_samples', 'enable_beta_cache',
+        'max_exact_sign_flips_subjects', 'enable_two_sided_group_tests',
+        'enable_mask_cache', 'enable_beta_cache',
         'alpha_level', 'n_jobs', 'use_parallel', 'contrasts', 'max_workers',
         'parallel_subjects', 'memory_aware_parallel', 'min_memory_per_subject_gb',
         'optimize_memory', 'max_chance_permutations', 'enable_batch_processing',
@@ -911,6 +932,7 @@ def dict_to_config(config_dict):
             setattr(config, key, value)
 
     configure_cache_limits(config)
+    apply_subprocess_cache_policy(config)
 
     return config
 
@@ -1245,6 +1267,83 @@ def check_system_resources(config):
         log("无法检测系统资源，请安装psutil: pip install psutil", config)
 
 
+def create_cv_strategy(config, groups, labels):
+    """根据配置创建交叉验证策略并进行一致性检查。"""
+
+    strategy = str(getattr(config, 'cv_strategy', 'stratified-kfold')).lower()
+    labels = np.asarray(labels)
+    unique_labels, class_counts = np.unique(labels, return_counts=True)
+
+    if unique_labels.size < 2:
+        raise ValueError("标签只有一个类别，无法执行交叉验证。")
+
+    min_class_samples = int(class_counts.min()) if class_counts.size > 0 else 0
+
+    if ('leave-one' in strategy and 'group' in strategy) or ('run-out' in strategy):
+        if groups is None:
+            raise ValueError("Leave-one-group/leave-one-run策略需要提供groups信息。")
+
+        group_array = np.asarray(groups)
+        unique_groups = np.unique(group_array)
+
+        if unique_groups.size < 2:
+            raise ValueError("Leave-one-group交叉验证至少需要两个不同的组。")
+
+        for group_id in unique_groups:
+            train_mask = group_array != group_id
+            train_labels = labels[train_mask]
+            fold_unique, fold_counts = np.unique(train_labels, return_counts=True)
+            if fold_unique.size < 2:
+                raise ValueError(
+                    "在Leave-One-Group交叉验证中，某个训练折仅包含单一类别。"
+                )
+            if fold_counts.size > 0 and fold_counts.min() < 1:
+                raise ValueError(
+                    "在Leave-One-Group交叉验证中，某个训练折的类别样本数不足。"
+                )
+
+        return LeaveOneGroupOut()
+
+    if 'group-kfold' in strategy or 'groupkfold' in strategy:
+        if groups is None:
+            raise ValueError("GroupKFold策略需要提供groups信息。")
+
+        group_array = np.asarray(groups)
+        unique_groups = np.unique(group_array)
+        n_splits = min(getattr(config, 'cv_folds', 5), unique_groups.size)
+        if n_splits < 2:
+            raise ValueError("GroupKFold需要至少两个分组来创建折。")
+        return GroupKFold(n_splits=n_splits)
+
+    if 'stratified' in strategy:
+        max_valid_splits = min(
+            getattr(config, 'cv_folds', 5),
+            len(labels),
+            min_class_samples
+        )
+        if max_valid_splits < 2:
+            raise ValueError(
+                f"无法创建有效的StratifiedKFold折数，类别计数: {class_counts.tolist()}"
+            )
+        return StratifiedKFold(
+            n_splits=max_valid_splits,
+            random_state=getattr(config, 'cv_random_state', None),
+            shuffle=True
+        )
+
+    if 'kfold' in strategy:
+        n_splits = min(getattr(config, 'cv_folds', 5), len(labels))
+        if n_splits < 2:
+            raise ValueError("KFold需要至少两个样本来创建折。")
+        return KFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=getattr(config, 'cv_random_state', None)
+        )
+
+    raise ValueError(f"未知的交叉验证策略: {config.cv_strategy}")
+
+
 def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
     """内部函数，用于拟合SearchLight估计器 - 增强错误处理"""
     try:
@@ -1272,60 +1371,13 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
             )
             return None
 
-        if groups is not None and len(np.unique(groups)) > 1:
-            groups = np.asarray(groups)
-            unique_groups = np.unique(groups)
+        groups_array = np.asarray(groups) if groups is not None else None
 
-            if unique_groups.size < 2:
-                log(
-                    "错误: 留一组交叉验证至少需要两个以上的组。",
-                    config,
-                )
-                return None
-
-            # 检查每一个留出组合下，训练集是否包含所有类别
-            for group_id in unique_groups:
-                train_mask = groups != group_id
-                train_labels = labels[train_mask]
-
-                fold_unique, fold_counts = np.unique(train_labels, return_counts=True)
-                if fold_unique.size < 2:
-                    log(
-                        "错误: 在Leave-One-Group交叉验证中，某个训练折仅包含单一类别。"
-                        " 请检查试次分组是否导致类别完全分离。",
-                        config,
-                    )
-                    return None
-
-                if fold_counts.min() < 1:
-                    log(
-                        "错误: 在Leave-One-Group交叉验证中，某个训练折类别样本不足。"
-                        f" 训练折类别计数: {fold_counts.tolist()}",
-                        config,
-                    )
-                    return None
-
-            cv = LeaveOneGroupOut()
-        else:
-            max_valid_splits = min(
-                config.cv_folds,
-                len(labels),
-                min_class_samples
-            )
-
-            if max_valid_splits < 2:
-                log(
-                    f"错误: 无法创建有效的交叉验证折数。"
-                    f" 样本总数: {len(labels)}, 类别计数: {class_counts.tolist()}",
-                    config,
-                )
-                return None
-
-            cv = StratifiedKFold(
-                n_splits=max_valid_splits,
-                random_state=config.cv_random_state,
-                shuffle=True
-            )
+        try:
+            cv = create_cv_strategy(config, groups_array, labels)
+        except ValueError as exc:
+            log(f"错误: {exc}", config)
+            return None
 
         searchlight = SearchLight(
             mask_img=process_mask_path,
@@ -1337,7 +1389,7 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
             verbose=verbose
         )
 
-        searchlight.fit(beta_images, labels, groups=groups)
+        searchlight.fit(beta_images, labels, groups=groups_array)
 
         # 验证结果
         if not hasattr(searchlight, 'scores_'):
@@ -1392,53 +1444,17 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
         return None
 
 
-def _estimate_chance_via_analytic(mask_data, reference_img, labels, config, strategy):
-    """使用解析或快速蒙特卡洛方法估计机会水平。"""
-
-    try:
-        n_samples = max(len(labels), 1)
-        rng = np.random.default_rng(config.permutation_random_state)
-
-        if strategy == 'montecarlo':
-            draws = getattr(config, 'monte_carlo_null_samples', 500)
-            draws = max(int(draws), 1)
-            # 对整体准确率进行快速蒙特卡洛抽样
-            simulated = rng.binomial(n_samples, 0.5, size=draws) / float(n_samples)
-            mean_val = float(np.mean(simulated))
-            std_val = float(np.std(simulated, ddof=1)) if draws > 1 else 0.0
-        else:
-            # 解析估计: 假设二分类准确率服从0.5的二项分布
-            mean_val = 0.5
-            std_val = float(np.sqrt(0.25 / float(n_samples)))
-
-        full_mean_data = np.zeros(mask_data.shape, dtype=float)
-        full_std_data = np.zeros(mask_data.shape, dtype=float)
-
-        full_mean_data[mask_data] = mean_val
-        full_std_data[mask_data] = std_val
-
-        chance_img = image.new_img_like(reference_img, full_mean_data)
-        chance_std_img = image.new_img_like(reference_img, full_std_data)
-
-        return chance_img, chance_std_img, {
-            'n_subject_permutations': 0,
-            'chance_mean_data': full_mean_data,
-            'chance_std_data': full_std_data,
-            'strategy': strategy,
-            'effective_samples': int(n_samples)
-        }
-
-    except Exception as exc:
-        log(f"解析机会水平估计失败: {exc}", config)
-        return None, None, None
-
-
 def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, template_img=None,
-                                groups=None, searchlight=None):
-    """通过标签置换或快速近似估计单个被试的机会水平地图"""
+                                groups=None, searchlight=None, subject_id=None):
+    """通过标签置换估计单个被试的机会水平地图。"""
 
     try:
         strategy = getattr(config, 'permutation_strategy', 'permutation')
+        if strategy != 'permutation':
+            log(
+                f"警告: permutation_strategy='{strategy}' 已弃用，强制使用置换检验估计机会水平",
+                config
+            )
 
         if searchlight is not None and hasattr(searchlight, 'mask_img_'):
             template_img = template_img or getattr(searchlight, 'scores_', None)
@@ -1466,10 +1482,6 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
             log("无法准备用于置换的beta数据，跳过机会水平估计", config)
             return None, None, None
 
-        if strategy in ('analytic', 'montecarlo'):
-            log(f"使用{strategy}策略估计机会水平（跳过置换）", config)
-            return _estimate_chance_via_analytic(mask_data, reference_img, labels, config, strategy)
-
         n_permutations = getattr(config, 'within_subject_permutations', 10)
         max_cap = getattr(config, 'max_chance_permutations', 0)
         if max_cap and max_cap > 0:
@@ -1479,7 +1491,7 @@ def estimate_subject_chance_map(beta_images, labels, process_mask_path, config, 
             log("置换次数为0，跳过机会水平估计", config)
             return None, None, None
 
-        rng = np.random.default_rng(config.permutation_random_state)
+        rng = _create_subject_rng(config, subject_id)
 
         mean_accumulator = None
         m2_accumulator = None
@@ -1705,33 +1717,67 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     cond2_selected = cond2_trials
 
     if getattr(config, 'balance_trials', False):
-        min_count = min(cond1_total, cond2_total)
-        if min_count <= 0:
-            log(f"警告: 试图进行trial平衡但条件存在空trial集合", config)
-            return None, None, None, None
+        rng = np.random.default_rng(getattr(config, 'balance_random_state', None))
 
-        if cond1_total != cond2_total:
-            rng = np.random.default_rng(getattr(config, 'balance_random_state', None))
+        def sample_trials(df, n):
+            if len(df) <= n:
+                return df
+            indices = df.index.to_numpy()
+            selected = rng.choice(indices, size=n, replace=False)
+            return df.loc[np.sort(selected)]
 
-            def sample_trials(df, n):
-                if len(df) <= n:
-                    return df
-                indices = df.index.to_numpy()
-                selected = rng.choice(indices, size=n, replace=False)
-                return df.loc[np.sort(selected)]
+        cv_strategy = str(getattr(config, 'cv_strategy', '')).lower()
+        run_column = 'run' if 'run' in trial_info.columns else None
 
-            cond1_selected = sample_trials(cond1_trials, min_count)
-            cond2_selected = sample_trials(cond2_trials, min_count)
+        if ('leave-one' in cv_strategy and 'run' in cv_strategy) and run_column is not None:
+            cond1_balanced = []
+            cond2_balanced = []
 
-            trial_summary['balancing_applied'] = True
-            trial_summary['balance_strategy'] = 'downsample-match'
-            log(
-                f"  启用trial平衡: {cond1}->{len(cond1_selected)} / {cond1_total}, "
-                f"{cond2}->{len(cond2_selected)} / {cond2_total}",
-                config
-            )
+            for run_id, run_trials in trial_info.groupby(run_column, sort=False):
+                run_cond1 = run_trials[run_trials[condition_col] == cond1]
+                run_cond2 = run_trials[run_trials[condition_col] == cond2]
+                min_count = min(len(run_cond1), len(run_cond2))
+
+                if min_count == 0:
+                    log(
+                        f"  警告: run={run_id} 缺少其中一个条件，跳过该run的trial平衡", config
+                    )
+                    continue
+
+                cond1_balanced.append(sample_trials(run_cond1, min_count))
+                cond2_balanced.append(sample_trials(run_cond2, min_count))
+
+            if cond1_balanced and cond2_balanced:
+                cond1_selected = pd.concat(cond1_balanced, axis=0)
+                cond2_selected = pd.concat(cond2_balanced, axis=0)
+                trial_summary['balancing_applied'] = True
+                trial_summary['balance_strategy'] = 'per-run-downsample'
+                log(
+                    "  在Leave-One-Run策略下按run进行trial平衡", config
+                )
+            else:
+                log(
+                    "  警告: 未找到可用于按run平衡的trial，将使用全部trial", config
+                )
         else:
-            log("  trial数量已平衡，使用全部trial", config)
+            min_count = min(cond1_total, cond2_total)
+            if min_count <= 0:
+                log(f"警告: 试图进行trial平衡但条件存在空trial集合", config)
+                return None, None, None, None
+
+            if cond1_total != cond2_total:
+                cond1_selected = sample_trials(cond1_trials, min_count)
+                cond2_selected = sample_trials(cond2_trials, min_count)
+
+                trial_summary['balancing_applied'] = True
+                trial_summary['balance_strategy'] = 'downsample-match'
+                log(
+                    f"  启用trial平衡: {cond1}->{len(cond1_selected)} / {cond1_total}, "
+                    f"{cond2}->{len(cond2_selected)} / {cond2_total}",
+                    config
+                )
+            else:
+                log("  trial数量已平衡，使用全部trial", config)
     else:
         if cond1_total != cond2_total:
             log(
@@ -1789,7 +1835,8 @@ def process_searchlight_results_batch(beta_images, labels, process_mask_path, co
     # 并行处理机会水平估计和结果分析
     chance_img, chance_std_img, chance_info = estimate_subject_chance_map(
         beta_images, labels, process_mask_path, config,
-        template_img=searchlight.scores_, groups=groups, searchlight=searchlight
+        template_img=searchlight.scores_, groups=groups, searchlight=searchlight,
+        subject_id=subject_id
     )
 
     # 分析结果
@@ -2000,6 +2047,7 @@ def process_single_subject_wrapper(task_params):
     try:
         # 从字典重建配置对象（避免序列化问题）
         config = dict_to_config(task_params['config_dict'])
+        clear_global_caches()
         subject_id = task_params['subject_id']
         process_mask_path = task_params['process_mask_path']
 
