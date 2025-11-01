@@ -254,25 +254,32 @@ class BoundedLRUCache(OrderedDict):
 
     def __init__(self, max_items: int):
         super().__init__()
-        self.max_items = max(1, int(max_items))
+        self.max_items = max(0, int(max_items))
 
     def configure(self, max_items: int) -> None:
         """动态调整缓存容量。"""
 
-        self.max_items = max(1, int(max_items))
-        self._trim()
+        self.max_items = max(0, int(max_items))
+        if self.max_items == 0:
+            super().clear()
+        else:
+            self._trim()
 
     def _trim(self) -> None:
         while len(self) > self.max_items:
             self.popitem(last=False)
 
     def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+        if self.max_items == 0:
+            return default
         if key in self:
             self.move_to_end(key)
             return super().__getitem__(key)
         return default
 
     def __setitem__(self, key: Any, value: Any) -> None:  # type: ignore[override]
+        if self.max_items == 0:
+            return
         if key in self:
             super().__delitem__(key)
         super().__setitem__(key, value)
@@ -348,6 +355,8 @@ class MVPAConfig:
         # 添加Searchlight特定配置：
         self.enable_memory_monitoring = True
         self.min_trials_per_condition = 5  # 每个条件最少trial数
+        self.min_train_samples_per_fold = overrides.get('min_train_samples_per_fold', 6)
+        self.min_test_samples_per_fold = overrides.get('min_test_samples_per_fold', 2)
 
         # 验证参数
         self.debug_mode = False  # 启用调试模式
@@ -504,6 +513,7 @@ def log_safe(message, config):
 def memory_cleanup():
     """内存清理"""
     gc.collect()
+    clear_global_caches()
 
 
 def as_data_array(img):
@@ -511,6 +521,63 @@ def as_data_array(img):
     if hasattr(img, "get_fdata"):
         return img.get_fdata()
     return np.asarray(img)
+
+
+def validate_trial_beta_consistency(trial_info: pd.DataFrame, beta_images, config) -> bool:
+    """验证trial信息与beta图像的索引一致性，避免标签错位。"""
+
+    if trial_info is None or beta_images is None:
+        log("错误: trial信息或beta图像缺失", config)
+        return False
+
+    if 'combined_trial_index' not in trial_info.columns:
+        log("错误: trial信息缺少 combined_trial_index 列", config)
+        return False
+
+    total_betas = len(beta_images)
+    index_values = trial_info['combined_trial_index']
+
+    if index_values.isna().any():
+        log("错误: combined_trial_index 含有缺失值", config)
+        return False
+
+    try:
+        index_array = index_values.astype(int).to_numpy()
+    except ValueError:
+        log("错误: combined_trial_index 无法转换为整数", config)
+        return False
+
+    if index_array.size == 0:
+        log("错误: trial信息为空", config)
+        return False
+
+    min_index = int(index_array.min())
+    max_index = int(index_array.max())
+    if min_index < 0 or max_index >= total_betas:
+        log(
+            f"错误: combined_trial_index 超出范围 ({min_index}, {max_index}), beta数量: {total_betas}",
+            config,
+        )
+        return False
+
+    if not index_values.is_monotonic_increasing:
+        log("警告: combined_trial_index 非单调递增，后续将重新排序", config)
+
+    duplicated = index_values.duplicated()
+    if duplicated.any():
+        dup_indices = index_values[duplicated].unique()
+        log(f"错误: combined_trial_index 含重复值: {dup_indices.tolist()}", config)
+        return False
+
+    expected_trials = max_index + 1
+    if expected_trials > total_betas:
+        log(
+            f"错误: trial索引({expected_trials})与beta数量({total_betas})不一致",
+            config,
+        )
+        return False
+
+    return True
 
 
 def get_group_reference_image(config: "MVPAConfig", fallback_img):
@@ -654,19 +721,23 @@ SEARCHLIGHT_MASK_CACHE = BoundedLRUCache(max_items=8)
 BETA_IMAGE_CACHE = BoundedLRUCache(max_items=4)
 
 
+class SearchlightError(RuntimeError):
+    """Searchlight流程中可恢复错误的统一异常类型。"""
+
+
 def configure_cache_limits(config: "MVPAConfig") -> None:
     """根据配置动态调整全局缓存容量。"""
 
     mask_limit = getattr(config, 'mask_cache_max_items', SEARCHLIGHT_MASK_CACHE.max_items)
     beta_limit = getattr(config, 'beta_cache_max_items', BETA_IMAGE_CACHE.max_items)
 
+    if not getattr(config, 'enable_mask_cache', True):
+        mask_limit = 0
+    if not getattr(config, 'enable_beta_cache', True):
+        beta_limit = 0
+
     SEARCHLIGHT_MASK_CACHE.configure(mask_limit)
     BETA_IMAGE_CACHE.configure(beta_limit)
-
-    if not getattr(config, 'enable_mask_cache', True):
-        SEARCHLIGHT_MASK_CACHE.clear()
-    if not getattr(config, 'enable_beta_cache', True):
-        BETA_IMAGE_CACHE.clear()
 
 
 def clear_global_caches() -> None:
@@ -681,6 +752,8 @@ def apply_subprocess_cache_policy(config: "MVPAConfig") -> None:
 
     if mp.current_process().name == 'MainProcess':
         return
+
+    clear_global_caches()
 
     if getattr(config, 'enable_mask_cache', True) or getattr(config, 'enable_beta_cache', True):
         config.enable_mask_cache = False
@@ -895,7 +968,8 @@ def config_to_dict(config):
         'parallel_subjects', 'memory_aware_parallel', 'min_memory_per_subject_gb',
         'optimize_memory', 'max_chance_permutations', 'enable_batch_processing',
         'disable_chance_maps', 'memory_cache', 'memory_level', 'enable_memory_monitoring',
-        'min_trials_per_condition', 'debug_mode', 'debug_subjects', 'n_permutations_debug',
+        'min_trials_per_condition', 'min_train_samples_per_fold', 'min_test_samples_per_fold',
+        'debug_mode', 'debug_subjects', 'n_permutations_debug',
         'param_descriptions', 'common_param_values'
     ]
 
@@ -1267,6 +1341,43 @@ def check_system_resources(config):
         log("无法检测系统资源，请安装psutil: pip install psutil", config)
 
 
+def _validate_cv_fold_sizes(cv, labels, groups, config):
+    """确保每个交叉验证折的训练/测试样本充足且包含全部类别。"""
+
+    labels_array = np.asarray(labels)
+    if labels_array.size == 0:
+        raise ValueError("交叉验证验证失败: 标签为空。")
+
+    dummy_features = np.zeros((labels_array.shape[0], 1))
+    groups_array = None if groups is None else np.asarray(groups)
+
+    min_train = max(1, int(getattr(config, 'min_train_samples_per_fold', 1)))
+    min_test = max(1, int(getattr(config, 'min_test_samples_per_fold', 1)))
+
+    try:
+        splits = list(cv.split(dummy_features, labels_array, groups_array))
+    except Exception as exc:
+        raise ValueError(f"交叉验证折生成失败: {exc}") from exc
+
+    if not splits:
+        raise ValueError("交叉验证未能生成任何折。")
+
+    for fold_idx, (train_idx, test_idx) in enumerate(splits):
+        if train_idx.size < min_train or test_idx.size < min_test:
+            raise ValueError(
+                f"交叉验证fold {fold_idx} 样本数不足 (train={train_idx.size}, test={test_idx.size})"
+            )
+
+        train_labels = labels_array[train_idx]
+        test_labels = labels_array[test_idx]
+
+        if np.unique(train_labels).size < 2:
+            raise ValueError(f"交叉验证fold {fold_idx} 训练集缺少某个类别。")
+
+        if np.unique(test_labels).size < 2:
+            raise ValueError(f"交叉验证fold {fold_idx} 测试集缺少某个类别。")
+
+
 def create_cv_strategy(config, groups, labels):
     """根据配置创建交叉验证策略并进行一致性检查。"""
 
@@ -1289,20 +1400,9 @@ def create_cv_strategy(config, groups, labels):
         if unique_groups.size < 2:
             raise ValueError("Leave-one-group交叉验证至少需要两个不同的组。")
 
-        for group_id in unique_groups:
-            train_mask = group_array != group_id
-            train_labels = labels[train_mask]
-            fold_unique, fold_counts = np.unique(train_labels, return_counts=True)
-            if fold_unique.size < 2:
-                raise ValueError(
-                    "在Leave-One-Group交叉验证中，某个训练折仅包含单一类别。"
-                )
-            if fold_counts.size > 0 and fold_counts.min() < 1:
-                raise ValueError(
-                    "在Leave-One-Group交叉验证中，某个训练折的类别样本数不足。"
-                )
-
-        return LeaveOneGroupOut()
+        cv = LeaveOneGroupOut()
+        _validate_cv_fold_sizes(cv, labels, group_array, config)
+        return cv
 
     if 'group-kfold' in strategy or 'groupkfold' in strategy:
         if groups is None:
@@ -1313,7 +1413,9 @@ def create_cv_strategy(config, groups, labels):
         n_splits = min(getattr(config, 'cv_folds', 5), unique_groups.size)
         if n_splits < 2:
             raise ValueError("GroupKFold需要至少两个分组来创建折。")
-        return GroupKFold(n_splits=n_splits)
+        cv = GroupKFold(n_splits=n_splits)
+        _validate_cv_fold_sizes(cv, labels, group_array, config)
+        return cv
 
     if 'stratified' in strategy:
         max_valid_splits = min(
@@ -1325,90 +1427,134 @@ def create_cv_strategy(config, groups, labels):
             raise ValueError(
                 f"无法创建有效的StratifiedKFold折数，类别计数: {class_counts.tolist()}"
             )
-        return StratifiedKFold(
+        cv = StratifiedKFold(
             n_splits=max_valid_splits,
             random_state=getattr(config, 'cv_random_state', None),
             shuffle=True
         )
+        _validate_cv_fold_sizes(cv, labels, groups, config)
+        return cv
 
     if 'kfold' in strategy:
         n_splits = min(getattr(config, 'cv_folds', 5), len(labels))
         if n_splits < 2:
             raise ValueError("KFold需要至少两个样本来创建折。")
-        return KFold(
+        cv = KFold(
             n_splits=n_splits,
             shuffle=True,
             random_state=getattr(config, 'cv_random_state', None)
         )
+        _validate_cv_fold_sizes(cv, labels, groups, config)
+        return cv
 
     raise ValueError(f"未知的交叉验证策略: {config.cv_strategy}")
 
 
-def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
-    """内部函数，用于拟合SearchLight估计器 - 增强错误处理"""
-    try:
-        estimator = build_classification_pipeline(config, n_features=None)
+def validate_searchlight_inputs(beta_source, labels, process_mask_path, config):
+    """在运行Searchlight前验证数据和mask形状，防止早期数据错配。"""
 
-        if beta_images is None:
-            log("错误: 未提供有效的beta数据", config)
-            return None
+    labels_array = np.asarray(labels)
+    if labels_array.size == 0:
+        raise SearchlightError("Searchlight输入标签为空")
 
-        labels = np.asarray(labels)
-        unique_labels, class_counts = np.unique(labels, return_counts=True)
-        if unique_labels.size < 2:
-            log(
-                "错误: 标签只有一个类别，无法进行分类分析。"
-                "请检查条件选择是否正确。",
-                config,
+    mask_img = image.load_img(process_mask_path)
+    mask_shape = mask_img.shape
+
+    n_expected = labels_array.size
+
+    if isinstance(beta_source, (list, tuple)):
+        if len(beta_source) != n_expected:
+            raise SearchlightError(
+                f"beta图像数量({len(beta_source)})与标签数量({n_expected})不一致"
             )
-            return None
-
-        min_class_samples = int(class_counts.min()) if class_counts.size > 0 else 0
-        if min_class_samples < 2:
-            log(
-                f"错误: 最小类别样本数不足 (需要>=2)，当前计数: {class_counts.tolist()}",
-                config,
+        sample = beta_source[0]
+        if hasattr(sample, 'shape') and hasattr(sample, 'get_fdata'):
+            sample_img = sample
+        else:
+            sample_img = image.load_img(sample)
+        data_shape = sample_img.shape
+    elif hasattr(beta_source, 'shape'):
+        data_shape = tuple(beta_source.shape[:3])
+        ndim = len(beta_source.shape)
+        if ndim == 4:
+            n_volumes = beta_source.shape[3]
+        else:
+            n_volumes = 1
+        if n_volumes != n_expected:
+            raise SearchlightError(
+                f"beta 4D图像体积数({n_volumes})与标签数量({n_expected})不一致"
             )
-            return None
+    elif hasattr(beta_source, 'get_fdata'):
+        data_shape = tuple(beta_source.shape[:3])
+        n_volumes = beta_source.shape[3] if len(beta_source.shape) == 4 else 1
+        if n_volumes != n_expected:
+            raise SearchlightError(
+                f"beta图像体积数({n_volumes})与标签数量({n_expected})不一致"
+            )
+    else:
+        raise SearchlightError("无法识别的beta输入类型")
 
-        groups_array = np.asarray(groups) if groups is not None else None
-
-        try:
-            cv = create_cv_strategy(config, groups_array, labels)
-        except ValueError as exc:
-            log(f"错误: {exc}", config)
-            return None
-
-        searchlight = SearchLight(
-            mask_img=process_mask_path,
-            radius=config.searchlight_radius,
-            estimator=estimator,
-            cv=cv,
-            scoring='accuracy',
-            n_jobs=config.n_jobs,
-            verbose=verbose
+    if tuple(data_shape) != tuple(mask_shape):
+        raise SearchlightError(
+            f"beta数据体素维度{data_shape} 与 mask {mask_shape} 不匹配"
         )
 
+
+def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None, verbose=1):
+    """内部函数，用于拟合SearchLight估计器 - 增强错误处理"""
+
+    estimator = build_classification_pipeline(config, n_features=None)
+
+    if beta_images is None:
+        raise SearchlightError("未提供有效的beta数据")
+
+    labels = np.asarray(labels)
+    unique_labels, class_counts = np.unique(labels, return_counts=True)
+    if unique_labels.size < 2:
+        raise SearchlightError("标签只有一个类别，无法进行分类分析。")
+
+    min_class_samples = int(class_counts.min()) if class_counts.size > 0 else 0
+    if min_class_samples < 2:
+        raise SearchlightError(
+            f"最小类别样本数不足 (需要>=2)，当前计数: {class_counts.tolist()}"
+        )
+
+    groups_array = np.asarray(groups) if groups is not None else None
+
+    try:
+        cv = create_cv_strategy(config, groups_array, labels)
+    except ValueError as exc:
+        raise SearchlightError(str(exc)) from exc
+
+    searchlight = SearchLight(
+        mask_img=process_mask_path,
+        radius=config.searchlight_radius,
+        estimator=estimator,
+        cv=cv,
+        scoring='accuracy',
+        n_jobs=config.n_jobs,
+        verbose=verbose
+    )
+
+    try:
         searchlight.fit(beta_images, labels, groups=groups_array)
+    except MemoryError as exc:
+        raise SearchlightError(f"SearchLight拟合失败 (内存不足): {exc}") from exc
+    except ValueError as exc:
+        raise SearchlightError(f"SearchLight拟合失败: {exc}") from exc
+    except Exception as exc:
+        raise SearchlightError(f"SearchLight拟合出现未知错误: {exc}") from exc
 
-        # 验证结果
-        if not hasattr(searchlight, 'scores_'):
-            log("错误: SearchLight拟合后没有scores_属性", config)
-            return None
+    if not hasattr(searchlight, 'scores_'):
+        raise SearchlightError("SearchLight拟合后没有scores_属性")
 
-        # 确保scores_是有效的
-        scores_data = as_data_array(searchlight.scores_)
-        if scores_data is None or scores_data.size == 0:
-            log("错误: SearchLight scores_数据为空", config)
-            return None
+    scores_data = as_data_array(searchlight.scores_)
+    if scores_data is None or scores_data.size == 0:
+        raise SearchlightError("SearchLight scores_数据为空")
 
-        setattr(searchlight, '_cached_beta_source', beta_images)
+    setattr(searchlight, '_cached_beta_source', beta_images)
 
-        return searchlight
-
-    except Exception as e:
-        log(f"SearchLight拟合失败: {str(e)}", config)
-        return None
+    return searchlight
 
 
 @monitor_memory_usage
@@ -1425,6 +1571,8 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
         start_time = time.time()
         beta_source = prepare_beta_data(beta_images, config)
 
+        validate_searchlight_inputs(beta_source, labels, process_mask_path, config)
+
         searchlight = _fit_searchlight(
             beta_source,
             labels,
@@ -1439,6 +1587,9 @@ def run_searchlight_classification(beta_images, labels, process_mask_path, confi
 
         return searchlight
 
+    except SearchlightError as err:
+        log(f"Searchlight分析失败: {err}", config)
+        return None
     except Exception as e:
         log(f"Searchlight分析失败: {str(e)}", config)
         return None
@@ -1790,6 +1941,10 @@ def prepare_classification_data(trial_info, beta_images, cond1, cond2, config):
     selected_trials = selected_trials.sort_values('combined_trial_index').reset_index(drop=True)
     selected_trials['selected_for_classification'] = True
 
+    if not selected_trials['combined_trial_index'].is_monotonic_increasing:
+        log("错误: 重新排序后的trial索引仍非单调递增，数据可能损坏", config)
+        return None, None, None, None
+
     trial_summary['n_trials_cond1_used'] = int((selected_trials[condition_col] == cond1).sum())
     trial_summary['n_trials_cond2_used'] = int((selected_trials[condition_col] == cond2).sum())
 
@@ -1919,6 +2074,10 @@ def process_single_subject(subject_id, config, process_mask_path):
             return subject_results
 
         log(f"成功加载 {len(beta_images)} 个beta图像", config)
+
+        if not validate_trial_beta_consistency(trial_info, beta_images, config):
+            log(f"被试 {subject_id} 数据一致性检查失败，跳过处理", config)
+            return subject_results
 
         # 对每个对比条件进行分析
         for contrast_name, cond1, cond2 in config.contrasts:
