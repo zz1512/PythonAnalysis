@@ -71,7 +71,7 @@ COMMON_MVPA_ANALYSIS_PARAMS = OrderedDict([
     (
         "min_region_size",
         CommonParamDefinition(
-            default=10,
+            default=30,
             description="允许报告的最小体素簇大小，过滤噪声体素。",
         ),
     ),
@@ -315,7 +315,7 @@ class MVPAConfig:
         # 与经典心理学MVPA分析一致的关键配置
         self.cv_strategy = overrides.get(
             'cv_strategy',
-            'stratified-kfold'
+            'leave-one-group-out'
         )
         self.balance_trials = overrides.get('balance_trials', True)
         self.balance_random_state = overrides.get(
@@ -338,14 +338,14 @@ class MVPAConfig:
         self.memory_aware_parallel = False  # 内存感知的并行处理
         self.min_memory_per_subject_gb = 24  # 每个被试预估需要的内存(GB)
         self.optimize_memory = True  # 内存优化
-        self.max_chance_permutations = 5  # 限制机会水平置换次数
+        self.max_chance_permutations = 0  # 0 表示不限制机会水平置换次数
         self.enable_batch_processing = True  # 启用批量处理
         self.disable_chance_maps = False  # 可选：完全禁用机会水平地图计算
 
         # 显著性分析阈值
         self.classification_significance_threshold = overrides.get(
             'classification_significance_threshold',
-            0.5,
+            0.6,
         )
 
         # 内存优化参数
@@ -2374,9 +2374,10 @@ def process_subjects_serial(config, process_mask_path):
 def permutation_test_group_level(deltas, config):
     """组水平符号翻转置换检验"""
     delta_values = np.asarray(deltas, dtype=float)
+    delta_values = delta_values[np.isfinite(delta_values)]
 
     if delta_values.size == 0:
-        raise ValueError("group_accuracies must contain at least one value")
+        raise ValueError("group_accuracies must contain at least one finite value")
 
     rng = np.random.default_rng(config.permutation_random_state)
     observed_mean = float(np.mean(delta_values))
@@ -2442,12 +2443,37 @@ def perform_group_statistics_corrected(group_df, config):
             log(f"跳过 {contrast_name}: 数据点不足", config)
             continue
 
-        accuracies = contrast_data['accuracy'].values
-        chance_values = contrast_data.get('mean_chance_accuracy', pd.Series(np.full_like(accuracies, 0.5))).values
+        accuracies = np.asarray(contrast_data['accuracy'].values, dtype=float)
+        if 'mean_chance_accuracy' in contrast_data.columns:
+            chance_series = contrast_data['mean_chance_accuracy'].replace([np.inf, -np.inf], np.nan)
+            default_chance = getattr(config, 'chance_level', 0.5)
+            chance_values = chance_series.fillna(default_chance).to_numpy(dtype=float)
+        else:
+            default_chance = getattr(config, 'chance_level', 0.5)
+            chance_values = np.full_like(accuracies, default_chance, dtype=float)
+
+        finite_mask = np.isfinite(accuracies) & np.isfinite(chance_values)
+        if not np.any(finite_mask):
+            log(f"跳过 {contrast_name}: 无有效的准确率或机会水平数据", config)
+            continue
+
+        accuracies = accuracies[finite_mask]
+        chance_values = chance_values[finite_mask]
+
         if 'mean_delta_accuracy' in contrast_data.columns:
-            deltas = contrast_data['mean_delta_accuracy'].values
+            delta_source = np.asarray(contrast_data['mean_delta_accuracy'].values, dtype=float)
+            deltas = delta_source[finite_mask]
         else:
             deltas = accuracies - chance_values
+
+        deltas = deltas[np.isfinite(deltas)]
+        if deltas.size == 0:
+            log(f"跳过 {contrast_name}: 差值均为非有限值", config)
+            continue
+
+        if len(accuracies) < 3:
+            log(f"跳过 {contrast_name}: 有效数据点不足", config)
+            continue
 
         mean_acc = np.mean(accuracies)
         mean_chance = np.mean(chance_values)
@@ -2456,7 +2482,7 @@ def perform_group_statistics_corrected(group_df, config):
         std_delta = np.std(deltas, ddof=1) if len(deltas) > 1 else 0.0
         sem_delta = std_delta / np.sqrt(len(deltas)) if len(deltas) > 0 else np.nan
 
-        t_stat, t_pval = stats.ttest_1samp(deltas, 0.0)
+        t_stat, t_pval = stats.ttest_1samp(deltas, 0.0, alternative='greater')
 
         perm_result = permutation_test_group_level(deltas, config)
 
