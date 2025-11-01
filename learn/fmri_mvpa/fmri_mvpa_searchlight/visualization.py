@@ -36,6 +36,20 @@ def setup_chinese_fonts(config=None):
                 except Exception as e:
                     print(f"加载自定义中文字体失败 {font_path}: {e}")
 
+    font_file_candidates = [
+        Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf'),
+        Path('/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.otf'),
+        Path('/usr/share/fonts/truetype/wqy/wqy-microhei.ttc'),
+        Path.home() / 'fonts' / 'NotoSansCJK-Regular.otf',
+    ]
+
+    for font_file in font_file_candidates:
+        try:
+            if font_file and font_file.exists():
+                fm.fontManager.addfont(str(font_file))
+        except Exception as e:
+            print(f"加载字体文件失败 {font_file}: {e}")
+
     font_candidates = [
         'SimHei',
         'Microsoft YaHei',

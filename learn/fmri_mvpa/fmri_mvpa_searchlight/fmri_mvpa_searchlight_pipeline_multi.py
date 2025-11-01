@@ -71,7 +71,7 @@ COMMON_MVPA_ANALYSIS_PARAMS = OrderedDict([
     (
         "min_region_size",
         CommonParamDefinition(
-            default=10,
+            default=30,
             description="允许报告的最小体素簇大小，过滤噪声体素。",
         ),
     ),
@@ -315,7 +315,7 @@ class MVPAConfig:
         # 与经典心理学MVPA分析一致的关键配置
         self.cv_strategy = overrides.get(
             'cv_strategy',
-            'stratified-kfold'
+            'leave-one-group-out'
         )
         self.balance_trials = overrides.get('balance_trials', True)
         self.balance_random_state = overrides.get(
@@ -338,14 +338,14 @@ class MVPAConfig:
         self.memory_aware_parallel = False  # 内存感知的并行处理
         self.min_memory_per_subject_gb = 24  # 每个被试预估需要的内存(GB)
         self.optimize_memory = True  # 内存优化
-        self.max_chance_permutations = 5  # 限制机会水平置换次数
+        self.max_chance_permutations = 0  # 0 表示不限制机会水平置换次数
         self.enable_batch_processing = True  # 启用批量处理
         self.disable_chance_maps = False  # 可选：完全禁用机会水平地图计算
 
         # 显著性分析阈值
         self.classification_significance_threshold = overrides.get(
             'classification_significance_threshold',
-            0.5,
+            0.6,
         )
 
         # 内存优化参数
@@ -2153,18 +2153,18 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
     import numpy as np
     from sklearn.model_selection import GroupKFold, LeaveOneGroupOut, StratifiedKFold, KFold
     # 1️⃣ run 分布（仅做信息展示）
-    log(f"\n1️⃣ Run分布:")
+    log(f"\n1️⃣ Run分布:", config)
     if groups is not None:
         g_arr = np.asarray(groups)
         runs, counts = np.unique(g_arr, return_counts=True)
         for r, c in zip(runs, counts):
             lbl_dist = np.bincount(np.asarray(labels)[g_arr == r])
-            log(f"   Run {r}: {c} trials, 标签分布 {lbl_dist}")
+            log(f"   Run {r}: {c} trials, 标签分布 {lbl_dist}", config)
     else:
-        log("   ⚠️ groups=None，无法展示 run 分布")
+        log("   ⚠️ groups=None，无法展示 run 分布", config)
 
     # 2️⃣ CV 策略
-    log(f"\n2️⃣ 交叉验证策略:")
+    log(f"\n2️⃣ 交叉验证策略:", config)
     cv = create_cv_strategy(config, groups, labels)
     try:
         # 仅在 group-based 时传 groups
@@ -2174,18 +2174,18 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
         )
     except TypeError:
         n_splits = cv.get_n_splits()
-    log(f"   策略类型: {type(cv).__name__}")
-    log(f"   折数: {n_splits}")
+    log(f"   策略类型: {type(cv).__name__}", config)
+    log(f"   折数: {n_splits}", config)
 
     # 3️⃣ 分割检查（仅 group-based 才检查 run 重叠）
     tail = "" if group_based else "（非 group 策略，run 跨训练/测试是预期，不构成泄露）"
-    log(f"\n3️⃣ CV分割检查(前2折){tail}:")
+    log(f"\n3️⃣ CV分割检查(前2折){tail}:", config)
     for i, (tr_idx, te_idx) in enumerate(
         cv.split(np.zeros_like(labels), labels, (groups if group_based else None))
     ):
         if i >= 2:
             break
-        log(f"\n   Fold {i + 1}:")
+        log(f"\n   Fold {i + 1}:", config)
         if groups is not None:
             tr_runs = set(np.asarray(groups)[tr_idx])
             te_runs = set(np.asarray(groups)[te_idx])
@@ -2194,26 +2194,26 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
 
         if group_based:
             overlap = tr_runs & te_runs
-            log(f"      训练集runs: {tr_runs}")
-            log(f"      测试集runs: {te_runs}")
-            log("      ✅ 无泄露" if not overlap else f"      ❌ 数据泄露! 重叠runs: {overlap}")
+            log(f"      训练集runs: {tr_runs}", config)
+            log(f"      测试集runs: {te_runs}", config)
+            log("      ✅ 无泄露" if not overlap else f"      ❌ 数据泄露! 重叠runs: {overlap}", config)
         else:
-            log("      使用 KFold/StratifiedKFold，允许 run 在训练/测试同时出现。")
+            log("      使用 KFold/StratifiedKFold，允许 run 在训练/测试同时出现。", config)
 
-        log(f"      训练集样本: {len(tr_idx)}, 测试集样本: {len(te_idx)}")
+        log(f"      训练集样本: {len(tr_idx)}, 测试集样本: {len(te_idx)}", config)
 
     # 4️⃣ 机会水平设置
-    log(f"\n4️⃣ 机会水平估计设置:")
-    log(f"   置换次数: {getattr(config, 'within_subject_permutations', 'N/A')}")
-    log(f"   最大限制: {getattr(config, 'max_chance_permutations', 'N/A')}")
+    log(f"\n4️⃣ 机会水平估计设置:", config)
+    log(f"   置换次数: {getattr(config, 'within_subject_permutations', 'N/A')}", config)
+    log(f"   最大限制: {getattr(config, 'max_chance_permutations', 'N/A')}", config)
     actual_perms = min(
         getattr(config, 'within_subject_permutations', 100),
         getattr(config, 'max_chance_permutations', 999999)
     )
     if actual_perms < 5:
-        log(f"   ⚠️ 警告: 实际置换次数({actual_perms})过少!")
+        log(f"   ⚠️ 警告: 实际置换次数({actual_perms})过少!", config)
     else:
-        log(f"   ✅ 实际置换次数: {actual_perms}")
+        log(f"   ✅ 实际置换次数: {actual_perms}", config)
 
 def process_searchlight_for_subject(searchlight, beta_images, labels, process_mask_path, config,
                                     subject_id, contrast_name, groups, trial_details,
@@ -2374,9 +2374,10 @@ def process_subjects_serial(config, process_mask_path):
 def permutation_test_group_level(deltas, config):
     """组水平符号翻转置换检验"""
     delta_values = np.asarray(deltas, dtype=float)
+    delta_values = delta_values[np.isfinite(delta_values)]
 
     if delta_values.size == 0:
-        raise ValueError("group_accuracies must contain at least one value")
+        raise ValueError("group_accuracies must contain at least one finite value")
 
     rng = np.random.default_rng(config.permutation_random_state)
     observed_mean = float(np.mean(delta_values))
@@ -2442,12 +2443,37 @@ def perform_group_statistics_corrected(group_df, config):
             log(f"跳过 {contrast_name}: 数据点不足", config)
             continue
 
-        accuracies = contrast_data['accuracy'].values
-        chance_values = contrast_data.get('mean_chance_accuracy', pd.Series(np.full_like(accuracies, 0.5))).values
+        accuracies = np.asarray(contrast_data['accuracy'].values, dtype=float)
+        if 'mean_chance_accuracy' in contrast_data.columns:
+            chance_series = contrast_data['mean_chance_accuracy'].replace([np.inf, -np.inf], np.nan)
+            default_chance = getattr(config, 'chance_level', 0.5)
+            chance_values = chance_series.fillna(default_chance).to_numpy(dtype=float)
+        else:
+            default_chance = getattr(config, 'chance_level', 0.5)
+            chance_values = np.full_like(accuracies, default_chance, dtype=float)
+
+        finite_mask = np.isfinite(accuracies) & np.isfinite(chance_values)
+        if not np.any(finite_mask):
+            log(f"跳过 {contrast_name}: 无有效的准确率或机会水平数据", config)
+            continue
+
+        accuracies = accuracies[finite_mask]
+        chance_values = chance_values[finite_mask]
+
         if 'mean_delta_accuracy' in contrast_data.columns:
-            deltas = contrast_data['mean_delta_accuracy'].values
+            delta_source = np.asarray(contrast_data['mean_delta_accuracy'].values, dtype=float)
+            deltas = delta_source[finite_mask]
         else:
             deltas = accuracies - chance_values
+
+        deltas = deltas[np.isfinite(deltas)]
+        if deltas.size == 0:
+            log(f"跳过 {contrast_name}: 差值均为非有限值", config)
+            continue
+
+        if len(accuracies) < 3:
+            log(f"跳过 {contrast_name}: 有效数据点不足", config)
+            continue
 
         mean_acc = np.mean(accuracies)
         mean_chance = np.mean(chance_values)
@@ -2456,7 +2482,7 @@ def perform_group_statistics_corrected(group_df, config):
         std_delta = np.std(deltas, ddof=1) if len(deltas) > 1 else 0.0
         sem_delta = std_delta / np.sqrt(len(deltas)) if len(deltas) > 0 else np.nan
 
-        t_stat, t_pval = stats.ttest_1samp(deltas, 0.0)
+        t_stat, t_pval = stats.ttest_1samp(deltas, 0.0, alternative='greater')
 
         perm_result = permutation_test_group_level(deltas, config)
 
