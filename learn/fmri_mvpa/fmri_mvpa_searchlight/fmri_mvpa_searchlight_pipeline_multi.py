@@ -1254,11 +1254,75 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
             log("错误: 未提供有效的beta数据", config)
             return None
 
+        labels = np.asarray(labels)
+        unique_labels, class_counts = np.unique(labels, return_counts=True)
+        if unique_labels.size < 2:
+            log(
+                "错误: 标签只有一个类别，无法进行分类分析。"
+                "请检查条件选择是否正确。",
+                config,
+            )
+            return None
+
+        min_class_samples = int(class_counts.min()) if class_counts.size > 0 else 0
+        if min_class_samples < 2:
+            log(
+                f"错误: 最小类别样本数不足 (需要>=2)，当前计数: {class_counts.tolist()}",
+                config,
+            )
+            return None
+
         if groups is not None and len(np.unique(groups)) > 1:
+            groups = np.asarray(groups)
+            unique_groups = np.unique(groups)
+
+            if unique_groups.size < 2:
+                log(
+                    "错误: 留一组交叉验证至少需要两个以上的组。",
+                    config,
+                )
+                return None
+
+            # 检查每一个留出组合下，训练集是否包含所有类别
+            for group_id in unique_groups:
+                train_mask = groups != group_id
+                train_labels = labels[train_mask]
+
+                fold_unique, fold_counts = np.unique(train_labels, return_counts=True)
+                if fold_unique.size < 2:
+                    log(
+                        "错误: 在Leave-One-Group交叉验证中，某个训练折仅包含单一类别。"
+                        " 请检查试次分组是否导致类别完全分离。",
+                        config,
+                    )
+                    return None
+
+                if fold_counts.min() < 1:
+                    log(
+                        "错误: 在Leave-One-Group交叉验证中，某个训练折类别样本不足。"
+                        f" 训练折类别计数: {fold_counts.tolist()}",
+                        config,
+                    )
+                    return None
+
             cv = LeaveOneGroupOut()
         else:
+            max_valid_splits = min(
+                config.cv_folds,
+                len(labels),
+                min_class_samples
+            )
+
+            if max_valid_splits < 2:
+                log(
+                    f"错误: 无法创建有效的交叉验证折数。"
+                    f" 样本总数: {len(labels)}, 类别计数: {class_counts.tolist()}",
+                    config,
+                )
+                return None
+
             cv = StratifiedKFold(
-                n_splits=min(config.cv_folds, len(labels)),
+                n_splits=max_valid_splits,
                 random_state=config.cv_random_state,
                 shuffle=True
             )
