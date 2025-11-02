@@ -346,7 +346,7 @@ class MVPAConfig:
         # 显著性分析阈值
         self.classification_significance_threshold = overrides.get(
             'classification_significance_threshold',
-            0.6,
+            0.54,
         )
 
         # 内存优化参数

@@ -3,144 +3,201 @@
 """
 下载常用的fMRI脑区mask文件
 用于searchlight MVPA分析
+统一为 MNI152(91×109×91) 空间
 """
 
-import os
-import urllib.request
 import numpy as np
 from nilearn import datasets, image
-from nilearn.image import new_img_like
-import os
+from nilearn.image import new_img_like, resample_img
 from nilearn.datasets import fetch_atlas_harvard_oxford
-import nibabel as nib
 from pathlib import Path
 
+
+def create_91x109x91_template():
+    """直接创建(91×109×91)空间的模板"""
+    print("创建MNI152(91×109×91)目标空间模板...")
+
+    # 使用Harvard-Oxford图谱作为参考，因为它已经是91×109×91
+    ho_atlas = fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
+    template_img = ho_atlas.maps
+
+    print(f"目标模板shape: {template_img.shape}")
+    return template_img
+
+
+def resample_to_target_space(source_img, target_img, interpolation='nearest'):
+    """将图像重采样到目标空间"""
+    return resample_img(source_img,
+                        target_affine=target_img.affine,
+                        target_shape=target_img.shape[:3],
+                        interpolation=interpolation,
+                        force_resample=True)
+
+
+def validate_and_resample_mask(mask_path, target_template, expected_shape=(91, 109, 91)):
+    """验证mask维度，如果不正确则重采样"""
+    mask_img = image.load_img(str(mask_path))
+    current_shape = mask_img.shape[:3]
+
+    if current_shape == expected_shape:
+        print(f"  ✓ {mask_path.name} 维度正确: {current_shape}")
+        return mask_img
+    else:
+        print(f"  ⚠ {mask_path.name} 维度不正确: {current_shape} -> 重采样到 {expected_shape}")
+        resampled_img = resample_to_target_space(mask_img, target_template, 'nearest')
+        # 确保二值化
+        resampled_data = resampled_img.get_fdata()
+        resampled_data_binary = (resampled_data > 0.5).astype(np.int32)
+        resampled_img = new_img_like(target_template, resampled_data_binary)
+        resampled_img.to_filename(mask_path)
+        print(f"  ✓ 重采样完成: {mask_path.name} -> {resampled_img.shape}")
+        return resampled_img
+
+
 def create_language_masks():
-    """
-    创建语言处理相关脑区的mask文件
-    使用Harvard-Oxford皮层图谱和MNI152模板
-    """
-    print("开始下载和创建语言处理脑区mask文件...")
-    
-    # 下载Harvard-Oxford皮层图谱
-    ho_atlas = fetch_atlas_harvard_oxford('cort-maxprob-thr25-2mm')
+    print("=== 开始创建 MNI152(91×109×91) 空间的mask文件 ===")
+
+    # 创建目标空间模板
+    target_template = create_91x109x91_template()
+    expected_shape = target_template.shape[:3]
+
+    # 确保目标模板是我们期望的维度
+    if expected_shape != (91, 109, 91):
+        print(f"警告: 目标模板维度为 {expected_shape}，不是期望的 (91, 109, 91)")
+        print("将强制重采样到 (91, 109, 91)")
+        # 如果模板不是我们想要的，创建一个空的91x109x91图像作为模板
+        empty_data = np.zeros((91, 109, 91), dtype=np.int32)
+        target_template = new_img_like(target_template, empty_data)
+
+    # =====================================================
+    # ✅ Step 1. 创建 MNI152(91×109×91) 灰质 mask
+    # =====================================================
+    print("下载并重采样MNI152灰质mask到91×109×91空间...")
+    gm_mask_img_orig = datasets.load_mni152_gm_mask(resolution=2)
+    gm_mask_img = resample_to_target_space(gm_mask_img_orig, target_template, 'nearest')  # 使用nearest避免插值警告
+
+    # 二值化处理
+    gm_data = gm_mask_img.get_fdata()
+    gm_data_binary = (gm_data > 0.5).astype(np.int32)
+    gm_mask_img = new_img_like(target_template, gm_data_binary)
+
+    gm_mask_img.to_filename("gray_matter_mask_91x109x91.nii.gz")
+    print(f"已创建: gray_matter_mask_91x109x91.nii.gz, shape: {gm_mask_img.shape}")
+
+    # =====================================================
+    # ✅ Step 2. 使用 Harvard-Oxford 图谱
+    # =====================================================
+    print("使用Harvard-Oxford皮层图谱...")
+    ho_atlas = fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
     atlas_img = ho_atlas.maps
     labels = ho_atlas.labels
-    
-    print(f"图谱标签: {labels[:10]}...")  # 显示前10个标签
-    
-    # 下载灰质层mask
-    print("正在下载MNI152灰质层mask...")
-    mni_template = datasets.load_mni152_template(resolution=2)
-    gm_mask = datasets.load_mni152_gm_mask(resolution=2)
-    
-    # 保存灰质层mask
-    gm_mask.to_filename('mni152_gm_mask.nii.gz')
-    print("已创建: mni152_gm_mask.nii.gz")
-    
-    # 创建各个脑区的mask
-    atlas_data = atlas_img.get_fdata()
-    
-    # 定义脑区映射 (基于Harvard-Oxford图谱的标签索引)
-    brain_regions = {
-        'broca_area': [6, 7],  # 下额回 (Inferior Frontal Gyrus)
-        'wernicke_area': [20, 21],  # 上颞回 (Superior Temporal Gyrus)
-        'angular_gyrus': [30],  # 角回 (Angular Gyrus)
-        'inferior_frontal_gyrus': [6, 7],  # 下额回
-        'superior_temporal_gyrus': [20, 21],  # 上颞回
-        'middle_temporal_gyrus': [19],  # 中颞回 (Middle Temporal Gyrus)
-        'precuneus': [15],  # 楔前叶 (Precuneus)
-        'posterior_parietal_cortex': [14, 30]  # 后顶叶皮层 (包括上顶叶小叶和角回)
-    }
-    
-    for region_name, indices in brain_regions.items():
-        print(f"正在创建 {region_name} mask...")
-        
-        # 创建二进制mask
-        mask_data = np.zeros_like(atlas_data)
-        for idx in indices:
-            mask_data[atlas_data == idx] = 1
-        
-        # 创建NIfTI图像
-        mask_img = new_img_like(atlas_img, mask_data)
-        
-        # 保存mask文件
-        filename = f"{region_name}.nii.gz"
-        mask_img.to_filename(filename)
-        print(f"已创建: {filename}")
-    
-    # 创建综合语言网络mask (结合多个语言相关脑区)
-    print("正在创建综合语言网络mask...")
-    language_indices = [6, 7, 20, 21, 19, 30, 15]  # 结合多个语言相关脑区
-    language_mask_data = np.zeros_like(atlas_data)
-    for idx in language_indices:
-        language_mask_data[atlas_data == idx] = 1
-    
-    language_network_img = new_img_like(atlas_img, language_mask_data)
-    language_network_img.to_filename('language_network_mask.nii.gz')
-    print("已创建: language_network_mask.nii.gz")
-    
-    # 创建空间认知网络mask (楔前叶 + 后顶叶)
-    print("正在创建空间认知网络mask...")
-    spatial_indices = [15, 14, 30]  # 楔前叶 + 后顶叶相关区域
-    spatial_mask_data = np.zeros_like(atlas_data)
-    for idx in spatial_indices:
-        spatial_mask_data[atlas_data == idx] = 1
-    
-    spatial_network_img = new_img_like(atlas_img, spatial_mask_data)
-    spatial_network_img.to_filename('spatial_network_mask.nii.gz')
-    print("已创建: spatial_network_mask.nii.gz")
-    
-    # 创建灰质层mask
-    print("正在创建灰质层mask...")
-    # 使用MNI152灰质概率图创建二值化灰质mask
-    gm_prob = datasets.load_mni152_gm_template(resolution=2)
-    
-    # 阈值化灰质概率图 (概率 > 0.2)
-    gm_data = gm_prob.get_fdata()
-    gm_binary_data = (gm_data > 0.2).astype(int)
-    gm_binary_img = new_img_like(gm_prob, gm_binary_data)
-    gm_binary_img.to_filename('gray_matter_mask.nii.gz')
-    print("已创建: gray_matter_mask.nii.gz")
-    
-    # 创建皮层灰质mask (结合Harvard-Oxford皮层图谱)
+    print(f"图谱shape: {atlas_img.shape}")
+
+    # 确保图谱在目标空间
+    if atlas_img.shape[:3] != expected_shape:
+        print("重采样Harvard-Oxford图谱到目标空间...")
+        atlas_img = resample_to_target_space(atlas_img, target_template, 'nearest')
+
+    atlas_data = atlas_img.get_fdata().astype(np.int32)
+    print(f"最终图谱shape: {atlas_img.shape}")
+
+    # =====================================================
+    # ✅ Step 3. 创建皮层灰质mask
+    # =====================================================
     print("正在创建皮层灰质mask...")
-    # 创建皮层mask (排除皮下结构)
-    cortical_data = np.zeros_like(atlas_data)
-    # 包含所有皮层区域 (索引1-48为皮层区域)
-    for idx in range(1, 49):
+    cortical_data = np.zeros(atlas_data.shape, dtype=np.int32)
+    for idx in range(1, 49):  # Harvard-Oxford皮层索引
         cortical_data[atlas_data == idx] = 1
-    
-    # 将灰质mask重采样到与atlas相同的空间
-    gm_resampled = image.resample_to_img(gm_binary_img, atlas_img, interpolation='nearest')
-    gm_resampled_data = gm_resampled.get_fdata()
-    
-    # 与灰质mask相交
-    cortical_gm_data = cortical_data * gm_resampled_data
-    cortical_gm_img = image.new_img_like(atlas_img, cortical_gm_data)
-    cortical_gm_img.to_filename('cortical_gray_matter_mask.nii.gz')
-    print("已创建: cortical_gray_matter_mask.nii.gz")
-    
-    print("\n所有mask文件创建完成!")
-    print("文件列表:")
-    for file in Path('.').glob('*.nii.gz'):
-        print(f"  - {file.name}")
+
+    gm_data = gm_mask_img.get_fdata()
+    cortical_gm_data = cortical_data * (gm_data > 0)
+    cortical_gm_img = new_img_like(target_template, cortical_gm_data)
+    cortical_gm_img.to_filename("cortical_gray_matter_mask.nii.gz")
+    print(f"已创建: cortical_gray_matter_mask.nii.gz, shape: {cortical_gm_img.shape}")
+
+    # =====================================================
+    # ✅ Step 4. 创建语言与空间网络 mask
+    # =====================================================
+    brain_regions = {
+        "broca_area": [6, 7],
+        "wernicke_area": [20, 21],
+        "angular_gyrus": [30],
+        "middle_temporal_gyrus": [19],
+        "precuneus": [15],
+        "posterior_parietal_cortex": [14, 30],
+    }
+
+    for name, indices in brain_regions.items():
+        mask_data = np.isin(atlas_data, indices).astype(np.int32)
+        mask_img = new_img_like(target_template, mask_data)
+        mask_img.to_filename(f"{name}.nii.gz")
+        print(f"已创建: {name}.nii.gz, shape: {mask_img.shape}")
+
+    # 语言网络
+    language_indices = [6, 7, 19, 20, 21, 30, 15]
+    language_mask = np.isin(atlas_data, language_indices).astype(np.int32)
+    language_img = new_img_like(target_template, language_mask)
+    language_img.to_filename("language_network_mask.nii.gz")
+    print(f"已创建: language_network_mask.nii.gz, shape: {language_img.shape}")
+
+    # 空间网络
+    spatial_indices = [14, 15, 30]
+    spatial_mask = np.isin(atlas_data, spatial_indices).astype(np.int32)
+    spatial_img = new_img_like(target_template, spatial_mask)
+    spatial_img.to_filename("spatial_network_mask.nii.gz")
+    print(f"已创建: spatial_network_mask.nii.gz, shape: {spatial_img.shape}")
+
+    # =====================================================
+    # ✅ Step 5. 严格校验所有生成的mask文件
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("开始严格校验所有mask文件的维度...")
+    print("=" * 60)
+
+    mask_files = list(Path(".").glob("*.nii.gz"))
+    validation_passed = True
+
+    for mask_file in mask_files:
+        try:
+            validated_img = validate_and_resample_mask(mask_file, target_template, (91, 109, 91))
+            final_shape = validated_img.shape[:3]
+            if final_shape != (91, 109, 91):
+                print(f"  ❌ {mask_file.name} 校验失败: {final_shape} != (91, 109, 91)")
+                validation_passed = False
+        except Exception as e:
+            print(f"  ❌ {mask_file.name} 校验出错: {e}")
+            validation_passed = False
+
+    # =====================================================
+    # ✅ Step 6. 最终验证报告
+    # =====================================================
+    print("\n" + "=" * 60)
+    print("最终验证报告:")
+    print("=" * 60)
+
+    if validation_passed:
+        print("✅ 所有mask文件校验通过!")
+        print(f"\n✅ 生成的mask文件列表 (统一空间 91×109×91):")
+        for f in Path(".").glob("*.nii.gz"):
+            img = image.load_img(str(f))
+            print(f"  - {f.name}, shape: {img.shape}")
+    else:
+        print("❌ 部分mask文件校验失败，请检查上述错误信息")
+
+    return validation_passed
+
 
 def main():
-    """
-    主函数
-    """
-    print("=== fMRI脑区Mask下载器 ===")
-    print("正在创建常用的语言处理和空间认知脑区mask...")
-    
+    print("=== fMRI脑区Mask下载器 (严格校验到91×109×91空间) ===")
     try:
-        create_language_masks()
-        print("\n✅ 所有mask文件下载和创建完成!")
-        print("这些mask文件可用于searchlight MVPA分析")
-        
+        success = create_language_masks()
+        if success:
+            print("\n🎉 所有mask创建并校验完成，可直接用于Searchlight分析。")
+        else:
+            print("\n⚠️ mask创建完成，但存在校验问题，请检查输出。")
     except Exception as e:
         print(f"❌ 错误: {e}")
-        print("请检查网络连接和nilearn库是否正确安装")
+
 
 if __name__ == "__main__":
     main()
