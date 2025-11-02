@@ -339,7 +339,7 @@ class MVPAConfig:
         self.memory_aware_parallel = False  # 内存感知的并行处理
         self.min_memory_per_subject_gb = 24  # 每个被试预估需要的内存(GB)
         self.optimize_memory = True  # 内存优化
-        self.max_chance_permutations = 0  # 0 表示不限制机会水平置换次数
+        self.max_chance_permutations = 5  # 0 表示不限制机会水平置换次数
         self.enable_batch_processing = True  # 启用批量处理
         self.disable_chance_maps = False  # 可选：完全禁用机会水平地图计算
 
@@ -1477,124 +1477,58 @@ def _build_block_groups(label_count, config):
 
 
 def create_cv_strategy(config, groups, labels):
-    """根据配置创建交叉验证策略并进行一致性检查。
-
-    返回 (cv, effective_groups)。若 cv 不需要 groups，effective_groups 为 None。
     """
+    ROI-style AUTO CV:
+    - Prefer LOGO when groups are valid for ALL folds (training has >=2 classes).
+    - Otherwise fall back to StratifiedKFold (ignore groups).
+    Return (cv, effective_groups). If cv doesn't need groups, effective_groups=None.
+    """
+    import numpy as np
+    from sklearn.model_selection import LeaveOneGroupOut, StratifiedKFold
 
-    strategy = str(getattr(config, 'cv_strategy', 'stratified-kfold')).lower()
     labels = np.asarray(labels)
-    unique_labels, class_counts = np.unique(labels, return_counts=True)
-
-    if unique_labels.size < 2:
+    if np.unique(labels).size < 2:
         raise ValueError("标签只有一个类别，无法执行交叉验证。")
 
-    min_class_samples = int(class_counts.min()) if class_counts.size > 0 else 0
+    # 计算 ROI 风格下的安全 n_splits（受最少类别样本数约束）
+    class_counts = np.bincount(labels) if labels.size else np.array([])
+    min_class = int(class_counts.min()) if class_counts.size > 0 else 0
+    n_splits = max(2, min(getattr(config, "cv_folds", 5), min_class))
 
-    if ('leave-one' in strategy and 'group' in strategy) or ('run-out' in strategy):
-        if groups is None:
-            raise ValueError("Leave-one-group/leave-one-run策略需要提供groups信息。")
+    def _logo_training_has_two_classes(y, g):
+        """检查 LOGO 的每一折训练集是否包含 >=2 个类别。"""
+        logo = LeaveOneGroupOut()
+        for tr_idx, te_idx in logo.split(np.zeros_like(y), y, g):
+            if np.unique(y[tr_idx]).size < 2:
+                return False
+        return True
 
-        group_array = np.asarray(groups)
-        unique_groups = np.unique(group_array)
+    # ROI 风格：仅当 groups 真正可用时才启用 LOGO
+    use_groups = groups is not None and np.unique(groups).size > 1
+    if use_groups:
+        g = np.asarray(groups)
+        # 1) 直接尝试原始 groups
+        if _logo_training_has_two_classes(labels, g):
+            return LeaveOneGroupOut(), g
 
-        if unique_groups.size < 2:
-            raise ValueError("Leave-one-group交叉验证至少需要两个不同的组。")
+        # 2) 尝试把 groups 合并成“平衡块”，仍然符合 ROI “能用就用，否则放弃”的精神
+        mg, mcnt = _merge_groups_for_balance(g, labels, config)
+        if mg is not None and mcnt >= 2 and _logo_training_has_two_classes(labels, mg):
+            log("   ✅ ROI风格: 合并group后使用 LOGO。", config)
+            return LeaveOneGroupOut(), mg
 
-        if _groups_support_leave_one_out(group_array, labels):
-            cv = LeaveOneGroupOut()
-            _validate_cv_fold_sizes(cv, labels, group_array, config)
-            return cv, group_array
+        # 3) ROI 风格的果断回退：忽略 groups，直接用 StratifiedKFold
+        log("   ⚠️ ROI风格: 由于 group 导致训练集单类，改用 StratifiedKFold（忽略 run）。", config)
 
-        merged_groups, merged_count = _merge_groups_for_balance(group_array, labels, config)
-        if merged_groups is not None and merged_count >= 2:
-            cv = LeaveOneGroupOut()
-            _validate_cv_fold_sizes(cv, labels, merged_groups, config)
-            return cv, merged_groups
+    if n_splits < 2:
+        raise ValueError("无法创建有效的 StratifiedKFold 折数，请检查类别样本数。")
 
-        # 无法通过合并run构造LOGO，退回到时间分块的策略
-        log(
-            "   ⚠️ Leave-one-group-out 不满足类别覆盖，退回到时间分块的Group策略。",
-            config,
-        )
-        block_groups = _build_block_groups(len(labels), config)
-        merged_block_groups, merged_block_count = _merge_groups_for_balance(
-            block_groups, labels, config
-        )
-        if merged_block_groups is not None and merged_block_count >= 2:
-            cv = LeaveOneGroupOut()
-            _validate_cv_fold_sizes(cv, labels, merged_block_groups, config)
-            return cv, merged_block_groups
-
-        log(
-            "   ⚠️ 时间分块仍无法满足LOGO条件，将退回到 StratifiedKFold。",
-            config,
-        )
-        groups = None  # 后续改用 StratifiedKFold
-
-        max_valid_splits = min(
-            getattr(config, "cv_folds", 5),
-            len(labels),
-            min_class_samples,
-        )
-        if max_valid_splits < 2:
-            raise ValueError(
-                "无法创建有效的StratifiedKFold折数以作为leave-one-group的回退方案。"
-            )
-
-        cv = StratifiedKFold(
-            n_splits=max_valid_splits,
-            random_state=getattr(config, "cv_random_state", None),
-            shuffle=True,
-        )
-        _validate_cv_fold_sizes(cv, labels, None, config)
-        return cv, None
-
-    if 'group-kfold' in strategy or 'groupkfold' in strategy:
-        if groups is None:
-            raise ValueError("GroupKFold策略需要提供groups信息。")
-
-        group_array = np.asarray(groups)
-        unique_groups = np.unique(group_array)
-        n_splits = min(getattr(config, 'cv_folds', 5), unique_groups.size)
-        if n_splits < 2:
-            raise ValueError("GroupKFold需要至少两个分组来创建折。")
-        cv = GroupKFold(n_splits=n_splits)
-        _validate_cv_fold_sizes(cv, labels, group_array, config)
-        return cv, group_array
-
-    if 'stratified' in strategy:
-        max_valid_splits = min(
-            getattr(config, 'cv_folds', 5),
-            len(labels),
-            min_class_samples
-        )
-        if max_valid_splits < 2:
-            raise ValueError(
-                f"无法创建有效的StratifiedKFold折数，类别计数: {class_counts.tolist()}"
-            )
-        cv = StratifiedKFold(
-            n_splits=max_valid_splits,
-            random_state=getattr(config, 'cv_random_state', None),
-            shuffle=True
-        )
-        _validate_cv_fold_sizes(cv, labels, groups, config)
-        return cv, None
-
-    if 'kfold' in strategy:
-        n_splits = min(getattr(config, 'cv_folds', 5), len(labels))
-        if n_splits < 2:
-            raise ValueError("KFold需要至少两个样本来创建折。")
-        cv = KFold(
-            n_splits=n_splits,
-            shuffle=True,
-            random_state=getattr(config, 'cv_random_state', None)
-        )
-        _validate_cv_fold_sizes(cv, labels, groups, config)
-        return cv, None
-
-    raise ValueError(f"未知的交叉验证策略: {config.cv_strategy}")
-
+    cv = StratifiedKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=getattr(config, "cv_random_state", None),
+    )
+    return cv, None
 
 def validate_searchlight_inputs(beta_source, labels, process_mask_path, config):
     """在运行Searchlight前验证数据和mask形状，防止早期数据错配。"""
