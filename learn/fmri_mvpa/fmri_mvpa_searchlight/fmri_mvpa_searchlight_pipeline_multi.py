@@ -10,6 +10,7 @@ import time
 import sys
 import io
 import hashlib
+import collections
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -338,14 +339,14 @@ class MVPAConfig:
         self.memory_aware_parallel = False  # 内存感知的并行处理
         self.min_memory_per_subject_gb = 24  # 每个被试预估需要的内存(GB)
         self.optimize_memory = True  # 内存优化
-        self.max_chance_permutations = 0  # 0 表示不限制机会水平置换次数
+        self.max_chance_permutations = 5  # 0 表示不限制机会水平置换次数
         self.enable_batch_processing = True  # 启用批量处理
         self.disable_chance_maps = False  # 可选：完全禁用机会水平地图计算
 
         # 显著性分析阈值
         self.classification_significance_threshold = overrides.get(
             'classification_significance_threshold',
-            0.6,
+            0.54,
         )
 
         # 内存优化参数
@@ -1378,77 +1379,156 @@ def _validate_cv_fold_sizes(cv, labels, groups, config):
             raise ValueError(f"交叉验证fold {fold_idx} 测试集缺少某个类别。")
 
 
+def _groups_per_class(groups_array, labels_array):
+    """统计每个类别出现在哪些group中。"""
+
+    mapping = collections.defaultdict(set)
+    for grp, lbl in zip(groups_array, labels_array):
+        mapping[lbl].add(grp)
+    return mapping
+
+
+def _groups_support_leave_one_out(groups_array, labels_array):
+    """判断在leave-one-group-out下，训练集是否会缺少某个类别。"""
+
+    if groups_array is None:
+        return False
+
+    group_sets = _groups_per_class(groups_array, labels_array)
+    if not group_sets:
+        return False
+
+    # leave-one-group-out需要每个类别至少分布在两个不同的group中
+    return all(len(grps) >= 2 for grps in group_sets.values())
+
+
+def _merge_groups_for_balance(groups_array, labels_array, config):
+    """尽量合并相邻的group，使每个新group都同时覆盖全部类别。"""
+
+    labels_array = np.asarray(labels_array)
+    unique_labels = np.unique(labels_array)
+    target_labels = set(unique_labels.tolist())
+
+    if len(target_labels) < 2:
+        return None, 0
+
+    groups_array = np.asarray(groups_array)
+    unique_groups, first_idx = np.unique(groups_array, return_index=True)
+    ordered_groups = unique_groups[np.argsort(first_idx)]
+
+    merged_assignments = np.empty_like(groups_array, dtype=int)
+    current_members = []
+    current_labels = set()
+    current_group_id = 0
+    merged_groups = []
+
+    for grp in ordered_groups:
+        grp_mask = groups_array == grp
+        current_members.append(grp)
+        current_labels.update(np.unique(labels_array[grp_mask]))
+        merged_assignments[grp_mask] = current_group_id
+
+        if target_labels.issubset(current_labels):
+            merged_groups.append((current_group_id, list(current_members)))
+            current_group_id += 1
+            current_members = []
+            current_labels = set()
+
+    if current_members:
+        if not merged_groups:
+            return None, 0
+        # 将尾部不足的group并入最后一个合并块
+        last_group_id, stored_members = merged_groups[-1]
+        stored_members.extend(current_members)
+        for grp in current_members:
+            merged_assignments[groups_array == grp] = last_group_id
+
+    unique_merged_ids = np.unique(merged_assignments)
+    if unique_merged_ids.size < 2:
+        return None, unique_merged_ids.size
+
+    for merged_id in unique_merged_ids:
+        lbls = set(np.unique(labels_array[merged_assignments == merged_id]))
+        if not target_labels.issubset(lbls):
+            return None, unique_merged_ids.size
+
+    if config is not None:
+        log(
+            f"   ⚠️ 检测到部分run只包含单一类别，已合并为 {unique_merged_ids.size} 个平衡块用于CV。",
+            config,
+        )
+
+    return merged_assignments, unique_merged_ids.size
+
+
+def _build_block_groups(label_count, config):
+    """基于 trial 顺序生成时间块 group，作为 leave-one-group 的备选方案。"""
+
+    requested_blocks = getattr(config, 'fallback_block_count', 4)
+    requested_blocks = max(2, int(requested_blocks))
+    requested_blocks = min(requested_blocks, label_count)
+
+    block_edges = np.linspace(0, label_count, requested_blocks + 1, dtype=int)
+    block_ids = np.zeros(label_count, dtype=int)
+    for block_idx in range(requested_blocks):
+        start, end = block_edges[block_idx], block_edges[block_idx + 1]
+        block_ids[start:end] = block_idx
+    return block_ids
+
+
 def create_cv_strategy(config, groups, labels):
-    """根据配置创建交叉验证策略并进行一致性检查。"""
+    """
+    ROI-style AUTO CV:
+    - Prefer LOGO when groups are valid for ALL folds (training has >=2 classes).
+    - Otherwise fall back to StratifiedKFold (ignore groups).
+    Return (cv, effective_groups). If cv doesn't need groups, effective_groups=None.
+    """
+    import numpy as np
+    from sklearn.model_selection import LeaveOneGroupOut, StratifiedKFold
 
-    strategy = str(getattr(config, 'cv_strategy', 'stratified-kfold')).lower()
     labels = np.asarray(labels)
-    unique_labels, class_counts = np.unique(labels, return_counts=True)
-
-    if unique_labels.size < 2:
+    if np.unique(labels).size < 2:
         raise ValueError("标签只有一个类别，无法执行交叉验证。")
 
-    min_class_samples = int(class_counts.min()) if class_counts.size > 0 else 0
+    # 计算 ROI 风格下的安全 n_splits（受最少类别样本数约束）
+    class_counts = np.bincount(labels) if labels.size else np.array([])
+    min_class = int(class_counts.min()) if class_counts.size > 0 else 0
+    n_splits = max(2, min(getattr(config, "cv_folds", 5), min_class))
 
-    if ('leave-one' in strategy and 'group' in strategy) or ('run-out' in strategy):
-        if groups is None:
-            raise ValueError("Leave-one-group/leave-one-run策略需要提供groups信息。")
+    def _logo_training_has_two_classes(y, g):
+        """检查 LOGO 的每一折训练集是否包含 >=2 个类别。"""
+        logo = LeaveOneGroupOut()
+        for tr_idx, te_idx in logo.split(np.zeros_like(y), y, g):
+            if np.unique(y[tr_idx]).size < 2:
+                return False
+        return True
 
-        group_array = np.asarray(groups)
-        unique_groups = np.unique(group_array)
+    # ROI 风格：仅当 groups 真正可用时才启用 LOGO
+    use_groups = groups is not None and np.unique(groups).size > 1
+    if use_groups:
+        g = np.asarray(groups)
+        # 1) 直接尝试原始 groups
+        if _logo_training_has_two_classes(labels, g):
+            return LeaveOneGroupOut(), g
 
-        if unique_groups.size < 2:
-            raise ValueError("Leave-one-group交叉验证至少需要两个不同的组。")
+        # 2) 尝试把 groups 合并成“平衡块”，仍然符合 ROI “能用就用，否则放弃”的精神
+        mg, mcnt = _merge_groups_for_balance(g, labels, config)
+        if mg is not None and mcnt >= 2 and _logo_training_has_two_classes(labels, mg):
+            log("   ✅ ROI风格: 合并group后使用 LOGO。", config)
+            return LeaveOneGroupOut(), mg
 
-        cv = LeaveOneGroupOut()
-        _validate_cv_fold_sizes(cv, labels, group_array, config)
-        return cv
+        # 3) ROI 风格的果断回退：忽略 groups，直接用 StratifiedKFold
+        log("   ⚠️ ROI风格: 由于 group 导致训练集单类，改用 StratifiedKFold（忽略 run）。", config)
 
-    if 'group-kfold' in strategy or 'groupkfold' in strategy:
-        if groups is None:
-            raise ValueError("GroupKFold策略需要提供groups信息。")
+    if n_splits < 2:
+        raise ValueError("无法创建有效的 StratifiedKFold 折数，请检查类别样本数。")
 
-        group_array = np.asarray(groups)
-        unique_groups = np.unique(group_array)
-        n_splits = min(getattr(config, 'cv_folds', 5), unique_groups.size)
-        if n_splits < 2:
-            raise ValueError("GroupKFold需要至少两个分组来创建折。")
-        cv = GroupKFold(n_splits=n_splits)
-        _validate_cv_fold_sizes(cv, labels, group_array, config)
-        return cv
-
-    if 'stratified' in strategy:
-        max_valid_splits = min(
-            getattr(config, 'cv_folds', 5),
-            len(labels),
-            min_class_samples
-        )
-        if max_valid_splits < 2:
-            raise ValueError(
-                f"无法创建有效的StratifiedKFold折数，类别计数: {class_counts.tolist()}"
-            )
-        cv = StratifiedKFold(
-            n_splits=max_valid_splits,
-            random_state=getattr(config, 'cv_random_state', None),
-            shuffle=True
-        )
-        _validate_cv_fold_sizes(cv, labels, groups, config)
-        return cv
-
-    if 'kfold' in strategy:
-        n_splits = min(getattr(config, 'cv_folds', 5), len(labels))
-        if n_splits < 2:
-            raise ValueError("KFold需要至少两个样本来创建折。")
-        cv = KFold(
-            n_splits=n_splits,
-            shuffle=True,
-            random_state=getattr(config, 'cv_random_state', None)
-        )
-        _validate_cv_fold_sizes(cv, labels, groups, config)
-        return cv
-
-    raise ValueError(f"未知的交叉验证策略: {config.cv_strategy}")
-
+    cv = StratifiedKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=getattr(config, "cv_random_state", None),
+    )
+    return cv, None
 
 def validate_searchlight_inputs(beta_source, labels, process_mask_path, config):
     """在运行Searchlight前验证数据和mask形状，防止早期数据错配。"""
@@ -1523,7 +1603,7 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
 
     try:
         # Check the cross-validation strategy and pass groups only when necessary
-        cv = create_cv_strategy(config, groups_array, labels)
+        cv, effective_groups = create_cv_strategy(config, groups_array, labels)
 
         searchlight = SearchLight(
             mask_img=process_mask_path,
@@ -1539,9 +1619,9 @@ def _fit_searchlight(beta_images, labels, process_mask_path, config, groups=None
         if isinstance(cv, (StratifiedKFold, KFold)):
             searchlight.fit(beta_images, labels)  # No groups needed here
         else:
-            if groups_array is None:
+            if effective_groups is None:
                 raise ValueError(f"{type(cv).__name__} 需要提供groups参数")
-            searchlight.fit(beta_images, labels, groups=groups_array)  # Pass groups only for necessary strategies
+            searchlight.fit(beta_images, labels, groups=effective_groups)  # Pass groups only for necessary strategies
 
     except MemoryError as exc:
         raise SearchlightError(f"SearchLight拟合失败 (内存不足): {exc}") from exc
@@ -2153,67 +2233,72 @@ def diagnose_data_leakage(trial_details, labels, groups, config):
     import numpy as np
     from sklearn.model_selection import GroupKFold, LeaveOneGroupOut, StratifiedKFold, KFold
     # 1️⃣ run 分布（仅做信息展示）
-    log(f"\n1️⃣ Run分布:")
+    log(f"\n1️⃣ Run分布:", config)
     if groups is not None:
         g_arr = np.asarray(groups)
         runs, counts = np.unique(g_arr, return_counts=True)
         for r, c in zip(runs, counts):
             lbl_dist = np.bincount(np.asarray(labels)[g_arr == r])
-            log(f"   Run {r}: {c} trials, 标签分布 {lbl_dist}")
+            log(f"   Run {r}: {c} trials, 标签分布 {lbl_dist}", config)
     else:
-        log("   ⚠️ groups=None，无法展示 run 分布")
+        log("   ⚠️ groups=None，无法展示 run 分布", config)
 
     # 2️⃣ CV 策略
-    log(f"\n2️⃣ 交叉验证策略:")
-    cv = create_cv_strategy(config, groups, labels)
+    log(f"\n2️⃣ 交叉验证策略:", config)
+    cv, effective_groups = create_cv_strategy(config, groups, labels)
     try:
         # 仅在 group-based 时传 groups
         group_based = isinstance(cv, (GroupKFold, LeaveOneGroupOut))
         n_splits = cv.get_n_splits(
-            None, labels, (groups if group_based else None)
+            None, labels, (effective_groups if group_based else None)
         )
     except TypeError:
         n_splits = cv.get_n_splits()
-    log(f"   策略类型: {type(cv).__name__}")
-    log(f"   折数: {n_splits}")
+    log(f"   策略类型: {type(cv).__name__}", config)
+    log(f"   折数: {n_splits}", config)
+
+    if group_based and groups is not None and effective_groups is not None:
+        if not np.array_equal(np.asarray(groups), np.asarray(effective_groups)):
+            log("   ⚠️ CV 使用了合并后的group标签以保证每折类别完整。", config)
 
     # 3️⃣ 分割检查（仅 group-based 才检查 run 重叠）
     tail = "" if group_based else "（非 group 策略，run 跨训练/测试是预期，不构成泄露）"
-    log(f"\n3️⃣ CV分割检查(前2折){tail}:")
+    log(f"\n3️⃣ CV分割检查(前2折){tail}:", config)
+    split_groups = effective_groups if group_based else None
     for i, (tr_idx, te_idx) in enumerate(
-        cv.split(np.zeros_like(labels), labels, (groups if group_based else None))
+        cv.split(np.zeros_like(labels), labels, split_groups)
     ):
         if i >= 2:
             break
-        log(f"\n   Fold {i + 1}:")
-        if groups is not None:
-            tr_runs = set(np.asarray(groups)[tr_idx])
-            te_runs = set(np.asarray(groups)[te_idx])
+        log(f"\n   Fold {i + 1}:", config)
+        if split_groups is not None:
+            tr_runs = set(np.asarray(split_groups)[tr_idx])
+            te_runs = set(np.asarray(split_groups)[te_idx])
         else:
             tr_runs, te_runs = set(), set()
 
         if group_based:
             overlap = tr_runs & te_runs
-            log(f"      训练集runs: {tr_runs}")
-            log(f"      测试集runs: {te_runs}")
-            log("      ✅ 无泄露" if not overlap else f"      ❌ 数据泄露! 重叠runs: {overlap}")
+            log(f"      训练集runs: {tr_runs}", config)
+            log(f"      测试集runs: {te_runs}", config)
+            log("      ✅ 无泄露" if not overlap else f"      ❌ 数据泄露! 重叠runs: {overlap}", config)
         else:
-            log("      使用 KFold/StratifiedKFold，允许 run 在训练/测试同时出现。")
+            log("      使用 KFold/StratifiedKFold，允许 run 在训练/测试同时出现。", config)
 
-        log(f"      训练集样本: {len(tr_idx)}, 测试集样本: {len(te_idx)}")
+        log(f"      训练集样本: {len(tr_idx)}, 测试集样本: {len(te_idx)}", config)
 
     # 4️⃣ 机会水平设置
-    log(f"\n4️⃣ 机会水平估计设置:")
-    log(f"   置换次数: {getattr(config, 'within_subject_permutations', 'N/A')}")
-    log(f"   最大限制: {getattr(config, 'max_chance_permutations', 'N/A')}")
+    log(f"\n4️⃣ 机会水平估计设置:", config)
+    log(f"   置换次数: {getattr(config, 'within_subject_permutations', 'N/A')}", config)
+    log(f"   最大限制: {getattr(config, 'max_chance_permutations', 'N/A')}", config)
     actual_perms = min(
         getattr(config, 'within_subject_permutations', 100),
         getattr(config, 'max_chance_permutations', 999999)
     )
     if actual_perms < 5:
-        log(f"   ⚠️ 警告: 实际置换次数({actual_perms})过少!")
+        log(f"   ⚠️ 警告: 实际置换次数({actual_perms})过少!", config)
     else:
-        log(f"   ✅ 实际置换次数: {actual_perms}")
+        log(f"   ✅ 实际置换次数: {actual_perms}", config)
 
 def process_searchlight_for_subject(searchlight, beta_images, labels, process_mask_path, config,
                                     subject_id, contrast_name, groups, trial_details,

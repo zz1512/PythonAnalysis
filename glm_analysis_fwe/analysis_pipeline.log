@@ -1,0 +1,14 @@
+2025-12-19 09:44:59,512 | INFO     |     Manual Scrubbing: Removed 27 volumes (Outliers: 27 columns)
+2025-12-19 09:45:24,178 | INFO     |     Manual Scrubbing: Removed 72 volumes (Outliers: 72 columns)
+202025-12-19 09:45:43,386 | INFO     |     Manual Scrubbing: Removed 28 volumes (Outliers: 28 columns)2025-12-19 09:56:48,067 | INFO     |     Manual Scrubbing: Removed 52 volumes (Outliers: 52 columns)
+2025-12-19 09:57:05,071 | INFO     |     Manual Scrubbing: Removed 20 volumes (Outliers: 20 columns)
+9 | INFO     |   [OK] sub-03 Run 4
+2025-12-19 09:45:38,874 | INFO     |   [OK] sub-03 Run 3
+2025-12-19 09:45:40,295 | INFO     |   [OK] sub-04 Run 4
+2025-12-19 09:45:43,175 | INFO     |   [OK] sub-04 Run 3
+2025-12-19 09:45:54,498 | INFO     |   [OK] sub-05 Run 4
+2025-12-19 09:45:54,820 | INFO     |   [OK] sub-05 Run 3
+2025-12-19 09:53:19,278 | INFO     |   [OK] sub-06 Run 4
+2025-12-19 09:55:08,532 | INFO     |   [OK] sub-07 Run 4
+2025-12-19 09:56:47,781 | INFO     |   [OK] sub-06 Run 3
+2025-12-19 09:57:04,695 | INFO     |   [OK] sub-07 Run 3

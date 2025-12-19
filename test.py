@@ -2,7 +2,7 @@ import nibabel as nib
 from pathlib import Path
 import pandas as pd
 
-mask_dir = Path("data/masks")
+mask_dir = Path("../../learn_LSS/sub-01/run-3_LSS")
 
 # 找到所有 .nii.gz 文件
 mask_files = sorted(mask_dir.glob("*.nii.gz"))

@@ -6,3 +6,4 @@ learn_batch/
 learn_LSS/
 learn_mvpa/
 learn/fmri_mvpa/fmri_mvpa_roi/__pycache__
+.glm_analysis_fwe/
