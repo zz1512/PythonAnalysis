@@ -1,0 +1,23 @@
+2025-10-23 21:31:01,504 - __main__ - INFO - 开始运行实验: synthetic_small
+2025-10-23 21:31:01,505 - __main__ - INFO - 开始合成数据蒸馏实验
+2025-10-23 21:31:06,462 - model_distillation - INFO - 创建合成数据集: 1000 样本, 10 特征, 3 类别
+2025-10-23 21:31:08,502 - model_distillation - INFO - 开始训练教师模型...
+2025-10-23 21:31:08,711 - model_distillation - INFO - 教师模型 Epoch 10/30, Loss: 0.2219, Accuracy: 93.88%
+2025-10-23 21:31:08,844 - model_distillation - INFO - 教师模型 Epoch 20/30, Loss: 0.1642, Accuracy: 95.38%
+2025-10-23 21:31:09,017 - model_distillation - INFO - 教师模型 Epoch 30/30, Loss: 0.1094, Accuracy: 96.88%
+2025-10-23 21:31:09,017 - model_distillation - INFO - 教师模型训练完成
+2025-10-23 21:31:09,017 - model_distillation - INFO - 开始知识蒸馏训练学生模型...
+2025-10-23 21:31:09,113 - model_distillation - INFO - 学生模型 Epoch 10/50, Total Loss: 1.1925, Soft Loss: 1.5950, Hard Loss: 0.5889, Train Acc: 81.88%, Val Acc: 89.00%
+2025-10-23 21:31:09,208 - model_distillation - INFO - 学生模型 Epoch 20/50, Total Loss: 0.5348, Soft Loss: 0.6849, Hard Loss: 0.3095, Train Acc: 89.50%, Val Acc: 92.50%
+2025-10-23 21:31:09,293 - model_distillation - INFO - 学生模型 Epoch 30/50, Total Loss: 0.3160, Soft Loss: 0.3838, Hard Loss: 0.2142, Train Acc: 93.00%, Val Acc: 95.50%
+2025-10-23 21:31:09,376 - model_distillation - INFO - 学生模型 Epoch 40/50, Total Loss: 0.2431, Soft Loss: 0.2814, Hard Loss: 0.1857, Train Acc: 94.25%, Val Acc: 96.50%
+2025-10-23 21:31:09,476 - model_distillation - INFO - 学生模型 Epoch 50/50, Total Loss: 0.1858, Soft Loss: 0.2133, Hard Loss: 0.1444, Train Acc: 95.50%, Val Acc: 96.50%
+2025-10-23 21:31:09,477 - model_distillation - INFO - 学生模型训练完成，最佳验证准确率: 97.00%
+2025-10-23 21:31:09,477 - model_distillation - INFO - 比较模型性能...
+2025-10-23 21:31:09,479 - model_distillation - INFO - 教师模型: 准确率 98.00%, 参数量 10,243
+2025-10-23 21:31:09,479 - model_distillation - INFO - 学生模型: 准确率 96.50%, 参数量 451
+2025-10-23 21:31:09,479 - model_distillation - INFO - 压缩比: 22.71x
+2025-10-23 21:31:09,479 - model_distillation - INFO - 准确率保持: 0.98
+2025-10-23 21:31:09,479 - __main__ - INFO - 合成数据蒸馏实验完成
+2025-10-23 21:31:09,479 - __main__ - INFO - 实验 synthetic_small 完成，耗时: 7.97 秒
+2025-10-23 21:31:09,480 - __main__ - INFO - 实验结果已保存到: results_synthetic_small_1761226269.json

@@ -1,0 +1,36 @@
+{
+  "teacher_accuracy": 98.0,
+  "student_accuracy": 96.5,
+  "teacher_parameters": 10243,
+  "student_parameters": 451,
+  "compression_ratio": 22.711751662971174,
+  "accuracy_retention": 0.9846938775510204,
+  "experiment_name": "synthetic_small",
+  "duration_seconds": 7.9743428230285645,
+  "config": {
+    "device": "cpu",
+    "seed": 42,
+    "batch_size": 64,
+    "num_epochs": 100,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "temperature": 2.0,
+    "alpha": 0.6,
+    "log_interval": 10,
+    "save_model": true,
+    "plot_results": false,
+    "n_samples": 1000,
+    "n_features": 10,
+    "n_classes": 3,
+    "test_size": 0.2,
+    "teacher_hidden_dims": [
+      128,
+      64
+    ],
+    "student_hidden_dims": [
+      32
+    ],
+    "teacher_epochs": 30,
+    "student_epochs": 50
+  }
+}
