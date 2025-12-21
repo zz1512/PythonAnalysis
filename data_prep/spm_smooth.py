@@ -17,7 +17,7 @@ from nilearn import image
 import platform
 
 # ================ 配置区 =================
-ROOT = Path(r"../../Pro_proc_data")
+ROOT = Path(r"../Pro_proc_data")
 
 # 处理哪些 subject：
 #   1) SUBJECTS=None  → 自动发现 ROOT 下所有 sub-*
