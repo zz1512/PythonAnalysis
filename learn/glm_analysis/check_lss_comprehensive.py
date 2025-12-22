@@ -24,7 +24,7 @@ import logging
 # ===========================
 OUTPUT_ROOT = Path("C:/python_metaphor/lss_betas_final")
 # 你的被试列表 (根据实际情况修改范围)
-SUBJECTS = [f"sub-{i:02d}" for i in range(1, 28)]
+SUBJECTS = [f"sub-{i:02d}" for i in range(1, 29)]
 # LSS 分析涉及的 Run
 RUNS = [1, 2, 5, 6]
 # 预期每个 Run 的 Trial 数量 (前测/后测: 100个词)
