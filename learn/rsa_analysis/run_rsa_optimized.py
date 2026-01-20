@@ -39,18 +39,26 @@ def get_sorted_files(sub, stage, lss_df, template_df):
 
     for _, row in template_df.iterrows():
         target_word = str(row['word_label']).strip()
-        target_type = str(row['type']).strip()
 
         match = sub_df[
-            (sub_df['unique_label'].str.contains(target_word, regex=False)) &
-            (sub_df['condition'].str.contains(target_type, regex=False, case=False))
-            ]
+            (sub_df['unique_label'] == target_word)
+        ]
 
         # 严格模式：必须找到且唯一
         if len(match) == 1:
-            fpath = match.iloc[0]['beta_file']
-            if not Path(fpath).is_absolute():
-                fpath = cfg.LSS_META_FILE.parent / fpath
+            row_data = match.iloc[0]
+            fname = row_data['beta_file']
+
+            # 如果 CSV 里存的是绝对路径，直接用
+            if Path(fname).is_absolute():
+                fpath = Path(fname)
+            else:
+                # 如果是文件名，需要手动拼接 sub-xx 和 run-x 目录
+                # 结构: LSS_ROOT / sub-xx / run-x / filename
+                sub_folder = row_data['subject']  # e.g., sub-01
+                run_folder = f"run-{row_data['run']}"  # e.g., run-1
+
+                fpath = cfg.LSS_META_FILE.parent / sub_folder / run_folder / fname
             sorted_files.append(str(fpath))
         else:
             # 如果之前校验脚本通过了，这里理论上不会进
