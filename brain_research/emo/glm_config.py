@@ -4,26 +4,41 @@
 glm_config.py
 全局配置文件 - 适配分离路径 (影像在 midprep, 头动在 miniprep)
 """
+import os
 from pathlib import Path
 
 
 class Config:
-    def __init__(self):
+    def __init__(self, data_space='surface', hemi='L'):
         # =========================
         # 1. 核心控制开关
         # =========================
         self.PARALLEL = True  # True=并行跑满CPU
         self.N_JOBS = 10  # 并行进程数
+        self.DEBUG = False  # 调试模式
 
         # 数据空间模式: 'volume' (MNI) 或 'surface' (fsLR)
-        self.DATA_SPACE = 'surface'
-        self.HEMI = 'L'  # 左脑
+        self.DATA_SPACE = data_space
+        self.HEMI = hemi  # 左脑，可选: 'L' (左脑), 'R' (右脑)
 
         # =========================
         # 2. 路径映射定义
         # =========================
-        self.BASE_DATA_DIR = Path("/public/home/dingrui/BIDS_DATA")
-        self.OUTPUT_ROOT = self.BASE_DATA_DIR / "lss_results_combined_final"
+        # 使用环境变量管理路径
+        base_data_dir = os.environ.get("BIDS_DATA_DIR", "/public/home/dingrui/BIDS_DATA")
+        self.BASE_DATA_DIR = Path(base_data_dir)
+        
+        # 验证基础数据目录
+        if not self.BASE_DATA_DIR.exists():
+            raise FileNotFoundError(f"数据根目录不存在: {self.BASE_DATA_DIR}\n请设置环境变量 BIDS_DATA_DIR 指向正确的路径")
+        
+        # 统一输出根目录
+        self.OUTPUT_ROOT = self.BASE_DATA_DIR / "lss_results"
+        # 确保输出目录存在
+        self.OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+        
+        # 场景标识符
+        self.SCENARIO_ID = f"{self.DATA_SPACE}{'_' + self.HEMI if self.DATA_SPACE == 'surface' else ''}"
 
         # 定义映射逻辑
         self.RUN_MAP = {
@@ -49,9 +64,10 @@ class Config:
         run1_root = self.RUN_MAP[1]["root"]
         if run1_root.exists():
             self.SUBJECTS = sorted([p.name for p in run1_root.glob("sub-*") if p.is_dir()])
+            if not self.SUBJECTS:
+                raise ValueError(f"数据根目录存在但未找到被试文件夹: {run1_root}")
         else:
-            print(f"Error: 找不到数据根目录 {run1_root}")
-            self.SUBJECTS = []
+            raise FileNotFoundError(f"找不到数据根目录 {run1_root}")
 
         # =========================
         # 3. 辅助配置
@@ -88,13 +104,13 @@ class Config:
         if self.DATA_SPACE == 'volume':
             fmri_path = (
                     root /
-                    f"{sub}/func/{dir_fmri}/{sub}_task-{task}_run-1_space-MNI152NLin6Asym_res-2_desc-preproc_bold.nii.gz"
+                    f"{sub}/func/{dir_fmri}/{sub}_task-{task}_space-MNI152NLin2009cAsym_desc-taskFriston_custom-smooth_bold.nii.gz"
             )
         else:
             fmri_path = (
                     root /
                     f"{sub}/func/{dir_fmri}/"
-                    f"{sub}_hemi-{self.HEMI}_space-fsLR_desc-taskHM6_custom-smooth_bold.shape.gii"
+                    f"{sub}_hemi-{self.HEMI}_space-fsLR_desc-taskFriston_custom-smooth_bold.shape.gii"
             )
 
         # 3. Confounds 路径 (去 miniprep 找)
@@ -106,4 +122,24 @@ class Config:
         return str(fmri_path), str(event_path), str(confounds_path)
 
 
+# 默认配置实例
 config = Config()
+
+# 场景配置列表
+SCENARIOS = [
+    # (data_space, hemi)
+    ('surface', 'L'),
+    ('surface', 'R'),
+    ('volume', ''),  # volume 不需要半球
+]
+
+# 获取所有场景的配置实例
+def get_scenario_configs():
+    configs = []
+    for data_space, hemi in SCENARIOS:
+        # volume 场景不需要半球参数
+        if data_space == 'volume':
+            configs.append(Config(data_space='volume', hemi=''))
+        else:
+            configs.append(Config(data_space=data_space, hemi=hemi))
+    return configs

@@ -27,9 +27,18 @@ def load_complex_confounds(confounds_path):
 
         # 容错：如果找不到标准列名，尝试查找存在的列
         if not all(col in df.columns for col in base_axes):
-            # 简单回退策略：只要是 trans 或 rot 开头的列
-            # 实际 BIDS 输出通常都有这6个，名字可能微调，这里假设标准 fmriprep 输出
-            pass
+            # 尝试查找存在的 trans 或 rot 列
+            found_cols = []
+            for col in df.columns:
+                if col.startswith('trans_') or col.startswith('rot_'):
+                    found_cols.append(col)
+            
+            if len(found_cols) >= 6:
+                # 使用找到的前6个列
+                base_axes = found_cols[:6]
+                logger.warning(f"找不到标准运动列名，使用找到的列: {base_axes}")
+            else:
+                raise ValueError(f"找不到足够的运动参数列，只找到 {len(found_cols)} 列")
 
         R_motion = df[base_axes].copy()
         R_deriv = R_motion.diff().fillna(0)
@@ -45,9 +54,19 @@ def load_complex_confounds(confounds_path):
 
         # B. aCompCor (前6个)
         acomp_cols = df.filter(regex='^a_comp_cor_0[0-5]$')
+        if acomp_cols.empty:
+            # 尝试其他可能的命名格式
+            acomp_cols = df.filter(regex='^a_comp_cor_')
+            if not acomp_cols.empty:
+                acomp_cols = acomp_cols.iloc[:, :6]  # 取前6个
+                logger.warning(f"找不到标准 aCompCor 列名，使用找到的 {len(acomp_cols.columns)} 列")
+            else:
+                logger.warning("未找到 aCompCor 列，将不包含在回归中")
 
         # C. Scrubbing (Outliers)
         outlier_cols = df.filter(regex='motion_outlier|non_steady_state')
+        if outlier_cols.empty:
+            logger.warning("未找到离群值列，将不包含在回归中")
 
         # 合并
         final_confounds = pd.concat([friston24, acomp_cols, outlier_cols], axis=1)
@@ -55,41 +74,57 @@ def load_complex_confounds(confounds_path):
 
     except Exception as e:
         logger.error(f"读取 Confounds 失败: {confounds_path} | Error: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
         raise
 
 
 def reclassify_events(df):
     """
     Condition/Emotion 3分类逻辑
-    如果不满足特定条件，则保留原始 trial_type
+    只保留3类：
+    1. Condition = PassiveLook.png 且 Emotion 以 Neutral 开头
+    2. Condition = PassiveLook.png 且 Emotion 不以 Neutral 开头
+    3. Condition = Reappraisal.png
     """
-    col_map = {c.lower(): c for c in df.columns}
-    cond_col = col_map.get('condition')
-    emo_col = col_map.get('emotion')
+    try:
+        col_map = {c.lower(): c for c in df.columns}
+        cond_col = col_map.get('condition')
+        emo_col = col_map.get('emotion')
 
-    # 如果缺少必要列，直接返回原表
-    if not cond_col or not emo_col:
+        # 如果缺少必要列，直接返回原表
+        if not cond_col or not emo_col:
+            logger.warning(f"缺少必要的事件分类列: condition={cond_col}, emotion={emo_col}，将保留原始数据")
+            return df
+
+        def _get_new_type(row):
+            try:
+                cond = str(row[cond_col]).strip()
+                emo = str(row[emo_col]).strip()
+
+                if cond == 'Reappraisal.png':
+                    return 'Reappraisal'
+                elif cond == 'PassiveLook.png':
+                    if emo.startswith('Neutral'):
+                        return 'Passive_Neutral'
+                    else:
+                        return 'Passive_Emo'
+                else:
+                    # 对于其他事件，返回 'Other'
+                    return 'Other'
+            except Exception as e:
+                logger.warning(f"处理事件分类时出错: {e}，将使用 'Other' 作为类型")
+                return 'Other'
+
+        df_new = df.copy()
+        df_new['trial_type'] = df_new.apply(_get_new_type, axis=1)
+        return df_new
+    except Exception as e:
+        logger.error(f"事件分类失败: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        # 出错时返回原始数据，确保流程不中断
         return df
-
-    def _get_new_type(row):
-        cond = str(row[cond_col]).strip()
-        emo = str(row[emo_col]).strip()
-
-        if cond == 'Reappraisal.png':
-            return 'Reappraisal'
-        elif cond == 'PassiveLook.png':
-            if emo.startswith('Neutral'):
-                return 'Passive_Neutral'
-            else:
-                return 'Passive_Emo'
-        else:
-            # [关键] 对于 Instruction 或其他事件，保留原 trial_type
-            # 这样主程序就能对它们也进行建模
-            return row.get('trial_type', 'Other')
-
-    df_new = df.copy()
-    df_new['trial_type'] = df_new.apply(_get_new_type, axis=1)
-    return df_new
 
 
 def create_lss_events(target_idx, all_events):
