@@ -127,8 +127,78 @@ def reclassify_events(df):
         return df
 
 
-def create_lss_events(target_idx, all_events):
-    """LSS 核心：Target vs Others"""
+def create_lss_events(target_idx, all_events, event_name_col="Choice"):
+    """
+    LSS 核心：Target vs Others（完全匹配你的 E-Prime 点分隔列名）
+
+    参数说明：
+    - target_idx: 目标试次的索引（list/array，如 [3,5,7]）
+    - all_events: E-Prime 行为数据 DataFrame（必须包含点分隔列名，如 `Choice.OnsetTime`/`Choice.RTTime`）
+    - event_name_col: 事件名称列名（如 'event_name'，值为 'Choice'/'Face' 等，用于匹配屏幕名称）
+    """
     lss_df = all_events.copy()
-    lss_df.loc[target_idx, 'trial_type'] = 'LSS_TARGET'
-    return lss_df[['onset', 'duration', 'trial_type']]
+
+    # 1. 标记 LSS 试次类型
+    lss_df["trial_type"] = "LSS_OTHERS"
+    lss_df.loc[target_idx, "trial_type"] = "LSS_TARGET"
+
+    # --------------------------
+    # 核心：从事件名称提取屏幕名称（如 'Choice'/'Face'）
+    # --------------------------
+    def get_screen_events(event_name):
+        """从事件名称中提取屏幕名称（如事件名是 'emo_Choice' → 提取 'Choice'）"""
+        if pd.isna(event_name):
+            raise ValueError("事件名称为空，请检查数据")
+        parts = str(event_name).split('_')
+        # 取最后一部分作为屏幕名称（适配 'emo_Choice' → 'Choice'，'emo_Face' → 'Face'）
+        return parts[-1]
+
+    # --------------------------
+    # 2. 提取 Onset（匹配点分隔列名：{screen}.OnsetTime）
+    # --------------------------
+    def get_onset(row):
+        screen = event_name_col
+        onset_field = f"{screen}.OnsetTime"  # 如 'Choice.OnsetTime'
+        if onset_field not in lss_df.columns:
+            raise ValueError(f"数据缺少列：{onset_field}（请检查 E-Prime 导出的列名）")
+        # 毫秒转秒
+        return row[onset_field] / 1000
+
+    # --------------------------
+    # 3. 提取 Duration（严格匹配你的列名：Choice 用 RTTime，非 Choice 用 Duration）
+    # --------------------------
+    def get_duration(row):
+        screen = event_name_col
+        if screen == "Choice":
+            # Choice 事件：用 Choice.RTTime 作为 duration（完全匹配你的截图列名）
+            duration_field = f"{screen}.RTTime"
+        else:
+            # 非 Choice 事件：用 {screen}.Duration（如 'Face.Duration'）
+            duration_field = f"{screen}.Duration"
+
+        if duration_field not in lss_df.columns:
+            raise ValueError(
+                f"数据缺少列：{duration_field}（Choice 事件需 {screen}.RTTime，非 Choice 需 {screen}.Duration）")
+
+        # 毫秒转秒 + 异常值处理
+        duration_ms = row[duration_field]
+        if pd.isna(duration_ms) or duration_ms <= 0 or duration_ms == -99999:
+            return 0  # 处理无效值（如你的截图里的 -99999）
+        return duration_ms / 1000
+
+    # --------------------------
+    # 4. 应用提取逻辑
+    # --------------------------
+    lss_df["onset"] = lss_df.apply(get_onset, axis=1)
+    lss_df["duration"] = lss_df.apply(get_duration, axis=1)
+
+    # --------------------------
+    # 5. 时间零点校准（如果有 Fixation.OnsetTime 列）
+    # --------------------------
+    if "Fixation.OnsetTime" in lss_df.columns:
+        del_time_sec = lss_df["Fixation.OnsetTime"].iloc[0] / 1000
+        lss_df["onset"] = lss_df["onset"] - del_time_sec
+        lss_df["onset"] = lss_df["onset"].clip(lower=0)  # 避免负时间
+
+    # 返回 fMRI 标准格式
+    return lss_df[["onset", "duration", "trial_type"]].dropna()

@@ -61,7 +61,7 @@ def process_single_trial_lss(args):
             drift_model="cosine",
             high_pass=1 / 128.0,
             mask_img=mask_img,
-            minimize_memory=True,
+            minimize_memory=False,
             verbose=0
         )
 

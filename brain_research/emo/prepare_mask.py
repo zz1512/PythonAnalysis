@@ -11,7 +11,7 @@ from nilearn.image import load_img, math_img
 
 # ================= 配置区 =================
 # 这里填你截图中存放 Mask 的目录
-ATLAS_DIR = Path("/home/dingrui/tools/masks_atlas")
+ATLAS_DIR = Path("/public/home/dingrui/tools/masks_atlas")
 
 # 这是你截图中那个对应的 3D NIfTI 文件名 (不要用 dscalar, 用这个对应的 nii.gz)
 SOURCE_ATLAS = "Tian_Subcortex_S2_3T_2009cAsym.nii.gz"
