@@ -17,7 +17,7 @@ import gc
 
 # ================= 配置区 =================
 # 结果根目录
-LSS_ROOT = Path("/public/home/dingrui/BIDS_DATA/lss_results")
+LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
 
 # 输出目录
 OUTPUT_DIR = LSS_ROOT / "similarity_matrices_combined"

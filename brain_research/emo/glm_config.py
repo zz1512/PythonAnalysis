@@ -14,29 +14,33 @@ class Config:
         # 1. 核心控制开关
         # =========================
         self.PARALLEL = True  # True=并行跑满CPU
-        self.N_JOBS = 10  # 并行进程数
         self.DEBUG = False  # 调试模式
 
         # 数据空间模式: 'volume' (MNI) 或 'surface' (fsLR)
         self.DATA_SPACE = data_space
         self.HEMI = hemi  # 左脑，可选: 'L' (左脑), 'R' (右脑)
-
+        if self.DATA_SPACE == 'volume':
+            self.N_JOBS = 4
+        else:
+            # Surface: 原来是12，建议降到 8 或 6
+            # 8 是最稳妥的甜蜜点
+            self.N_JOBS = 6
         # =========================
         # 2. 路径映射定义
         # =========================
         # 使用环境变量管理路径
         base_data_dir = os.environ.get("BIDS_DATA_DIR", "/public/home/dingrui/BIDS_DATA")
         self.BASE_DATA_DIR = Path(base_data_dir)
-        
+
         # 验证基础数据目录
         if not self.BASE_DATA_DIR.exists():
             raise FileNotFoundError(f"数据根目录不存在: {self.BASE_DATA_DIR}\n请设置环境变量 BIDS_DATA_DIR 指向正确的路径")
-        
+
         # 统一输出根目录
-        self.OUTPUT_ROOT = self.BASE_DATA_DIR / "lss_results"
+        self.OUTPUT_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
         # 确保输出目录存在
         self.OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-        
+
         # 场景标识符
         self.SCENARIO_ID = f"{self.DATA_SPACE}{'_' + self.HEMI if self.DATA_SPACE == 'surface' else ''}"
 

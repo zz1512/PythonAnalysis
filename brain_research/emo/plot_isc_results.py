@@ -16,7 +16,7 @@ import matplotlib.transforms as transforms
 
 # ================= 配置区 =================
 # CSV 所在的文件夹
-INPUT_DIR = Path("/public/home/dingrui/BIDS_DATA/lss_results/similarity_matrices_combined")
+INPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_combined")
 
 # 图片输出文件夹
 FIGURE_DIR = INPUT_DIR / "figures"
