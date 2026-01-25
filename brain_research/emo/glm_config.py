@@ -14,8 +14,8 @@ class Config:
         # 1. 核心控制开关
         # =========================
         self.PARALLEL = True  # True=并行跑满CPU
-        self.DEBUG = False  # 调试模式
-
+        self.DEBUG = True  # 调试模式
+        self.DEBUG_N_SUBJECTS = 30
         # 数据空间模式: 'volume' (MNI) 或 'surface' (fsLR)
         self.DATA_SPACE = data_space
         self.HEMI = hemi  # 左脑，可选: 'L' (左脑), 'R' (右脑)
@@ -81,7 +81,7 @@ class Config:
         else:
             self.MNI_MASK_PATH = None
 
-        self.TR = 2.0
+        self.TR = 0.75
         self.SMOOTHING_FWHM = None
 
         # --- 核心路径生成函数 ---
