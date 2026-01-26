@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 lss_main.py
-LSS 分析主程序 - 终极整合版
+LSS 分析主程序 - 调用glm_config.py 和 glm_utils.py
 功能：
 1. 兼容 Surface/Volume 的单试次建模 (伪装 NIfTI 策略)。
 2. 直接输出包含 stimulus_content 的索引文件，实现一步到位的跨被试对齐。

@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+subject_to_mean.py
+数据校验 - 使用 1 个覆盖率最高的刺激的 Subject-to-Mean 检查，评估每个被试与群体平均激活模式的一致性。
+对每个被试，计算其响应与"排除自身后的群体平均值"的 Pearson 相关系数
+"""
 import os
 import numpy as np
 import pandas as pd

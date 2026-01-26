@@ -1,4 +1,9 @@
 # split_half_reliability_optimized.py
+"""
+split_half_reliability_optimized.py
+数据校验 - 针对LSS分析产出的 beta 图，检验被试在不同 trials 之间的神经响应是否稳定一致
+"""
+
 import os
 import numpy as np
 import pandas as pd

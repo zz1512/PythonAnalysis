@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 validate_data.py
-数据校验 - 适配 midprep(影像) + miniprep(头动)
+数据校验 - 确认核心文件及路径是否配置准确：event数据表 + 适配 midprep(影像) + miniprep(头动)
 """
 
 import os

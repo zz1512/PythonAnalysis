@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 check_beta_quality_random.py
-功能：随机抽取 5 个左脑 Surface Beta 文件进行深度体检
+数据校验 - beta值计算校验： 随机抽取 5 个左脑 Surface Beta 文件进行数据校验
 """
 
 import os

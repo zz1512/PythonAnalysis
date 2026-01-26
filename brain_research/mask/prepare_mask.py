@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 prepare_mask.py
-功能：读取 Tian Subcortex 图谱，将其转化为二值化 Mask (0和1)，用于 GLM 分析
+功能 - 根据已有图谱制作Mask：读取 Tian Subcortex 图谱，将其转化为二值化 Mask (0和1)，用于 GLM 分析
 """
 
 import os

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 plot_isc_results.py
-修复版：解决 MDS 遇到 NaN 报错的问题
+绘制 被试*被试相关矩阵 分析结果的热图和直方图
 """
 
 import pandas as pd
