@@ -21,7 +21,10 @@ from scipy import stats
 
 
 # ===== 默认路径（可通过命令行覆盖） =====
-DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
+# 全脑
+# DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
+# 具体脑区
+DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
 DEFAULT_SUBJECT_INFO_PATH = Path("/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv")
 
 # 被试信息表中的列名
@@ -195,14 +198,34 @@ def run_analysis(
 
     return age_distance_path, result_path, pair_path
 
+# 全脑可选文件：similarity_surface_L_AgeSorted.csv、similarity_surface_R_AgeSorted.csv、similarity_volume_AgeSorted.csv
+# roi可选文件：similarity_surface_L_Control_PFC_AgeSorted.csv
+# similarity_surface_L_Salience_Insula_AgeSorted.csv
+# similarity_surface_L_Visual_AgeSorted.csv
+# similarity_surface_R_Control_PFC_AgeSorted.csv
+# similarity_surface_R_Salience_Insula_AgeSorted.csv
+# similarity_surface_R_Visual_AgeSorted.csv
+def resolve_similarity_path(similarity_path: Optional[Path], output_dir: Path) -> Path:
+    if similarity_path is not None:
+        return similarity_path
+
+    candidates = sorted(output_dir.glob("similarity_surface_L_Control_PFC_AgeSorted.csv"))
+    if not candidates:
+        raise FileNotFoundError(
+            "未提供 --similarity，且在输出目录中未找到 similarity_*_AgeSorted.csv。"
+        )
+
+    return candidates[-1]
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="联合分析相似性矩阵与年龄距离矩阵")
     parser.add_argument(
         "--similarity",
         type=Path,
-        required=True,
-        help="calc_isc_combined_strict 输出的相似性矩阵 CSV",
+        required=False,
+        default=None,
+        help="calc_isc_combined_strict 输出的相似性矩阵 CSV（不传则取输出目录最新文件）",
     )
     parser.add_argument(
         "--subject-info",
@@ -229,8 +252,10 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
 
+    similarity_path = resolve_similarity_path(args.similarity, args.output_dir)
+
     age_distance_path, result_path, pair_path = run_analysis(
-        similarity_path=args.similarity,
+        similarity_path=similarity_path,
         subject_info_path=args.subject_info,
         output_dir=args.output_dir,
         subject_order_path=args.subject_order,
