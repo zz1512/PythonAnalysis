@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-calc_isc_aligned.py
-功能：基于 stimulus_content (内容对齐列) 计算被试间相似性矩阵。
-适用：已解决了试次随机化问题的 _aligned.csv 文件。
+calc_isc_aligned_by_age.py
+功能：
+1. 读取被试信息表 (支持 .xlsx 和 .tsv)，解析中文年龄字段。
+2. 按照年龄（从小到大）对被试进行排序。
+3. 基于排序后的被试列表，计算 ISC 矩阵。
 """
 
 import pandas as pd
@@ -13,26 +15,108 @@ from nilearn import surface, image
 from tqdm import tqdm
 import gc
 import os
+import re
 
 # ================= 配置区 =================
-# 结果根目录
+# 1. 结果根目录
 LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
 
-# 输出目录
-OUTPUT_DIR = LSS_ROOT / "similarity_matrices_final"
+# 2. 输出目录
+OUTPUT_DIR = LSS_ROOT / "similarity_matrices_final_age_sorted"
 
-# 任务定义 (用于筛选被试交集)
+# 3. 被试信息表路径
+# 【请确认你的路径】看报错截图，你用的是这个 TSV 文件
+SUBJECT_INFO_PATH = "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv"
+
+# 4. 表格中的列名配置
+COL_SUB_ID = "被试编号"  # 对应截图A列
+COL_AGE = "采集年龄"  # 对应截图E列
+
+# 任务定义
 TASK_A = 'EMO'
 TASK_B = 'SOC'
 
-# Volume Mask 路径 (如果算Volume需要)
+# Volume Mask
 MNI_MASK_PATH = Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3T_Binary_Mask.nii.gz")
 
 
 # ==========================================
 
+def parse_chinese_age(age_str):
+    """
+    解析 '11岁11个月10天' 格式的年龄字符串，返回四舍五入后的整数年龄。
+    """
+    if pd.isna(age_str) or str(age_str).strip() == "":
+        return 999.0  # 缺失值放到最后
+
+    age_str = str(age_str)
+
+    # 使用正则表达式提取数字
+    y_match = re.search(r'(\d+)\s*岁', age_str)
+    m_match = re.search(r'(\d+)\s*个月', age_str)
+    if not m_match:
+        m_match = re.search(r'(\d+)\s*月', age_str)
+    d_match = re.search(r'(\d+)\s*天', age_str)
+
+    years = int(y_match.group(1)) if y_match else 0
+    months = int(m_match.group(1)) if m_match else 0
+    days = int(d_match.group(1)) if d_match else 0
+
+    # 计算精确年龄
+    exact_age = years + (months / 12.0) + (days / 365.0)
+
+    return round(exact_age)
+
+
+def load_subject_ages_map():
+    """
+    智能读取表格 (支持 xlsx 和 tsv)，建立 {sub-ID: age} 的映射字典
+    """
+    print(f"正在读取被试信息表: {SUBJECT_INFO_PATH}")
+    path_str = str(SUBJECT_INFO_PATH)
+
+    try:
+        # === 核心修复：根据后缀选择读取方式 ===
+        if path_str.endswith('.tsv') or path_str.endswith('.txt'):
+            print("识别为 TSV 文本格式...")
+            info_df = pd.read_csv(path_str, sep='\t')
+        elif path_str.endswith('.xlsx') or path_str.endswith('.xls'):
+            print("识别为 Excel 格式...")
+            info_df = pd.read_excel(path_str)
+        elif path_str.endswith('.csv'):
+            print("识别为 CSV 格式...")
+            info_df = pd.read_csv(path_str)
+        else:
+            raise ValueError("不支持的文件格式，请使用 .tsv, .csv 或 .xlsx")
+
+        # 检查列名 (打印一下列名方便调试)
+        if COL_SUB_ID not in info_df.columns or COL_AGE not in info_df.columns:
+            print(f"当前表格列名: {info_df.columns.tolist()}")
+            raise ValueError(f"表格中找不到列名: '{COL_SUB_ID}' 或 '{COL_AGE}'")
+
+        age_map = {}
+        for _, row in info_df.iterrows():
+            raw_id = str(row[COL_SUB_ID]).strip()
+            age_str = row[COL_AGE]
+
+            # 标准化 ID
+            if not raw_id.startswith('sub-'):
+                sub_id = f"sub-{raw_id}"
+            else:
+                sub_id = raw_id
+
+            age_val = parse_chinese_age(age_str)
+            age_map[sub_id] = age_val
+
+        print(f"成功加载 {len(age_map)} 名被试的年龄信息。")
+        return age_map
+
+    except Exception as e:
+        print(f"❌ 读取被试信息表失败: {e}")
+        return {}
+
+
 def get_data_flattener(file_type, mask_img=None):
-    """工厂函数：返回读取并展平数据的函数"""
     if file_type == 'surface':
         return lambda fpath: surface.load_surf_data(str(fpath)).astype(np.float32)
     elif file_type == 'volume':
@@ -46,150 +130,132 @@ def get_data_flattener(file_type, mask_img=None):
         return flatten_volume
 
 
-def compute_matrix_with_content_alignment(df_full, context_name, flattener):
-    """
-    核心逻辑：使用 stimulus_content 列进行精确对齐
-    """
+def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
     print(f"\n>>> 正在处理场景: {context_name}")
 
     # 1. 基础清洗
-    # 去除 stimulus_content 为空的行 (可能是解析失败或无用Trial)
     df = df_full.dropna(subset=['stimulus_content']).copy()
 
-    # 2. 被试交集筛选 (Subject Intersection)
-    # 找出既有 EMO 又有 SOC 数据的被试
+    # 2. 被试交集筛选
     subjects_emo = set(df[df['task'] == TASK_A]['subject'])
     subjects_soc = set(df[df['task'] == TASK_B]['subject'])
+    valid_subjects_unsorted = list(subjects_emo & subjects_soc)
 
-    # 取交集
-    valid_subjects_set = sorted(list(subjects_emo & subjects_soc))
-
-    print(f"  - EMO 被试数: {len(subjects_emo)}")
-    print(f"  - SOC 被试数: {len(subjects_soc)}")
-    print(f"  - [筛选后] 双任务均有的被试数: {len(valid_subjects_set)}")
-
-    if len(valid_subjects_set) == 0:
+    if not valid_subjects_unsorted:
         print("  ❌ 错误：没有被试同时拥有两个任务的数据。")
         return
 
+    # =======================================================
+    # 根据年龄对被试进行排序
+    # =======================================================
+    def sort_key(sub_id):
+        age = age_map.get(sub_id)
+        if age is None:
+            return (999, sub_id)
+        return (age, sub_id)
+
+    valid_subjects_sorted = sorted(valid_subjects_unsorted, key=sort_key)
+
+    print(f"  - 有效被试数: {len(valid_subjects_sorted)}")
+    if len(valid_subjects_sorted) > 0:
+        first = valid_subjects_sorted[0]
+        last = valid_subjects_sorted[-1]
+        print(f"  - 最小被试: {first} ({age_map.get(first, 'N/A')}岁)")
+        print(f"  - 最大被试: {last} ({age_map.get(last, 'N/A')}岁)")
+
     # 只保留这些有效被试
-    df = df[df['subject'].isin(valid_subjects_set)].copy()
+    df = df[df['subject'].isin(valid_subjects_sorted)].copy()
 
-    # 3. 筛选公共刺激 (Stimulus Intersection)
-    # 直接统计 stimulus_content 的出现频率
-    # 这里的 stimulus_content 已经是唯一的了 (如 EMO_Passive_Negative_001)
+    # 3. 筛选公共刺激
     key_counts = df['stimulus_content'].value_counts()
-
-    # 阈值：90% 的有效被试都有该图片
-    threshold = int(len(valid_subjects_set) * 0.9)
+    threshold = int(len(valid_subjects_sorted) * 0.9)
     common_keys = key_counts[key_counts >= threshold].index.tolist()
-
-    # 排序：保证矩阵的列顺序一致
     common_keys.sort()
 
     if not common_keys:
         print(f"  ⚠️ 没有公共刺激 (阈值: {threshold})")
-        print("  Top 5 刺激出现次数:", key_counts.head(5).to_dict())
         return
 
     print(f"  - 用于计算的特征数 (Stimuli): {len(common_keys)}")
-    print(f"  - 特征示例: {common_keys[:3]} ...")
 
-    # 4. 建立快速查找索引
-    # Key: (subject, stimulus_content) -> Value: file_path
-    # 注意：file 列如果是相对路径，需要拼全
+    # 4. 建立索引
     lookup_dict = {}
     for _, row in df.iterrows():
-        # 假设 csv 里的 file 列是相对路径 (beta_xxx.gii)
-        # 或者是绝对路径，这里做个兼容
         if str(row['file']).startswith('/'):
             fpath = Path(row['file'])
         else:
-            # 根据目录结构拼接: root / task_folder / subject / run / file
-            # 注意：这里需要根据你的实际目录结构微调
-            # 你的 lss_main 生成的目录结构是: OUTPUT_ROOT / task_type / sub / file
             task_folder = row['task'].lower() if 'task' in row else (
                 'emo' if 'EMO' in row['stimulus_content'] else 'soc')
-            # 你的lss_main生成的文件直接在 task/sub 下，还是 task/sub/run 下？
-            # 之前的脚本是 task/sub/file，如果是 task/sub/run/file 请加上 .parent
-            # 这里尝试直接查找
             fpath = LSS_ROOT / task_folder / row['subject'] / row['file']
-
-            # 如果找不到，尝试加 run 文件夹 (容错)
             if not fpath.exists():
                 fpath = LSS_ROOT / task_folder / row['subject'] / f"run-{row['run']}" / row['file']
-
         lookup_dict[(row['subject'], row['stimulus_content'])] = fpath
 
-    # 5. 加载数据 (核心耗时步)
+    # 5. 加载数据
     subject_vectors = []
     final_subjects = []
+    final_ages = []
 
-    for sub in tqdm(valid_subjects_set, desc="  - Loading Data"):
+    for sub in tqdm(valid_subjects_sorted, desc="  - Loading Data (Age Sorted)"):
         sub_features = []
         is_complete = True
 
         for content_key in common_keys:
             fpath = lookup_dict.get((sub, content_key))
-
             if fpath and fpath.exists():
                 try:
                     data = flattener(fpath)
                     sub_features.append(data)
-                except Exception as e:
-                    # print(f"Error loading {fpath}: {e}")
-                    is_complete = False
+                except:
+                    is_complete = False;
                     break
             else:
-                # print(f"Missing: {sub} {content_key}")
-                is_complete = False
+                is_complete = False;
                 break
 
         if is_complete:
-            # 拼接该被试所有刺激的 Beta 图
-            # 形状: (n_stimuli * n_vertices, )
             flat_vec = np.concatenate(sub_features)
             subject_vectors.append(flat_vec)
             final_subjects.append(sub)
+            final_ages.append(age_map.get(sub, 'N/A'))
 
-    # 6. 计算矩阵
+    # 6. 计算与保存
     if final_subjects:
         print(f"  - 最终计算矩阵规模: {len(final_subjects)} Subjects")
-
-        # 堆叠成大矩阵 (N_subs, N_features)
-        # 注意内存：如果这里报错 MemoryError，需要优化
         data_matrix = np.stack(subject_vectors)
-
-        # 主动释放列表内存
         del subject_vectors
         gc.collect()
 
         print("  - 正在计算相关系数...")
         sim_matrix = np.corrcoef(data_matrix)
 
-        # 保存
-        out_name = f"similarity_{context_name}_ContentAligned.csv"
+        out_name = f"similarity_{context_name}_AgeSorted.csv"
         out_path = OUTPUT_DIR / out_name
         pd.DataFrame(sim_matrix, index=final_subjects, columns=final_subjects).to_csv(out_path)
-        print(f"  ✅ 结果已保存: {out_path}")
+        print(f"  ✅ 矩阵已保存: {out_path}")
+
+        order_info = pd.DataFrame({'subject': final_subjects, 'age_rounded': final_ages})
+        order_info.to_csv(OUTPUT_DIR / f"subject_order_{context_name}.csv", index=False)
 
         del data_matrix, sim_matrix
         gc.collect()
     else:
-        print("  ❌ 加载后无有效被试 (可能文件路径不对或文件缺失)。")
+        print("  ❌ 加载后无有效被试。")
 
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. 搜索所有 _aligned.csv 文件
-    aligned_files = list(LSS_ROOT.glob("*_aligned.csv"))
-
-    if not aligned_files:
-        print(f"未找到 *_aligned.csv 文件！请先运行 generate_content_aligned_index.py")
+    age_map = load_subject_ages_map()
+    if not age_map:
+        print("无法加载年龄信息，程序终止。")
         return
 
-    # 2. 准备 Mask (如果算 Volume)
+    aligned_files = list(LSS_ROOT.glob("*_aligned.csv"))
+    if not aligned_files:
+        print(f"未找到 *_aligned.csv 文件！")
+        return
+
     vol_mask_img = None
     if any("volume" in f.name.lower() for f in aligned_files):
         if MNI_MASK_PATH.exists():
@@ -197,7 +263,6 @@ def main():
             vol_mask_img = image.load_img(str(MNI_MASK_PATH))
 
     for idx_file in aligned_files:
-        # 从文件名提取场景名 (去除 lss_index_ 和 _aligned)
         scenario_name = idx_file.stem.replace("lss_index_", "").replace("_aligned", "")
 
         is_volume = "volume" in scenario_name.lower()
@@ -209,7 +274,7 @@ def main():
             continue
 
         df = pd.read_csv(idx_file)
-        compute_matrix_with_content_alignment(df, scenario_name, flattener)
+        compute_matrix_with_age_sorting(df, scenario_name, flattener, age_map)
 
         gc.collect()
 

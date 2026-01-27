@@ -14,8 +14,9 @@ from sklearn.manifold import MDS
 import matplotlib.transforms as transforms
 
 # ================= 配置区 =================
-# CSV 所在的文件夹
+# CSV 所在的文件夹：全脑：similarity_matrices_final；具体roi：similarity_matrices_roi
 INPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final")
+# INPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi")
 
 # 图片输出文件夹
 FIGURE_DIR = INPUT_DIR / "figures"
