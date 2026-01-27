@@ -196,27 +196,13 @@ def run_analysis(
     return age_distance_path, result_path, pair_path
 
 
-def resolve_similarity_path(similarity_path: Optional[Path], output_dir: Path) -> Path:
-    if similarity_path is not None:
-        return similarity_path
-
-    candidates = sorted(output_dir.glob("similarity_*_AgeSorted.csv"))
-    if not candidates:
-        raise FileNotFoundError(
-            "未提供 --similarity，且在输出目录中未找到 similarity_*_AgeSorted.csv。"
-        )
-
-    return candidates[-1]
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="联合分析相似性矩阵与年龄距离矩阵")
     parser.add_argument(
         "--similarity",
         type=Path,
-        required=False,
-        default=None,
-        help="calc_isc_combined_strict 输出的相似性矩阵 CSV（不传则取输出目录最新文件）",
+        required=True,
+        help="calc_isc_combined_strict 输出的相似性矩阵 CSV",
     )
     parser.add_argument(
         "--subject-info",
@@ -243,10 +229,8 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
 
-    similarity_path = resolve_similarity_path(args.similarity, args.output_dir)
-
     age_distance_path, result_path, pair_path = run_analysis(
-        similarity_path=similarity_path,
+        similarity_path=args.similarity,
         subject_info_path=args.subject_info,
         output_dir=args.output_dir,
         subject_order_path=args.subject_order,
