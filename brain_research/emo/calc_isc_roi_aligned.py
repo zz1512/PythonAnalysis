@@ -14,7 +14,6 @@ import nibabel as nib
 from pathlib import Path
 from tqdm import tqdm
 import gc
-import os
 import re
 
 # ================= 核心配置区 =================
@@ -25,8 +24,10 @@ OUTPUT_DIR = LSS_ROOT / "similarity_matrices_roi_age_sorted"
 # 2. 被试信息表路径 (支持 .xlsx 或 .tsv)
 # 请确认这是你最新的被试信息表路径
 SUBJECT_INFO_PATH = "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv"
-COL_SUB_ID = "被试编号"
-COL_AGE = "采集年龄"
+COL_SUB_ID = "sub_id"
+COL_AGE = "age"
+LEGACY_COL_SUB_ID = "被试编号"
+LEGACY_COL_AGE = "采集年龄"
 
 # 3. Atlas 路径 (Schaefer 200, 已拆分为左右脑)
 ATLAS_SURF_L = "/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"
@@ -59,7 +60,13 @@ def parse_chinese_age(age_str):
     """解析 '11岁11个月10天'"""
     if pd.isna(age_str) or str(age_str).strip() == "":
         return 999.0
-    age_str = str(age_str)
+    if isinstance(age_str, (int, float, np.integer, np.floating)):
+        return float(age_str)
+    age_str = str(age_str).strip()
+    try:
+        return float(age_str)
+    except Exception:
+        pass
     y_match = re.search(r'(\d+)\s*岁', age_str)
     m_match = re.search(r'(\d+)\s*个月', age_str) or re.search(r'(\d+)\s*月', age_str)
     d_match = re.search(r'(\d+)\s*天', age_str)
@@ -67,7 +74,7 @@ def parse_chinese_age(age_str):
     years = int(y_match.group(1)) if y_match else 0
     months = int(m_match.group(1)) if m_match else 0
     days = int(d_match.group(1)) if d_match else 0
-    return round(years + (months / 12.0) + (days / 365.0))
+    return years + (months / 12.0) + (days / 365.0)
 
 
 def load_subject_ages_map():
@@ -80,12 +87,21 @@ def load_subject_ages_map():
         else:
             info_df = pd.read_excel(path_str)
 
+        if COL_SUB_ID in info_df.columns and COL_AGE in info_df.columns:
+            sub_col, age_col = COL_SUB_ID, COL_AGE
+        elif LEGACY_COL_SUB_ID in info_df.columns and LEGACY_COL_AGE in info_df.columns:
+            sub_col, age_col = LEGACY_COL_SUB_ID, LEGACY_COL_AGE
+        else:
+            print(f"❌ 年龄表缺少必要列。需要 {COL_SUB_ID}/{COL_AGE} 或 {LEGACY_COL_SUB_ID}/{LEGACY_COL_AGE}")
+            print(f"   实际列名: {list(info_df.columns)}")
+            return {}
+
         age_map = {}
         for _, row in info_df.iterrows():
-            raw_id = str(row[COL_SUB_ID]).strip()
+            raw_id = str(row[sub_col]).strip()
             # 统一格式 sub-xxx
             sub_id = f"sub-{raw_id}" if not raw_id.startswith('sub-') else raw_id
-            age_map[sub_id] = parse_chinese_age(row[COL_AGE])
+            age_map[sub_id] = parse_chinese_age(row[age_col])
 
         print(f"已加载 {len(age_map)} 名被试年龄。")
         return age_map

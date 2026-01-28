@@ -30,8 +30,10 @@ DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_re
 # DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
 DEFAULT_SUBJECT_INFO_PATH = Path("/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv")
 
-COL_SUB_ID = "被试编号"
-COL_AGE = "采集年龄"
+COL_SUB_ID = "sub_id"
+COL_AGE = "age"
+LEGACY_COL_SUB_ID = "被试编号"
+LEGACY_COL_AGE = "采集年龄"
 
 
 @dataclass
@@ -41,11 +43,17 @@ class DevModels:
     divergence: np.ndarray
 
 
-def parse_chinese_age_exact(age_str: str) -> float:
+def parse_chinese_age_exact(age_str: object) -> float:
     if pd.isna(age_str) or str(age_str).strip() == "":
         return np.nan
 
-    age_str = str(age_str)
+    if isinstance(age_str, (int, float, np.integer, np.floating)):
+        return float(age_str)
+    age_str = str(age_str).strip()
+    try:
+        return float(age_str)
+    except Exception:
+        pass
 
     y_match = re.search(r"(\d+)\s*岁", age_str)
     m_match = re.search(r"(\d+)\s*个月", age_str)
@@ -72,13 +80,22 @@ def load_subject_ages_map(subject_info_path: Path) -> dict:
     else:
         raise ValueError("不支持的文件格式，请使用 .tsv, .csv 或 .xlsx")
 
-    if COL_SUB_ID not in info_df.columns or COL_AGE not in info_df.columns:
-        raise ValueError(f"表格中找不到列名: '{COL_SUB_ID}' 或 '{COL_AGE}'")
+    if COL_SUB_ID in info_df.columns and COL_AGE in info_df.columns:
+        sub_col, age_col = COL_SUB_ID, COL_AGE
+    elif LEGACY_COL_SUB_ID in info_df.columns and LEGACY_COL_AGE in info_df.columns:
+        sub_col, age_col = LEGACY_COL_SUB_ID, LEGACY_COL_AGE
+    else:
+        raise ValueError(
+            "年龄表缺少必要列。需要以下任意一组列名：\n"
+            f"- {COL_SUB_ID}, {COL_AGE}\n"
+            f"- {LEGACY_COL_SUB_ID}, {LEGACY_COL_AGE}\n"
+            f"实际列名: {list(info_df.columns)}"
+        )
 
     age_map = {}
     for _, row in info_df.iterrows():
-        raw_id = str(row[COL_SUB_ID]).strip()
-        age_str = row[COL_AGE]
+        raw_id = str(row[sub_col]).strip()
+        age_str = row[age_col]
 
         if not raw_id.startswith("sub-"):
             sub_id = f"sub-{raw_id}"

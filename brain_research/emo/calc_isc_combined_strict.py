@@ -3,7 +3,7 @@
 """
 calc_isc_aligned_by_age.py
 功能：
-1. 读取被试信息表 (支持 .xlsx 和 .tsv)，解析中文年龄字段。
+1. 读取被试年龄表 (支持 .xlsx/.tsv/.csv)，优先使用数值年龄列。
 2. 按照年龄（从小到大）对被试进行排序。
 3. 基于排序后的被试列表，计算 ISC 矩阵。
 """
@@ -25,12 +25,17 @@ LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
 OUTPUT_DIR = LSS_ROOT / "similarity_matrices_final_age_sorted"
 
 # 3. 被试信息表路径
-# 【请确认你的路径】看报错截图，你用的是这个 TSV 文件
-SUBJECT_INFO_PATH = "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv"
+# 环境变量 SUBJECT_AGE_TABLE 可覆盖该默认路径
+SUBJECT_INFO_PATH = os.environ.get(
+    "SUBJECT_AGE_TABLE",
+    "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv",
+)
 
 # 4. 表格中的列名配置
-COL_SUB_ID = "被试编号"  # 对应截图A列
-COL_AGE = "采集年龄"  # 对应截图E列
+COL_SUB_ID = "sub_id"
+COL_AGE = "age"
+LEGACY_COL_SUB_ID = "被试编号"
+LEGACY_COL_AGE = "采集年龄"
 
 # 任务定义
 TASK_A = 'EMO'
@@ -44,12 +49,21 @@ MNI_MASK_PATH = Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3
 
 def parse_chinese_age(age_str):
     """
-    解析 '11岁11个月10天' 格式的年龄字符串，返回四舍五入后的整数年龄。
+    解析年龄字段：
+    - 若为数值或可直接转 float，则直接返回 float(age)
+    - 否则尝试解析 '11岁11个月10天' 格式，返回四舍五入后的整数年龄
     """
     if pd.isna(age_str) or str(age_str).strip() == "":
         return 999.0  # 缺失值放到最后
 
-    age_str = str(age_str)
+    if isinstance(age_str, (int, float, np.integer, np.floating)):
+        return float(age_str)
+
+    age_str = str(age_str).strip()
+    try:
+        return float(age_str)
+    except Exception:
+        pass
 
     # 使用正则表达式提取数字
     y_match = re.search(r'(\d+)\s*岁', age_str)
@@ -89,15 +103,22 @@ def load_subject_ages_map():
         else:
             raise ValueError("不支持的文件格式，请使用 .tsv, .csv 或 .xlsx")
 
-        # 检查列名 (打印一下列名方便调试)
-        if COL_SUB_ID not in info_df.columns or COL_AGE not in info_df.columns:
+        if COL_SUB_ID in info_df.columns and COL_AGE in info_df.columns:
+            sub_col, age_col = COL_SUB_ID, COL_AGE
+        elif LEGACY_COL_SUB_ID in info_df.columns and LEGACY_COL_AGE in info_df.columns:
+            sub_col, age_col = LEGACY_COL_SUB_ID, LEGACY_COL_AGE
+        else:
             print(f"当前表格列名: {info_df.columns.tolist()}")
-            raise ValueError(f"表格中找不到列名: '{COL_SUB_ID}' 或 '{COL_AGE}'")
+            raise ValueError(
+                "年龄表缺少必要列。需要以下任意一组列名：\n"
+                f"- {COL_SUB_ID}, {COL_AGE}\n"
+                f"- {LEGACY_COL_SUB_ID}, {LEGACY_COL_AGE}\n"
+            )
 
         age_map = {}
         for _, row in info_df.iterrows():
-            raw_id = str(row[COL_SUB_ID]).strip()
-            age_str = row[COL_AGE]
+            raw_id = str(row[sub_col]).strip()
+            age_str = row[age_col]
 
             # 标准化 ID
             if not raw_id.startswith('sub-'):
@@ -149,10 +170,10 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
     # 根据年龄对被试进行排序
     # =======================================================
     def sort_key(sub_id):
-        age = age_map.get(sub_id)
-        if age is None:
-            return (999, sub_id)
-        return (age, sub_id)
+        age = age_map.get(sub_id, np.nan)
+        if not np.isfinite(age):
+            return (999.0, sub_id)
+        return (float(age), sub_id)
 
     valid_subjects_sorted = sorted(valid_subjects_unsorted, key=sort_key)
 
@@ -234,7 +255,7 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
         pd.DataFrame(sim_matrix, index=final_subjects, columns=final_subjects).to_csv(out_path)
         print(f"  ✅ 矩阵已保存: {out_path}")
 
-        order_info = pd.DataFrame({'subject': final_subjects, 'age_rounded': final_ages})
+        order_info = pd.DataFrame({'subject': final_subjects, 'age': final_ages})
         order_info.to_csv(OUTPUT_DIR / f"subject_order_{context_name}.csv", index=False)
 
         del data_matrix, sim_matrix
