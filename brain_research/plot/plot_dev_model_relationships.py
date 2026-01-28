@@ -29,7 +29,7 @@ LEGACY_COL_AGE = "采集年龄"
 DEFAULT_AGE_TABLE = Path(
     os.environ.get(
         "SUBJECT_AGE_TABLE",
-        "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv",
+        "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
     )
 )
 DEFAULT_LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")

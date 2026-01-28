@@ -28,7 +28,7 @@ OUTPUT_DIR = LSS_ROOT / "similarity_matrices_final_age_sorted"
 # 环境变量 SUBJECT_AGE_TABLE 可覆盖该默认路径
 SUBJECT_INFO_PATH = os.environ.get(
     "SUBJECT_AGE_TABLE",
-    "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv",
+    "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
 )
 
 # 4. 表格中的列名配置

@@ -23,7 +23,7 @@ OUTPUT_DIR = LSS_ROOT / "similarity_matrices_roi_age_sorted"
 
 # 2. 被试信息表路径 (支持 .xlsx 或 .tsv)
 # 请确认这是你最新的被试信息表路径
-SUBJECT_INFO_PATH = "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv"
+SUBJECT_INFO_PATH = "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv"
 COL_SUB_ID = "sub_id"
 COL_AGE = "age"
 LEGACY_COL_SUB_ID = "被试编号"

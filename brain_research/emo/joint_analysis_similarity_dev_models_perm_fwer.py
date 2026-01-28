@@ -24,7 +24,7 @@ LEGACY_COL_AGE = "采集年龄"
 
 DEFAULT_FINAL_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
 DEFAULT_ROI_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
-DEFAULT_SUBJECT_INFO_PATH = Path("/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv")
+DEFAULT_SUBJECT_INFO_PATH = Path("/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")
 
 DEFAULT_ROIS = ("Visual", "Salience_Insula", "Control_PFC")
 

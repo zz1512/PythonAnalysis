@@ -28,7 +28,7 @@ from scipy import stats
 DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
 # 具体脑区
 # DEFAULT_OUTPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
-DEFAULT_SUBJECT_INFO_PATH = Path("/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv")
+DEFAULT_SUBJECT_INFO_PATH = Path("/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")
 
 COL_SUB_ID = "sub_id"
 COL_AGE = "age"

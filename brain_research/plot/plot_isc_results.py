@@ -26,7 +26,7 @@ FIGURE_DIR = INPUT_DIR / "figures"
 SUBJECT_INFO_PATH = Path(
     os.environ.get(
         "SUBJECT_AGE_TABLE",
-        "/public/home/dingrui/BIDS_DATA/emo_20250623/横断队列被试信息表.tsv",
+        "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
     )
 )
 COL_SUB_ID = "sub_id"
