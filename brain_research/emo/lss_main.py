@@ -29,7 +29,7 @@ from nilearn import surface
 from tqdm import tqdm
 
 try:
-    from glm_config import Config, get_scenario_configs
+    from glm_config import get_scenario_configs
     import glm_utils
 except ImportError:
     print("Error: 请确保 glm_config.py 和 glm_utils.py 在同一目录下")
@@ -61,6 +61,7 @@ def process_single_trial_lss(args):
      out_dir, unique_label, mask_img, config) = args
 
     try:
+        stage = "prepare_input"
         # 1. 准备数据对象
         if config.DATA_SPACE == 'volume':
             # Volume 模式：直接传路径
@@ -97,9 +98,11 @@ def process_single_trial_lss(args):
             # ====================================================
 
         # 2. 构建事件
+        stage = "create_lss_events"
         lss_events = glm_utils.create_lss_events(trial_idx, events_df)
 
         # 3. 建模
+        stage = "init_model"
         model = FirstLevelModel(
             t_r=config.TR,
             slice_time_ref=0.5,
@@ -115,12 +118,15 @@ def process_single_trial_lss(args):
         )
 
         # 4. 拟合
+        stage = "fit"
         model.fit(input_img, events=lss_events, confounds=confounds_df)
 
         # 5. 提取 Beta
+        stage = "compute_contrast"
         beta_img = model.compute_contrast('LSS_TARGET', output_type='effect_size')
 
         # 6. 保存结果
+        stage = "save"
         ext = ".gii" if config.DATA_SPACE == 'surface' else ".nii.gz"
         # 加上 hemi 后缀
         hemi_suffix = f"_{config.HEMI}" if config.DATA_SPACE == 'surface' else ""
@@ -138,11 +144,12 @@ def process_single_trial_lss(args):
         return {"status": "success", "file": fname}
 
     except Exception as e:
-        logger.error(f"Trial {trial_idx} error: {e}")
-        return None
+        logger.error(f"Trial {trial_idx} error ({stage}): {e}")
+        return {"status": "fail", "stage": stage, "error": str(e)}
 
 
 def process_one_run(sub, run, config):
+    audit = []
     # 1. 路径获取
     try:
         fmri_path_s, event_path_s, conf_path_s = config.get_paths(sub, run)
@@ -153,12 +160,48 @@ def process_one_run(sub, run, config):
             if cand:
                 conf_path = cand[0]
             else:
-                return []
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": config.RUN_MAP[run]["task"],
+                        "status": "fail",
+                        "stage": "missing_confounds",
+                        "error": "confounds_not_found",
+                        "fmri_path": str(fmri_path),
+                        "events_path": str(event_path),
+                        "confounds_path": str(conf_path),
+                    }
+                )
+                return {"meta": [], "audit": audit}
 
         if not fmri_path.exists() or not event_path.exists():
-            return []
+            audit.append(
+                {
+                    "subject": sub,
+                    "run": run,
+                    "task": config.RUN_MAP[run]["task"],
+                    "status": "fail",
+                    "stage": "missing_inputs",
+                    "error": "fmri_or_events_not_found",
+                    "fmri_path": str(fmri_path),
+                    "events_path": str(event_path),
+                    "confounds_path": str(conf_path),
+                }
+            )
+            return {"meta": [], "audit": audit}
     except Exception:
-        return []
+        audit.append(
+            {
+                "subject": sub,
+                "run": run,
+                "task": config.RUN_MAP[run]["task"] if run in config.RUN_MAP else "",
+                "status": "fail",
+                "stage": "get_paths",
+                "error": "get_paths_failed",
+            }
+        )
+        return {"meta": [], "audit": audit}
 
     # 2. 准备目录
     task_type = config.RUN_MAP[run]['folder_task']
@@ -171,7 +214,18 @@ def process_one_run(sub, run, config):
         # 读取 Events
         events = pd.read_csv(event_path, sep='\t')
         if events.empty:
-            return []
+            audit.append(
+                {
+                    "subject": sub,
+                    "run": run,
+                    "task": task_label,
+                    "status": "fail",
+                    "stage": "read_events",
+                    "error": "events_empty",
+                    "events_path": str(event_path),
+                }
+            )
+            return {"meta": [], "audit": audit}
 
         # 预先处理列名 (大小写兼容)
         col_map = {c.lower(): c for c in events.columns}
@@ -184,12 +238,35 @@ def process_one_run(sub, run, config):
         # 加载 Confounds
         confounds = glm_utils.load_complex_confounds(str(conf_path))
         if confounds.empty:
-            return []
+            audit.append(
+                {
+                    "subject": sub,
+                    "run": run,
+                    "task": task_label,
+                    "status": "fail",
+                    "stage": "load_confounds",
+                    "error": "confounds_empty",
+                    "confounds_path": str(conf_path),
+                }
+            )
+            return {"meta": [], "audit": audit}
 
         # 生成基础标签 (基于位置)
         events['unique_label'] = events['trial_type'] + '_tr' + events.index.astype(str)
     except Exception:
-        return []
+        audit.append(
+            {
+                "subject": sub,
+                "run": run,
+                "task": task_label,
+                "status": "fail",
+                "stage": "prepare_inputs",
+                "error": "prepare_inputs_failed",
+                "events_path": str(event_path),
+                "confounds_path": str(conf_path),
+            }
+        )
+        return {"meta": [], "audit": audit}
 
     # 4. Mask (仅 Volume)
     run_mask = None
@@ -197,7 +274,18 @@ def process_one_run(sub, run, config):
         if config.MNI_MASK_PATH and config.MNI_MASK_PATH.exists():
             run_mask = str(config.MNI_MASK_PATH)
         else:
-            return []
+            audit.append(
+                {
+                    "subject": sub,
+                    "run": run,
+                    "task": task_label,
+                    "status": "fail",
+                    "stage": "mask",
+                    "error": "mask_missing",
+                    "mask_path": str(config.MNI_MASK_PATH) if config.MNI_MASK_PATH else "",
+                }
+            )
+            return {"meta": [], "audit": audit}
 
     # 5. 循环处理 Trial
     fmri_input = str(fmri_path)
@@ -212,6 +300,18 @@ def process_one_run(sub, run, config):
 
             # 跳过无关事件
             if row['trial_type'] == 'Other':
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "trial_idx": int(idx),
+                        "label": str(row.get("unique_label", "")),
+                        "trial_type": str(row.get("trial_type", "")),
+                        "status": "skipped",
+                        "stage": "trial_type_other",
+                    }
+                )
                 continue
 
             # === [核心新增]：提取对齐信息 ===
@@ -233,7 +333,7 @@ def process_one_run(sub, run, config):
             args = (idx, fmri_input, events, confounds, out_dir, row['unique_label'], run_mask, config)
             res = process_single_trial_lss(args)
 
-            if res:
+            if res and res.get("status") == "success":
                 # 将元数据和对齐信息一起写入结果
                 results.append({
                     'subject': sub,
@@ -245,11 +345,38 @@ def process_one_run(sub, run, config):
                     'raw_condition': raw_cond,  # [NEW] 原始条件
                     'raw_emotion': raw_emo  # [NEW] 原始情绪
                 })
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "trial_idx": int(idx),
+                        "label": str(row.get("unique_label", "")),
+                        "trial_type": str(row.get("trial_type", "")),
+                        "status": "success",
+                        "stage": "trial",
+                        "file": str(res.get("file", "")),
+                    }
+                )
+            else:
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "trial_idx": int(idx),
+                        "label": str(row.get("unique_label", "")),
+                        "trial_type": str(row.get("trial_type", "")),
+                        "status": "fail",
+                        "stage": str(res.get("stage", "trial")) if isinstance(res, dict) else "trial",
+                        "error": str(res.get("error", "")) if isinstance(res, dict) else "unknown",
+                    }
+                )
         except Exception:
             continue
 
     gc.collect()
-    return results
+    return {"meta": results, "audit": audit}
 
 
 def run_main():
@@ -271,6 +398,7 @@ def run_main():
             continue
 
         all_meta = []
+        all_audit = []
         try:
             if cfg.PARALLEL:
                 res_list = Parallel(n_jobs=cfg.N_JOBS)(
@@ -278,19 +406,26 @@ def run_main():
                     for s, r in tqdm(tasks, desc=f"{scenario_name} 并行进度")
                 )
                 for r in res_list:
-                    if r:
-                        all_meta.extend(r)
+                    if isinstance(r, dict):
+                        all_meta.extend(r.get("meta", []))
+                        all_audit.extend(r.get("audit", []))
             else:
                 for s, r in tqdm(tasks, desc=f"{scenario_name} 串行进度"):
                     res = process_one_run(s, r, cfg)
-                    if res:
-                        all_meta.extend(res)
+                    if isinstance(res, dict):
+                        all_meta.extend(res.get("meta", []))
+                        all_audit.extend(res.get("audit", []))
 
             if all_meta:
                 # 输出文件名改为 _aligned.csv，表示这已经是包含对齐信息的最终版索引
                 out_file = cfg.OUTPUT_ROOT / f"lss_index_{cfg.SCENARIO_ID}_aligned.csv"
                 pd.DataFrame(all_meta).to_csv(out_file, index=False)
                 logger.info(f"全量对齐索引已保存: {out_file}")
+
+            if all_audit:
+                audit_file = cfg.OUTPUT_ROOT / f"lss_audit_{cfg.SCENARIO_ID}.csv"
+                pd.DataFrame(all_audit).to_csv(audit_file, index=False)
+                logger.info(f"LSS 审计日志已保存: {audit_file}")
 
         except Exception as e:
             logger.error(f"处理失败: {e}")
