@@ -34,7 +34,7 @@ def _parse_star_thresholds(stars: str) -> List[float]:
     parts = [p.strip() for p in str(stars).split(",") if p.strip()]
     vals = [float(x) for x in parts]
     vals = [x for x in vals if x > 0]
-    vals = sorted(set(vals))
+    vals = sorted(set(vals), reverse=True)  # 按降序排序
     if not vals:
         raise ValueError("--stars 不能为空，例如 '0.05,0.01,0.001'")
     return vals
@@ -65,6 +65,8 @@ def _stars_for_p(p: float, thresholds: List[float]) -> str:
     for t in thresholds:
         if p <= t:
             k += 1
+        else:
+            break  # 因为阈值是降序的，一旦不满足就可以停止
     return "*" * k
 
 
@@ -140,10 +142,10 @@ def plot_heatmap(
     ax.tick_params(axis="x", rotation=0)
     ax.tick_params(axis="y", rotation=0)
 
-    levels = sorted(star_thresholds)
+    levels = star_thresholds  # 已经是降序排序的
     legend_parts = []
-    for i, t in enumerate(levels[::-1], start=1):
-        legend_parts.append(f"{'*' * (len(levels) - i + 1)} p≤{t:g}")
+    for i, t in enumerate(levels, start=1):
+        legend_parts.append(f"{'*' * i} p≤{t:g}")
     legend_text = ", ".join(legend_parts)
     fig.text(0.99, 0.01, legend_text, ha="right", va="bottom", fontsize=10)
     plt.tight_layout()

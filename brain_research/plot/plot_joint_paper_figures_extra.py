@@ -290,7 +290,19 @@ def plot_bootstrap_forest(ci_df: pd.DataFrame, res_df: pd.DataFrame, out_path: P
         r = d["r_obs"].to_numpy(dtype=float)
         lo = d["ci_lo"].to_numpy(dtype=float)
         hi = d["ci_hi"].to_numpy(dtype=float)
-        ax.errorbar(r, y, xerr=[r - lo, hi - r], fmt="o", color="#4c72b0", ecolor="#4c72b0", elinewidth=1.4, capsize=3)
+        for i in range(len(d)):
+            r_i = r[i]
+            lo_i = lo[i]
+            hi_i = hi[i]
+            ax.plot(r_i, y[i], "o", color="#4c72b0")
+            if np.isfinite(lo_i) and np.isfinite(hi_i):
+                if lo_i > hi_i:
+                    lo_i, hi_i = hi_i, lo_i
+                    print(f"[QC] Warning: CI bounds swapped for {d.loc[i, 'matrix']} {model} (ci_lo > ci_hi).")
+                ax.hlines(y[i], lo_i, hi_i, color="#4c72b0", linewidth=1.4)
+                ax.vlines([lo_i, hi_i], y[i] - 0.08, y[i] + 0.08, color="#4c72b0", linewidth=1.4)
+            else:
+                print(f"[QC] Warning: Missing CI for {d.loc[i, 'matrix']} {model}; plotting point only.")
         ax.axvline(0, color="gray", linestyle="--", linewidth=1.0, alpha=0.8)
         ax.set_title(model)
         ax.set_xlabel("r (obs) with 95% bootstrap CI")

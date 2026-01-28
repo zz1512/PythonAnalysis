@@ -82,10 +82,18 @@ def load_subject_ages_map():
     print(f"正在读取被试信息: {SUBJECT_INFO_PATH}")
     path_str = str(SUBJECT_INFO_PATH)
     try:
+        # === 核心修复：根据后缀选择读取方式 ===
         if path_str.endswith('.tsv') or path_str.endswith('.txt'):
+            print("识别为 TSV 文本格式...")
             info_df = pd.read_csv(path_str, sep='\t')
-        else:
+        elif path_str.endswith('.xlsx') or path_str.endswith('.xls'):
+            print("识别为 Excel 格式...")
             info_df = pd.read_excel(path_str)
+        elif path_str.endswith('.csv'):
+            print("识别为 CSV 格式...")
+            info_df = pd.read_csv(path_str)
+        else:
+            raise ValueError("不支持的文件格式，请使用 .tsv, .csv 或 .xlsx")
 
         if COL_SUB_ID in info_df.columns and COL_AGE in info_df.columns:
             sub_col, age_col = COL_SUB_ID, COL_AGE
