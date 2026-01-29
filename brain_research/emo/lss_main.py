@@ -329,6 +329,7 @@ def process_one_run(sub, run, config):
     ext = ".gii" if config.DATA_SPACE == 'surface' else ".nii.gz"
     hemi_suffix = f"_{config.HEMI}" if config.DATA_SPACE == 'surface' else ""
     expected_files = []
+    expected_results = []
     for idx in indices:
         try:
             row = events.iloc[idx]
@@ -336,6 +337,21 @@ def process_one_run(sub, run, config):
                 continue
             fname = f"beta_{row['unique_label']}{hemi_suffix}{ext}"
             expected_files.append(out_dir / fname)
+            raw_cond = clean_bids_val(row[cond_col]) if cond_col else "Unknown"
+            raw_emo = clean_bids_val(row[emo_col]) if emo_col else "Unknown"
+            stimulus_content = f"{task_label}_{raw_cond}_{raw_emo}"
+            expected_results.append(
+                {
+                    "subject": sub,
+                    "run": run,
+                    "task": task_label,
+                    "label": row["unique_label"],
+                    "file": fname,
+                    "stimulus_content": stimulus_content,
+                    "raw_condition": raw_cond,
+                    "raw_emotion": raw_emo,
+                }
+            )
         except Exception:
             continue
 
@@ -350,7 +366,7 @@ def process_one_run(sub, run, config):
                 "file_count": len(expected_files),
             }
         )
-        return {"meta": [], "audit": audit}
+        return {"meta": expected_results, "audit": audit}
 
     for idx in indices:
         try:
@@ -401,6 +417,18 @@ def process_one_run(sub, run, config):
                         "status": "skipped",
                         "stage": "output_exists",
                         "file": fname,
+                    }
+                )
+                results.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "label": row["unique_label"],
+                        "file": fname,
+                        "stimulus_content": stimulus_content,
+                        "raw_condition": raw_cond,
+                        "raw_emotion": raw_emo,
                     }
                 )
                 continue
