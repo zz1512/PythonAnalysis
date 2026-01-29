@@ -25,7 +25,7 @@ import nibabel as nb
 from pathlib import Path
 from joblib import Parallel, delayed
 from nilearn.glm.first_level import FirstLevelModel
-from nilearn import surface
+from nilearn import surface, image
 from tqdm import tqdm
 
 try:
@@ -268,11 +268,43 @@ def process_one_run(sub, run, config):
         )
         return {"meta": [], "audit": audit}
 
-    # 4. Mask (仅 Volume)
+    # 4. 预加载 Volume 数据 + Mask (仅 Volume)
     run_mask = None
+    fmri_input = str(fmri_path)
     if config.DATA_SPACE == 'volume':
         if config.MNI_MASK_PATH and config.MNI_MASK_PATH.exists():
-            run_mask = str(config.MNI_MASK_PATH)
+            try:
+                fmri_input = nb.load(str(fmri_path))
+            except Exception:
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "status": "fail",
+                        "stage": "load_fmri",
+                        "error": "fmri_load_failed",
+                        "fmri_path": str(fmri_path),
+                    }
+                )
+                return {"meta": [], "audit": audit}
+
+            try:
+                mask_img = nb.load(str(config.MNI_MASK_PATH))
+                run_mask = image.resample_to_img(mask_img, fmri_input, interpolation="nearest")
+            except Exception:
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "status": "fail",
+                        "stage": "mask",
+                        "error": "mask_load_or_resample_failed",
+                        "mask_path": str(config.MNI_MASK_PATH),
+                    }
+                )
+                return {"meta": [], "audit": audit}
         else:
             audit.append(
                 {
@@ -288,11 +320,37 @@ def process_one_run(sub, run, config):
             return {"meta": [], "audit": audit}
 
     # 5. 循环处理 Trial
-    fmri_input = str(fmri_path)
     results = []
 
     # 始终全量跑
     indices = range(len(events))
+
+    # 5.1 预检查：如果全部 trial 结果已存在，则跳过本 run
+    ext = ".gii" if config.DATA_SPACE == 'surface' else ".nii.gz"
+    hemi_suffix = f"_{config.HEMI}" if config.DATA_SPACE == 'surface' else ""
+    expected_files = []
+    for idx in indices:
+        try:
+            row = events.iloc[idx]
+            if row['trial_type'] == 'Other':
+                continue
+            fname = f"beta_{row['unique_label']}{hemi_suffix}{ext}"
+            expected_files.append(out_dir / fname)
+        except Exception:
+            continue
+
+    if expected_files and all(p.exists() for p in expected_files):
+        audit.append(
+            {
+                "subject": sub,
+                "run": run,
+                "task": task_label,
+                "status": "skipped",
+                "stage": "all_trial_outputs_exist",
+                "file_count": len(expected_files),
+            }
+        )
+        return {"meta": [], "audit": audit}
 
     for idx in indices:
         try:
@@ -328,6 +386,24 @@ def process_one_run(sub, run, config):
             # e.g., EMO_PassiveLook_Negative_001_Negative
             stimulus_content = f"{task_label}_{raw_cond}_{raw_emo}"
             # ===============================
+
+            # 如果结果已存在则跳过
+            fname = f"beta_{row['unique_label']}{hemi_suffix}{ext}"
+            if (out_dir / fname).exists():
+                audit.append(
+                    {
+                        "subject": sub,
+                        "run": run,
+                        "task": task_label,
+                        "trial_idx": int(idx),
+                        "label": str(row.get("unique_label", "")),
+                        "trial_type": str(row.get("trial_type", "")),
+                        "status": "skipped",
+                        "stage": "output_exists",
+                        "file": fname,
+                    }
+                )
+                continue
 
             # 执行建模
             args = (idx, fmri_input, events, confounds, out_dir, row['unique_label'], run_mask, config)
