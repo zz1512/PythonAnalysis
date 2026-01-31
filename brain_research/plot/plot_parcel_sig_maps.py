@@ -14,7 +14,9 @@ plot_parcel_sig_maps.py
 -
 - --result-csv: parcel_joint_analysis_dev_models_perm_fwer__*.csv
   必需列：parcel_id, model, r_obs, p_fwer
-- --atlas-label: Schaefer label.gii（必须与分析的半球一致）
+- --atlas-label:
+  - surface：Schaefer label.gii（必须与分析的半球一致）
+  - volume：Schaefer 体素图谱 label.nii / label.nii.gz（与分析时使用的 atlas_label_used 一致更好）
 
 输出（每个 model 一套）
 -
@@ -35,6 +37,7 @@ import pandas as pd
 import nibabel as nib
 import matplotlib.pyplot as plt
 import seaborn as sns
+from nilearn import plotting
 
 @dataclass(frozen=True)
 class ParcelPlotPreset:
@@ -69,6 +72,15 @@ PRESETS_PLOT: Dict[str, ParcelPlotPreset] = {
         positive_only=True,
         top_k=20,
     ),
+    "EXAMPLE_volume_EMO_all": ParcelPlotPreset(
+        name="EXAMPLE_volume_EMO_all",
+        result_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/parcel_perm_fwer_out/parcel_joint_analysis_dev_models_perm_fwer__volume__EMO__all.csv"),
+        atlas_label=Path("/public/home/dingrui/fmri_analysis/zz_analysis/parcel_perm_fwer_out/atlas_resampled__volume__EMO__all.nii.gz"),
+        out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/parcel_perm_fwer_out/figures_volume_EMO_all"),
+        alpha=0.05,
+        positive_only=True,
+        top_k=20,
+    ),
 }
 
 
@@ -93,6 +105,21 @@ def load_label_gii(path: Path) -> np.ndarray:
     return np.asarray(g.darrays[0].data).reshape(-1).astype(np.int32)
 
 
+def _is_nifti(path: Path) -> bool:
+    suf = "".join(path.suffixes).lower()
+    return suf.endswith(".nii") or suf.endswith(".nii.gz")
+
+
+def load_label_nifti(path: Path) -> nib.Nifti1Image:
+    return nib.load(str(path))
+
+
+def save_nifti_like(atlas_img: nib.Nifti1Image, data: np.ndarray, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img = nib.Nifti1Image(np.asarray(data, dtype=np.float32), affine=atlas_img.affine, header=atlas_img.header)
+    nib.save(img, str(out_path))
+
+
 def save_func_gii(values: np.ndarray, out_path: Path) -> None:
     # 将顶点级数值写为 Gifti func.gii（Workbench 友好）
     da = nib.gifti.GiftiDataArray(values.astype(np.float32), intent="NIFTI_INTENT_ESTIMATE")
@@ -110,9 +137,19 @@ def main() -> None:
     if missing:
         raise ValueError(f"结果文件缺少列: {sorted(missing)}")
 
-    labels = load_label_gii(preset.atlas_label)
-    # 只保留 atlas 中实际存在的 parcel 编号（>0）
-    parcel_ids = sorted(set(int(x) for x in np.unique(labels) if int(x) > 0))
+    atlas_path = preset.atlas_label
+    if (not atlas_path.exists()) and ("atlas_label_used" in df.columns) and df["atlas_label_used"].notna().any():
+        cand = str(df["atlas_label_used"].dropna().iloc[0])
+        atlas_path = Path(cand)
+
+    is_volume = _is_nifti(atlas_path)
+    if is_volume:
+        atlas_img = load_label_nifti(atlas_path)
+        labels_vol = np.asarray(atlas_img.get_fdata(), dtype=np.int32)
+        parcel_ids = sorted(set(int(x) for x in np.unique(labels_vol) if int(x) > 0))
+    else:
+        labels = load_label_gii(atlas_path)
+        parcel_ids = sorted(set(int(x) for x in np.unique(labels) if int(x) > 0))
 
     models = sorted(df["model"].astype(str).unique().tolist())
     out_dir = preset.out_dir
@@ -142,17 +179,33 @@ def main() -> None:
         # 3) 把显著 parcel 的数值“扩展回顶点”
         #    - r 图：显著 parcel 顶点赋值为对应 r_obs，其他为 0
         #    - mask 图：显著 parcel 顶点赋值为 1，其他为 0
-        v_r = np.zeros(labels.shape[0], dtype=np.float32)
-        v_mask = np.zeros(labels.shape[0], dtype=np.float32)
-        if not sig.empty:
-            r_map = {int(pid): float(r) for pid, r in zip(sig["parcel_id"].tolist(), sig["r_obs"].tolist())}
+        if is_volume:
+            r_map = {int(pid): float(r) for pid, r in zip(sig["parcel_id"].tolist(), sig["r_obs"].tolist())} if not sig.empty else {}
+            v_r = np.zeros(labels_vol.shape, dtype=np.float32)
+            v_mask = np.zeros(labels_vol.shape, dtype=np.float32)
             for pid, r in r_map.items():
-                m = labels == int(pid)
+                m = labels_vol == int(pid)
                 v_r[m] = np.float32(r)
                 v_mask[m] = np.float32(1.0)
-
-        save_func_gii(v_r, out_dir / f"sig_r__{model}.func.gii")
-        save_func_gii(v_mask, out_dir / f"sig_mask__{model}.func.gii")
+            save_nifti_like(atlas_img, v_r, out_dir / f"sig_r__{model}.nii.gz")
+            save_nifti_like(atlas_img, v_mask, out_dir / f"sig_mask__{model}.nii.gz")
+            try:
+                fig = plotting.plot_stat_map(out_dir / f"sig_r__{model}.nii.gz", title=f"sig_r__{model}", colorbar=True)
+                fig.savefig(out_dir / f"sig_r__{model}.png", dpi=300, bbox_inches="tight")
+                fig.close()
+            except Exception:
+                pass
+        else:
+            v_r = np.zeros(labels.shape[0], dtype=np.float32)
+            v_mask = np.zeros(labels.shape[0], dtype=np.float32)
+            if not sig.empty:
+                r_map = {int(pid): float(r) for pid, r in zip(sig["parcel_id"].tolist(), sig["r_obs"].tolist())}
+                for pid, r in r_map.items():
+                    m = labels == int(pid)
+                    v_r[m] = np.float32(r)
+                    v_mask[m] = np.float32(1.0)
+            save_func_gii(v_r, out_dir / f"sig_r__{model}.func.gii")
+            save_func_gii(v_mask, out_dir / f"sig_mask__{model}.func.gii")
 
         # 4) Top-K 条形图（快速报告“哪些编号最显著/效应最大”）
         top_k = int(preset.top_k)

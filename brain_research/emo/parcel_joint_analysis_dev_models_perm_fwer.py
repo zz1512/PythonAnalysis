@@ -16,7 +16,9 @@ parcel_joint_analysis_dev_models_perm_fwer.py
 - LSS 输出的 aligned 索引：lss_index_*_aligned.csv
   需要列：subject, task, run, file, stimulus_content
   若索引里有 condition_group，则直接用；否则用 raw_condition/raw_emotion 推断三条件。
-- Atlas：Schaefer label.gii（单半球）
+- Atlas：
+  - surface：Schaefer label.gii（单半球）
+  - volume：Schaefer 体素图谱 label.nii / label.nii.gz（与 beta 同一 MNI 空间；必要时脚本会做 nearest resample）
 - 年龄表：含 sub_id/age（或 被试编号/采集年龄）
 
 输出
@@ -42,6 +44,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 import nibabel as nib
+from nilearn import image
 
 COL_SUB_ID = "sub_id"
 COL_AGE = "age"
@@ -94,6 +97,22 @@ PRESETS_ANALYSIS: Dict[str, ParcelAnalysisPreset] = {
         subject_info=Path("/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv"),
         out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/parcel_perm_fwer_out"),
         space="surface_R",
+        task="EMO",
+        condition_group="all",
+        lss_root=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
+        min_coverage=0.9,
+        require_both_tasks=False,
+        n_perm=5000,
+        seed=42,
+        normalize_models=True,
+    ),
+    "EXAMPLE_volume_EMO_all": ParcelAnalysisPreset(
+        name="EXAMPLE_volume_EMO_all",
+        aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_volume_aligned.csv"),
+        atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_MNI152_label.nii.gz"),
+        subject_info=Path("/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv"),
+        out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/parcel_perm_fwer_out"),
+        space="volume",
         task="EMO",
         condition_group="all",
         lss_root=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
@@ -211,10 +230,47 @@ def load_label_gii(path: Path) -> np.ndarray:
     return np.asarray(g.darrays[0].data).reshape(-1).astype(np.int32)
 
 
+def _is_nifti(path: Path) -> bool:
+    suf = "".join(path.suffixes).lower()
+    return suf.endswith(".nii") or suf.endswith(".nii.gz")
+
+
+def _is_gifti(path: Path) -> bool:
+    return path.suffix.lower() == ".gii"
+
+
+def _resample_label_to_ref_if_needed(atlas_path: Path, ref_img: nib.spatialimages.SpatialImage) -> Tuple[Path, nib.spatialimages.SpatialImage]:
+    atlas_img = image.load_img(str(atlas_path))
+    if atlas_img.shape == ref_img.shape[:3] and np.allclose(atlas_img.affine, ref_img.affine):
+        return atlas_path, atlas_img
+    atlas_rs = image.resample_to_img(atlas_img, ref_img, interpolation="nearest")
+    return atlas_path, atlas_rs
+
+
+def _find_first_existing_beta(df: pd.DataFrame, lss_root: Path, subjects_sorted: Sequence[str], common_keys: Sequence[str]) -> Path:
+    sub_set = set(subjects_sorted)
+    key_set = set(common_keys)
+    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
+    for _, row in df.iterrows():
+        p = resolve_beta_path(lss_root, row)
+        if p.exists():
+            return p
+    raise FileNotFoundError("未找到任何可用 beta 文件用于 volume atlas resample。")
+
+
 def load_beta_gii(path: Path) -> Optional[np.ndarray]:
     try:
         g = nib.load(str(path))
         return np.asarray(g.darrays[0].data).reshape(-1).astype(np.float32)
+    except Exception:
+        return None
+
+
+def load_beta_nii_flat(path: Path, voxel_idx: np.ndarray) -> Optional[np.ndarray]:
+    try:
+        img = image.load_img(str(path))
+        data = img.get_fdata(dtype=np.float32).reshape(-1)
+        return data[voxel_idx].astype(np.float32, copy=False)
     except Exception:
         return None
 
@@ -319,6 +375,64 @@ def compute_parcel_features(
                 ok = False
                 break
             sums = np.bincount(labels, weights=beta, minlength=max_label + 1).astype(np.float32)
+            means = sums[parcel_ids] / counts[parcel_ids]
+            if not np.isfinite(means).all():
+                ok = False
+                break
+            feats[si, :, ki] = means
+        if ok:
+            keep_subjects.append(sub)
+            keep_rows.append(si)
+
+    if not keep_subjects:
+        return np.empty((0, n_parcel, n_key), dtype=np.float32), []
+
+    feats = feats[np.array(keep_rows, dtype=int), :, :]
+    return feats, keep_subjects
+
+
+def compute_parcel_features_volume(
+    df: pd.DataFrame,
+    lss_root: Path,
+    labels_vec: np.ndarray,
+    voxel_idx: np.ndarray,
+    parcel_ids: np.ndarray,
+    subjects_sorted: Sequence[str],
+    common_keys: Sequence[str],
+) -> Tuple[np.ndarray, List[str]]:
+    max_label = int(labels_vec.max())
+    counts = np.bincount(labels_vec, minlength=max_label + 1).astype(np.float32)
+    counts[counts <= 0] = np.nan
+
+    key_set = set(common_keys)
+    df = df[df["stimulus_content"].isin(key_set)].copy()
+
+    lookup: Dict[Tuple[str, str], Path] = {}
+    for _, row in df.iterrows():
+        s = str(row.get("subject", ""))
+        k = str(row.get("stimulus_content", ""))
+        lookup[(s, k)] = resolve_beta_path(lss_root, row)
+
+    n_sub = len(subjects_sorted)
+    n_parcel = int(parcel_ids.size)
+    n_key = len(common_keys)
+    feats = np.full((n_sub, n_parcel, n_key), np.nan, dtype=np.float32)
+
+    keep_subjects: List[str] = []
+    keep_rows: List[int] = []
+
+    for si, sub in enumerate(subjects_sorted):
+        ok = True
+        for ki, key in enumerate(common_keys):
+            p = lookup.get((sub, key))
+            if p is None or not p.exists():
+                ok = False
+                break
+            beta_vec = load_beta_nii_flat(p, voxel_idx)
+            if beta_vec is None or beta_vec.shape[0] != labels_vec.shape[0]:
+                ok = False
+                break
+            sums = np.bincount(labels_vec, weights=beta_vec, minlength=max_label + 1).astype(np.float32)
             means = sums[parcel_ids] / counts[parcel_ids]
             if not np.isfinite(means).all():
                 ok = False
@@ -453,22 +567,53 @@ def run(
     if not keys:
         raise ValueError("没有满足覆盖率阈值的公共 stimulus_content。")
 
-    labels = load_label_gii(atlas_label)
-    parcel_ids = np.unique(labels)
-    parcel_ids = parcel_ids[(parcel_ids > 0)]
-    parcel_ids = np.sort(parcel_ids.astype(np.int32))
-    # 说明：这里的 parcel_id 直接来源于 label.gii 的编号；
-    # 若你使用 L/R 分半球 label.gii，则分别跑两次即可覆盖 1-200（或各自半球范围）。
-
     root = lss_root if lss_root is not None else aligned_csv.parent
-    feats, subjects_kept = compute_parcel_features(
-        df=df,
-        lss_root=root,
-        labels=labels,
-        parcel_ids=parcel_ids,
-        subjects_sorted=subjects_sorted,
-        common_keys=keys,
-    )
+    atlas_label_used = atlas_label
+
+    if _is_gifti(atlas_label):
+        labels = load_label_gii(atlas_label)
+        parcel_ids = np.unique(labels)
+        parcel_ids = parcel_ids[(parcel_ids > 0)]
+        parcel_ids = np.sort(parcel_ids.astype(np.int32))
+        feats, subjects_kept = compute_parcel_features(
+            df=df,
+            lss_root=root,
+            labels=labels,
+            parcel_ids=parcel_ids,
+            subjects_sorted=subjects_sorted,
+            common_keys=keys,
+        )
+    elif _is_nifti(atlas_label):
+        ref_beta = _find_first_existing_beta(df, root, subjects_sorted, keys)
+        ref_img = image.load_img(str(ref_beta))
+        _, atlas_img_rs = _resample_label_to_ref_if_needed(atlas_label, ref_img)
+
+        ctx_tmp = Context(space=space, task=task, condition_group=condition_group).name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        atlas_label_used = out_dir / f"atlas_resampled__{ctx_tmp}.nii.gz"
+        atlas_img_rs.to_filename(str(atlas_label_used))
+
+        lab = atlas_img_rs.get_fdata(dtype=np.float32)
+        lab = np.asarray(lab, dtype=np.int32)
+        lab_flat = lab.reshape(-1)
+        mask = lab_flat > 0
+        voxel_idx = np.where(mask)[0].astype(np.int64)
+        labels_vec = lab_flat[mask].astype(np.int32, copy=False)
+        parcel_ids = np.unique(labels_vec)
+        parcel_ids = np.sort(parcel_ids.astype(np.int32))
+
+        feats, subjects_kept = compute_parcel_features_volume(
+            df=df,
+            lss_root=root,
+            labels_vec=labels_vec,
+            voxel_idx=voxel_idx,
+            parcel_ids=parcel_ids,
+            subjects_sorted=subjects_sorted,
+            common_keys=keys,
+        )
+    else:
+        raise ValueError(f"不支持的 atlas 格式: {atlas_label}")
+
     if feats.shape[0] < 10:
         raise ValueError(f"成功加载数据的被试过少: {feats.shape[0]}")
 
@@ -533,6 +678,7 @@ def run(
                     "condition_group": condition_group,
                     "aligned_csv": str(aligned_csv),
                     "atlas_label": str(atlas_label),
+                    "atlas_label_used": str(atlas_label_used),
                 }
             )
 
