@@ -24,6 +24,7 @@ combined_roi_joint_analysis_dev_models_perm_fwer.py
    - volume_mask: volume combined 必填
    - task/condition_group/min_coverage/require_both_tasks: 过滤规则
    - ensure_complete_keys=True: 自动剔除缺失刺激以保留被试
+   - max_missing_stimuli=0: 允许每个被试最多缺失多少刺激（为 None 则不剔除被试）
 2) 修改 ACTIVE_PRESET 为你的 preset 名称。
 3) 直接运行本脚本：
    python combined_roi_joint_analysis_dev_models_perm_fwer.py
@@ -76,6 +77,7 @@ class JointPreset:
     require_both_tasks: bool = False
     min_coverage: float = 0.9
     ensure_complete_keys: bool = True
+    max_missing_stimuli: Optional[int] = 0
     n_perm: int = 10000
     seed: int = 42
     normalize_models: bool = True
@@ -181,6 +183,7 @@ PRESETS: Dict[str, JointPreset] = {
         require_both_tasks=False,
         min_coverage=0.9,
         ensure_complete_keys=True,
+        max_missing_stimuli=0,
         n_perm=10000,
         seed=42,
         normalize_models=True,
@@ -332,6 +335,35 @@ def filter_keys_complete(
         if ok:
             keep_keys.append(key)
     return keep_keys
+
+
+def filter_subjects_by_missing(
+    df: pd.DataFrame,
+    lss_root: Path,
+    subjects: Sequence[str],
+    keys: Sequence[str],
+    max_missing: int,
+) -> List[str]:
+    key_set = set(keys)
+    sub_set = set(subjects)
+    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
+    lookup = {}
+    for _, row in df.iterrows():
+        s = str(row.get("subject", ""))
+        k = str(row.get("stimulus_content", ""))
+        lookup[(s, k)] = resolve_beta_path(lss_root, row)
+    keep_subjects = []
+    for sub in subjects:
+        missing = 0
+        for key in keys:
+            fpath = lookup.get((sub, key))
+            if fpath is None or not fpath.exists():
+                missing += 1
+                if missing > max_missing:
+                    break
+        if missing <= max_missing:
+            keep_subjects.append(sub)
+    return keep_subjects
 
 
 def resolve_beta_path(lss_root: Path, row: pd.Series) -> Path:
@@ -549,6 +581,22 @@ def run_joint_analysis(preset: JointPreset) -> Path:
             keys = filter_keys_complete(df, lss_root, subjects_sorted, keys)
             if not keys:
                 raise ValueError(f"{spec.name} 剔除缺失刺激后无可用 stimulus_content。")
+        if preset.max_missing_stimuli is not None:
+            max_missing = int(preset.max_missing_stimuli)
+            if max_missing >= 0:
+                before = len(subjects_sorted)
+                subjects_sorted = filter_subjects_by_missing(
+                    df,
+                    lss_root,
+                    subjects_sorted,
+                    keys,
+                    max_missing,
+                )
+                dropped = before - len(subjects_sorted)
+                if dropped > 0:
+                    print(f"  - {spec.name}: 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
+                if not subjects_sorted:
+                    raise ValueError(f"{spec.name} 剔除缺失被试后无可用被试。")
         feats, subjects_kept = build_subject_feature_matrix(
             df=df,
             spec=spec,

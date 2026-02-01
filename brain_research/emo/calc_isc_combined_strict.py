@@ -43,6 +43,8 @@ TASK_B = 'SOC'
 
 # 如果为 True，会把“任何被试缺失”的刺激直接剔除（保被试、丢刺激）
 ENSURE_COMPLETE_KEYS = True
+# 允许每个被试最多缺失多少个刺激（<=0 表示不允许缺失；为 None 时不做该筛选）
+MAX_MISSING_STIMULI = 0
 
 # Volume Mask
 MNI_MASK_PATH = Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3T_Binary_Mask.nii.gz")
@@ -172,6 +174,26 @@ def _filter_keys_complete(
     return keep_keys
 
 
+def _filter_subjects_by_missing(
+    subjects,
+    keys,
+    lookup_dict,
+    max_missing,
+):
+    keep_subjects = []
+    for sub in subjects:
+        missing = 0
+        for key in keys:
+            fpath = lookup_dict.get((sub, key))
+            if fpath is None or not fpath.exists():
+                missing += 1
+                if missing > max_missing:
+                    break
+        if missing <= max_missing:
+            keep_subjects.append(sub)
+    return keep_subjects
+
+
 def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
     print(f"\n>>> 正在处理场景: {context_name}")
 
@@ -242,6 +264,22 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
         if not common_keys:
             print("  ⚠️ 剔除缺失刺激后无可用公共刺激。")
             return
+    if MAX_MISSING_STIMULI is not None:
+        max_missing = int(MAX_MISSING_STIMULI)
+        if max_missing >= 0:
+            before = len(valid_subjects_sorted)
+            valid_subjects_sorted = _filter_subjects_by_missing(
+                valid_subjects_sorted,
+                common_keys,
+                lookup_dict,
+                max_missing,
+            )
+            dropped = before - len(valid_subjects_sorted)
+            if dropped > 0:
+                print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
+            if not valid_subjects_sorted:
+                print("  ❌ 剔除缺失被试后无有效被试。")
+                return
 
     # 5. 加载数据
     subject_vectors = []
