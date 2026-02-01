@@ -181,21 +181,35 @@ def _filter_subjects_by_missing(
     max_missing,
 ):
     keep_subjects = []
+    missing_by_subject = {}
     for sub in subjects:
-        missing = 0
+        missing_keys = []
         for key in keys:
             fpath = lookup_dict.get((sub, key))
             if fpath is None or not fpath.exists():
-                missing += 1
-                if missing > max_missing:
+                missing_keys.append(key)
+                if len(missing_keys) > max_missing:
                     break
-        if missing <= max_missing:
+        if len(missing_keys) <= max_missing:
             keep_subjects.append(sub)
-    return keep_subjects
+        if missing_keys:
+            missing_by_subject[sub] = missing_keys
+    return keep_subjects, missing_by_subject
 
 
 def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
     print(f"\n>>> 正在处理场景: {context_name}")
+    drop_reasons = {}
+
+    def add_drop_reason(subject, stage, reason, detail=None, count=None):
+        drop_reasons.setdefault(subject, []).append(
+            {
+                "stage": stage,
+                "reason": reason,
+                "detail": detail or "",
+                "count": count if count is not None else "",
+            }
+        )
 
     # 1. 基础清洗
     df = df_full.dropna(subset=['stimulus_content']).copy()
@@ -204,6 +218,14 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
     subjects_emo = set(df[df['task'] == TASK_A]['subject'])
     subjects_soc = set(df[df['task'] == TASK_B]['subject'])
     valid_subjects_unsorted = list(subjects_emo & subjects_soc)
+    missing_task_subjects = (subjects_emo | subjects_soc) - set(valid_subjects_unsorted)
+    for sub in sorted(missing_task_subjects):
+        has_emo = sub in subjects_emo
+        has_soc = sub in subjects_soc
+        if not has_emo:
+            add_drop_reason(sub, "task_intersection", "missing_task", "missing EMO task")
+        if not has_soc:
+            add_drop_reason(sub, "task_intersection", "missing_task", "missing SOC task")
 
     if not valid_subjects_unsorted:
         print("  ❌ 错误：没有被试同时拥有两个任务的数据。")
@@ -268,7 +290,7 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
         max_missing = int(MAX_MISSING_STIMULI)
         if max_missing >= 0:
             before = len(valid_subjects_sorted)
-            valid_subjects_sorted = _filter_subjects_by_missing(
+            valid_subjects_sorted, missing_by_subject = _filter_subjects_by_missing(
                 valid_subjects_sorted,
                 common_keys,
                 lookup_dict,
@@ -277,6 +299,15 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
             dropped = before - len(valid_subjects_sorted)
             if dropped > 0:
                 print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
+                for sub, missing_keys in missing_by_subject.items():
+                    if len(missing_keys) > max_missing:
+                        add_drop_reason(
+                            sub,
+                            "missing_stimuli",
+                            f"missing_stimuli_gt_{max_missing}",
+                            detail="; ".join(missing_keys[:5]) + (" ..." if len(missing_keys) > 5 else ""),
+                            count=len(missing_keys),
+                        )
             if not valid_subjects_sorted:
                 print("  ❌ 剔除缺失被试后无有效被试。")
                 return
@@ -288,7 +319,7 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
 
     for sub in tqdm(valid_subjects_sorted, desc="  - Loading Data (Age Sorted)"):
         sub_features = []
-        is_complete = True
+        failure = None
 
         for content_key in common_keys:
             fpath = lookup_dict.get((sub, content_key))
@@ -296,18 +327,26 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
                 try:
                     data = flattener(fpath)
                     sub_features.append(data)
-                except:
-                    is_complete = False;
+                except Exception as exc:
+                    failure = ("load_error", content_key, str(exc))
                     break
             else:
-                is_complete = False;
+                failure = ("missing_file", content_key, str(fpath) if fpath else "")
                 break
 
-        if is_complete:
+        if failure is None:
             flat_vec = np.concatenate(sub_features)
             subject_vectors.append(flat_vec)
             final_subjects.append(sub)
             final_ages.append(age_map.get(sub, 'N/A'))
+        else:
+            reason, content_key, detail = failure
+            add_drop_reason(
+                sub,
+                "load_data",
+                reason,
+                detail=f"{content_key} {detail}".strip(),
+            )
 
     # 6. 计算与保存
     if final_subjects:
@@ -331,6 +370,16 @@ def compute_matrix_with_age_sorting(df_full, context_name, flattener, age_map):
         gc.collect()
     else:
         print("  ❌ 加载后无有效被试。")
+
+    if drop_reasons:
+        rows = []
+        for subject, reasons in drop_reasons.items():
+            for entry in reasons:
+                rows.append({"subject": subject, **entry})
+        report_df = pd.DataFrame(rows)
+        report_path = OUTPUT_DIR / f"subject_exclusion_reasons_{context_name}.csv"
+        report_df.to_csv(report_path, index=False)
+        print(f"  📄 已保存剔除原因明细: {report_path}")
 
 
 def main():
