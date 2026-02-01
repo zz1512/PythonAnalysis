@@ -19,6 +19,7 @@ diagnose_missing_rules.py
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -69,6 +70,9 @@ def main() -> None:
     p.add_argument("--min-coverage", type=float, default=0.9, help="公共刺激阈值")
     p.add_argument("--top-n", type=int, default=10, help="输出 top N 缺失统计")
     p.add_argument("--out-dir", type=Path, default=Path("./missing_diagnose_out"), help="输出目录")
+    if len(sys.argv) == 1:
+        p.print_help()
+        return
     args = p.parse_args()
 
     df = pd.read_csv(args.aligned_csv)
