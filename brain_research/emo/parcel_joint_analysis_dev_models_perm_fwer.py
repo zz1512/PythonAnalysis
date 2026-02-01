@@ -63,7 +63,10 @@ class ParcelAnalysisPreset:
     task: str
     condition_group: str
     lss_root: Optional[Path] = None
+    subject_allowlist: Optional[Path] = None
     min_coverage: float = 0.9
+    ensure_complete_keys: bool = True
+    max_missing_stimuli: Optional[int] = 0
     require_both_tasks: bool = False
     n_perm: int = 5000
     seed: int = 42
@@ -223,6 +226,31 @@ def infer_condition_group(row: pd.Series) -> str:
             return "neutral_response"
         return "emotion_generation"
     return "other"
+
+
+def load_subject_allowlist(path: Optional[Path]) -> Optional[set[str]]:
+    if path is None:
+        return None
+    if not path.exists():
+        raise FileNotFoundError(f"subject_allowlist 不存在: {path}")
+    if path.suffix.lower() in {".csv", ".tsv", ".txt"}:
+        if path.suffix.lower() == ".csv":
+            df = pd.read_csv(path)
+        else:
+            df = pd.read_csv(path, sep="\t")
+        if "subject" in df.columns:
+            subjects = df["subject"].astype(str).tolist()
+        else:
+            subjects = df.iloc[:, 0].astype(str).tolist()
+    else:
+        subjects = path.read_text(encoding="utf-8").splitlines()
+    cleaned = set()
+    for s in subjects:
+        sid = str(s).strip()
+        if not sid:
+            continue
+        cleaned.add(sid if sid.startswith("sub-") else f"sub-{sid}")
+    return cleaned
 
 
 def load_label_gii(path: Path) -> np.ndarray:
@@ -479,6 +507,7 @@ def filter_dataframe(
     task: str,
     condition_group: str,
     require_both_tasks: bool,
+    subject_allowlist: Optional[set[str]] = None,
 ) -> pd.DataFrame:
     # 对齐索引过滤：
     # - task: EMO 或 SOC（为空表示不按 task 过滤）
@@ -501,6 +530,9 @@ def filter_dataframe(
         subs_b = set(df[df["task"] == "SOC"]["subject"].unique().tolist())
         keep = subs_a & subs_b
         df = df[df["subject"].isin(sorted(keep))].copy()
+
+    if subject_allowlist is not None:
+        df = df[df["subject"].isin(subject_allowlist)].copy()
 
     return df
 
@@ -529,6 +561,62 @@ def common_stimulus_keys(df: pd.DataFrame, subjects: Sequence[str], min_coverage
     return keys
 
 
+def filter_keys_complete(
+    df: pd.DataFrame,
+    lss_root: Path,
+    subjects: Sequence[str],
+    keys: Sequence[str],
+) -> List[str]:
+    key_set = set(keys)
+    sub_set = set(subjects)
+    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
+    lookup: Dict[Tuple[str, str], Path] = {}
+    for _, row in df.iterrows():
+        s = str(row.get("subject", ""))
+        k = str(row.get("stimulus_content", ""))
+        lookup[(s, k)] = resolve_beta_path(lss_root, row)
+    keep_keys = []
+    for key in keys:
+        ok = True
+        for sub in subjects:
+            fpath = lookup.get((sub, key))
+            if fpath is None or not fpath.exists():
+                ok = False
+                break
+        if ok:
+            keep_keys.append(key)
+    return keep_keys
+
+
+def filter_subjects_by_missing(
+    df: pd.DataFrame,
+    lss_root: Path,
+    subjects: Sequence[str],
+    keys: Sequence[str],
+    max_missing: int,
+) -> List[str]:
+    key_set = set(keys)
+    sub_set = set(subjects)
+    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
+    lookup: Dict[Tuple[str, str], Path] = {}
+    for _, row in df.iterrows():
+        s = str(row.get("subject", ""))
+        k = str(row.get("stimulus_content", ""))
+        lookup[(s, k)] = resolve_beta_path(lss_root, row)
+    keep_subjects = []
+    for sub in subjects:
+        missing = 0
+        for key in keys:
+            fpath = lookup.get((sub, key))
+            if fpath is None or not fpath.exists():
+                missing += 1
+                if missing > max_missing:
+                    break
+        if missing <= max_missing:
+            keep_subjects.append(sub)
+    return keep_subjects
+
+
 def run(
     aligned_csv: Path,
     atlas_label: Path,
@@ -538,7 +626,10 @@ def run(
     task: str,
     condition_group: str,
     lss_root: Optional[Path],
+    subject_allowlist: Optional[Path],
     min_coverage: float,
+    ensure_complete_keys: bool,
+    max_missing_stimuli: Optional[int],
     require_both_tasks: bool,
     n_perm: int,
     seed: int,
@@ -554,7 +645,14 @@ def run(
     # 7) 置换：打乱年龄顺序生成模型向量，得到 p_perm（单侧，rp>=r_obs）
     # 8) max-stat：每次置换取所有 parcel 的最大 rp，得到 p_fwer（FWER 单侧）
     df_full = pd.read_csv(aligned_csv)
-    df = filter_dataframe(df_full, task=task, condition_group=condition_group, require_both_tasks=require_both_tasks)
+    allowlist = load_subject_allowlist(subject_allowlist)
+    df = filter_dataframe(
+        df_full,
+        task=task,
+        condition_group=condition_group,
+        require_both_tasks=require_both_tasks,
+        subject_allowlist=allowlist,
+    )
     if df.empty:
         raise ValueError("过滤后 aligned 数据为空，请检查 task/condition_group 设置。")
 
@@ -563,11 +661,30 @@ def run(
     if len(subjects_sorted) < 10:
         raise ValueError(f"有效被试数过少: {len(subjects_sorted)}")
 
+    root = lss_root if lss_root is not None else aligned_csv.parent
     keys = common_stimulus_keys(df, subjects_sorted, min_coverage=min_coverage)
     if not keys:
         raise ValueError("没有满足覆盖率阈值的公共 stimulus_content。")
-
-    root = lss_root if lss_root is not None else aligned_csv.parent
+    if ensure_complete_keys:
+        keys = filter_keys_complete(df, root, subjects_sorted, keys)
+        if not keys:
+            raise ValueError("剔除缺失刺激后无可用公共 stimulus_content。")
+    if max_missing_stimuli is not None:
+        max_missing = int(max_missing_stimuli)
+        if max_missing >= 0:
+            before = len(subjects_sorted)
+            subjects_sorted = filter_subjects_by_missing(
+                df,
+                root,
+                subjects_sorted,
+                keys,
+                max_missing,
+            )
+            dropped = before - len(subjects_sorted)
+            if dropped > 0:
+                print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
+            if not subjects_sorted:
+                raise ValueError("剔除缺失被试后无有效被试。")
     atlas_label_used = atlas_label
 
     if _is_gifti(atlas_label):
@@ -701,7 +818,10 @@ def main() -> None:
         task=str(preset.task).strip(),
         condition_group=str(preset.condition_group).strip(),
         lss_root=Path(preset.lss_root) if preset.lss_root is not None else None,
+        subject_allowlist=Path(preset.subject_allowlist) if preset.subject_allowlist is not None else None,
         min_coverage=float(preset.min_coverage),
+        ensure_complete_keys=bool(preset.ensure_complete_keys),
+        max_missing_stimuli=preset.max_missing_stimuli,
         require_both_tasks=bool(preset.require_both_tasks),
         n_perm=int(preset.n_perm),
         seed=int(preset.seed),
