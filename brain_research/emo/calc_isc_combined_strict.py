@@ -151,6 +151,8 @@ def get_data_flattener(file_type, mask_img=None):
 
         def flatten_volume(fpath):
             img = image.load_img(str(fpath))
+            if img.shape != mask_img.shape or not np.allclose(img.affine, mask_img.affine):
+                img = image.resample_to_img(img, mask_img, interpolation="continuous")
             return img.get_fdata(dtype=np.float32)[mask_data]
 
         return flatten_volume

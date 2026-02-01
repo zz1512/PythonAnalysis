@@ -392,9 +392,15 @@ def load_beta_gii(path: Path) -> Optional[np.ndarray]:
         return None
 
 
-def load_beta_nii_flat(path: Path, voxel_idx: np.ndarray) -> Optional[np.ndarray]:
+def load_beta_nii_flat(
+    path: Path,
+    voxel_idx: np.ndarray,
+    mask_img: nib.spatialimages.SpatialImage,
+) -> Optional[np.ndarray]:
     try:
         img = image.load_img(str(path))
+        if img.shape != mask_img.shape or not np.allclose(img.affine, mask_img.affine):
+            img = image.resample_to_img(img, mask_img, interpolation="continuous")
         data = img.get_fdata(dtype=np.float32).reshape(-1)
         return data[voxel_idx].astype(np.float32, copy=False)
     except Exception:
@@ -470,7 +476,7 @@ def build_subject_feature_matrix(
                 if p is None or not p.exists():
                     ok = False
                     break
-                beta = load_beta_nii_flat(p, voxel_idx)
+                beta = load_beta_nii_flat(p, voxel_idx, mask_img)
                 if beta is None:
                     ok = False
                     break
