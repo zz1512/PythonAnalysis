@@ -44,8 +44,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--beta-root",
-        required=True,
-        help="beta 输出根目录（将递归查找 beta_*.nii.gz）",
+        default=None,
+        help="beta 输出根目录（将递归查找 beta_*.nii.gz）。默认读取 lss_main 的 OUTPUT_ROOT。",
     )
     parser.add_argument(
         "--pattern",
@@ -140,7 +140,13 @@ def check_beta_file(
 
 def main() -> None:
     args = parse_args()
-    beta_root = Path(args.beta_root)
+    if args.beta_root:
+        beta_root = Path(args.beta_root)
+    else:
+        from glm_config import Config
+
+        config = Config(data_space="volume")
+        beta_root = config.OUTPUT_ROOT
     if not beta_root.exists():
         raise FileNotFoundError(f"beta_root not found: {beta_root}")
 
