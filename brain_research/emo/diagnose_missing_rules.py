@@ -154,6 +154,7 @@ def main() -> None:
     lookup = build_lookup(df, lss_root, subjects, keys)
     missing_by_key: Dict[str, List[str]] = {k: [] for k in keys}
     missing_by_sub: Dict[str, List[str]] = {s: [] for s in subjects}
+    missing_records: List[Dict[str, str]] = []
 
     for sub in subjects:
         for key in keys:
@@ -161,6 +162,14 @@ def main() -> None:
             if fpath is None or not fpath.exists():
                 missing_by_key[key].append(sub)
                 missing_by_sub[sub].append(key)
+                missing_records.append(
+                    {
+                        "subject": sub,
+                        "stimulus_content": key,
+                        "expected_path": "" if fpath is None else str(fpath),
+                        "reason": "no_index_entry" if fpath is None else "file_missing",
+                    }
+                )
 
     missing_key_counts = sorted(
         [(k, len(v)) for k, v in missing_by_key.items()],
@@ -181,6 +190,16 @@ def main() -> None:
     print("\n--- 缺失最严重的被试 (Top) ---")
     for s, n in missing_sub_counts[:top_n]:
         print(f"  {s}: 缺失 {n} / {len(keys)} 刺激")
+    print("\n--- 刺激缺失的被试清单 ---")
+    for k, missing_subjects in missing_by_key.items():
+        if missing_subjects:
+            joined_subjects = ", ".join(sorted(set(missing_subjects)))
+            print(f"  {k}: {joined_subjects}")
+    print("\n--- 被试缺失的刺激清单 ---")
+    for s, missing_stimuli in missing_by_sub.items():
+        if missing_stimuli:
+            joined_stimuli = ", ".join(sorted(set(missing_stimuli)))
+            print(f"  {s}: {joined_stimuli}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -195,6 +214,7 @@ def main() -> None:
             "n_missing_stimuli": [n for _, n in missing_sub_counts],
         }
     ).to_csv(out_dir / "missing_subjects_rank.csv", index=False)
+    pd.DataFrame(missing_records).to_csv(out_dir / "missing_files_detail.csv", index=False)
 
 
 if __name__ == "__main__":
