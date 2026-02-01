@@ -294,9 +294,15 @@ def load_beta_gii(path: Path) -> Optional[np.ndarray]:
         return None
 
 
-def load_beta_nii_flat(path: Path, voxel_idx: np.ndarray) -> Optional[np.ndarray]:
+def load_beta_nii_flat(
+    path: Path,
+    voxel_idx: np.ndarray,
+    ref_img: nib.spatialimages.SpatialImage,
+) -> Optional[np.ndarray]:
     try:
         img = image.load_img(str(path))
+        if img.shape != ref_img.shape or not np.allclose(img.affine, ref_img.affine):
+            img = image.resample_to_img(img, ref_img, interpolation="continuous")
         data = img.get_fdata(dtype=np.float32).reshape(-1)
         return data[voxel_idx].astype(np.float32, copy=False)
     except Exception:
@@ -427,6 +433,7 @@ def compute_parcel_features_volume(
     parcel_ids: np.ndarray,
     subjects_sorted: Sequence[str],
     common_keys: Sequence[str],
+    ref_img: nib.spatialimages.SpatialImage,
 ) -> Tuple[np.ndarray, List[str]]:
     max_label = int(labels_vec.max())
     counts = np.bincount(labels_vec, minlength=max_label + 1).astype(np.float32)
@@ -456,7 +463,7 @@ def compute_parcel_features_volume(
             if p is None or not p.exists():
                 ok = False
                 break
-            beta_vec = load_beta_nii_flat(p, voxel_idx)
+            beta_vec = load_beta_nii_flat(p, voxel_idx, ref_img)
             if beta_vec is None or beta_vec.shape[0] != labels_vec.shape[0]:
                 ok = False
                 break
@@ -727,6 +734,7 @@ def run(
             parcel_ids=parcel_ids,
             subjects_sorted=subjects_sorted,
             common_keys=keys,
+            ref_img=atlas_img_rs,
         )
     else:
         raise ValueError(f"不支持的 atlas 格式: {atlas_label}")
