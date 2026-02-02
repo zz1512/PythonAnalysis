@@ -270,6 +270,7 @@ def load_roi_data(
     for _, row in df_sub.iterrows():
         lookup[(str(row["subject"]), str(row["stimulus_content"]))] = resolve_beta_path(lss_root, row)
 
+    allow_missing_impute = False
     if preset.ensure_complete_keys:
         valid_keys = []
         for k in keys:
@@ -287,8 +288,10 @@ def load_roi_data(
         keys = valid_keys
 
     if not keys:
-        print(f"  [Skip] {spec.name}: 剔除缺失刺激后无剩余刺激")
-        return None
+        print(f"  [Warn] {spec.name}: 剔除缺失刺激后无剩余刺激，改为缺失填充策略")
+        keys = counts.index.tolist()
+        keys.sort()
+        allow_missing_impute = True
 
     matrix_list = []
     print(f"  [Load] {spec.name}: {len(keys)} stimuli x {len(subjects)} subjects")
@@ -322,10 +325,14 @@ def load_roi_data(
 
     for s in tqdm(subjects, leave=False, desc=f"Reading {spec.name}"):
         feats = []
+        missing = 0
         for k in keys:
             p = lookup.get((s, k))
             if p is None or not p.exists():
-                if preset.max_missing_stimuli == 0:
+                missing += 1
+                if allow_missing_impute:
+                    feats.append(np.zeros(int(mask.sum()), dtype=np.float32))
+                elif preset.max_missing_stimuli == 0:
                     raise FileNotFoundError(f"被试 {s} 缺失刺激 {k}")
                 continue
             if spec.space.startswith("surface"):
@@ -339,6 +346,8 @@ def load_roi_data(
                 data = img.get_fdata(dtype=np.float32)
                 feats.append(data[mask])
         if feats:
+            if allow_missing_impute and missing > 0:
+                print(f"  [Warn] {spec.name}: 被试 {s} 缺失 {missing} 个刺激，已填 0")
             matrix_list.append(np.concatenate(feats))
 
     if not matrix_list:
