@@ -2,7 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 glm_config.py
-全局配置文件 - 适配分离路径 (影像在 midprep, 头动在 miniprep)
+全局配置文件 - 适配分离路径（影像在 midprep，头动在 miniprep）
+
+关键路径约定（供分析脚本与绘图/QC脚本保持一致）：
+- BIDS_DATA_DIR：BIDS 数据根目录（默认 /public/home/dingrui/BIDS_DATA）
+- LSS_OUTPUT_ROOT：LSS 输出根目录（默认 /public/home/dingrui/fmri_analysis/zz_analysis/lss_results）
+
+说明：
+- emo/ 下的大部分下游分析（相似性矩阵、置换检验、绘图）默认都以 LSS_OUTPUT_ROOT 为“数据与产物的发现入口”。
 """
 import os
 from pathlib import Path

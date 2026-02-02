@@ -6,8 +6,12 @@ plot_supplement_similarity_distributions.py
 
 补充材料推荐图：8 个相似性矩阵的上三角分布汇总（Facet）
 默认零参数运行：从默认 final/roi AgeSorted 目录中读取 similarity_*AgeSorted.csv。
+
+默认读取路径与 emo 分析输出保持一致：
+- LSS_OUTPUT_ROOT（默认 /public/home/dingrui/fmri_analysis/zz_analysis/lss_results）
 """
 
+import os
 from pathlib import Path
 from typing import List
 
@@ -17,8 +21,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-FINAL_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
-ROI_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
+LSS_OUTPUT_ROOT = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
+FINAL_DIR = Path(os.environ.get("SIM_FINAL_DIR", str(LSS_OUTPUT_ROOT / "similarity_matrices_final_age_sorted")))
+ROI_DIR = Path(os.environ.get("SIM_ROI_DIR", str(LSS_OUTPUT_ROOT / "similarity_matrices_roi_age_sorted")))
 MAX_SAMPLES_PER_MATRIX = 200000
 
 

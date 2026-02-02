@@ -9,8 +9,13 @@ plot_supplement_qc_overview.py
 - confounds scrubbing 强度（outlier_frac）
 - LSS trial 成功率（trial_success_rate，来自 lss_audit 汇总）
 - split-half reliability（若存在 reliability_check_EMO.csv）
+
+默认文件发现路径与 emo 分析输出保持一致：
+- LSS_OUTPUT_ROOT（默认 /public/home/dingrui/fmri_analysis/zz_analysis/lss_results）
+- QC_AUDIT_OUT_DIR（默认 <LSS_OUTPUT_ROOT 的上一级>/qc_audit_out）
 """
 
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -31,10 +36,13 @@ def _find_latest(pattern: str, roots: List[Path]) -> Optional[Path]:
 
 
 def main() -> None:
+    lss_root = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
+    qc_root = Path(os.environ.get("QC_AUDIT_OUT_DIR", str(lss_root.parent / "qc_audit_out")))
     roots = [
         Path.cwd(),
-        Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
-        Path("/public/home/dingrui/fmri_analysis/zz_analysis"),
+        qc_root,
+        lss_root,
+        lss_root.parent,
     ]
 
     conf_csv = _find_latest("audit_confounds_quality.csv", roots)
@@ -108,4 +116,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

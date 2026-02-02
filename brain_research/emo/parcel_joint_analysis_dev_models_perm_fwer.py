@@ -63,10 +63,10 @@ class ParcelAnalysisPreset:
     task: str
     condition_group: str
     lss_root: Optional[Path] = None
-    subject_allowlist: Optional[Path] = None
+    subject_order_path: Optional[Path] = None
     min_coverage: float = 0.9
     ensure_complete_keys: bool = True
-    max_missing_stimuli: Optional[int] = 0
+    max_missing_stimuli: int = 0
     require_both_tasks: bool = False
     n_perm: int = 5000
     seed: int = 42
@@ -129,19 +129,9 @@ PRESETS_ANALYSIS: Dict[str, ParcelAnalysisPreset] = {
 
 
 def choose_preset(name: str, presets: Dict[str, ParcelAnalysisPreset]) -> ParcelAnalysisPreset:
-    if name in presets:
-        return presets[name]
-    keys = sorted(presets.keys())
-    if not keys:
-        raise ValueError("未配置任何 preset。")
-    print("可用 presets：")
-    for i, k in enumerate(keys, start=1):
-        print(f"  [{i}] {k}")
-    s = input(f"请输入编号 (1-{len(keys)}): ").strip()
-    idx = int(s) - 1
-    if idx < 0 or idx >= len(keys):
-        raise ValueError("编号超出范围。")
-    return presets[keys[idx]]
+    if name not in presets:
+        raise ValueError(f"Preset '{name}' 未找到，可用 presets: {sorted(presets.keys())}")
+    return presets[name]
 
 
 @dataclass(frozen=True)
@@ -227,30 +217,14 @@ def infer_condition_group(row: pd.Series) -> str:
         return "emotion_generation"
     return "other"
 
-
-def load_subject_allowlist(path: Optional[Path]) -> Optional[set[str]]:
-    if path is None:
-        return None
-    if not path.exists():
-        raise FileNotFoundError(f"subject_allowlist 不存在: {path}")
-    if path.suffix.lower() in {".csv", ".tsv", ".txt"}:
-        if path.suffix.lower() == ".csv":
-            df = pd.read_csv(path)
-        else:
-            df = pd.read_csv(path, sep="\t")
-        if "subject" in df.columns:
-            subjects = df["subject"].astype(str).tolist()
-        else:
-            subjects = df.iloc[:, 0].astype(str).tolist()
-    else:
-        subjects = path.read_text(encoding="utf-8").splitlines()
-    cleaned = set()
-    for s in subjects:
-        sid = str(s).strip()
-        if not sid:
-            continue
-        cleaned.add(sid if sid.startswith("sub-") else f"sub-{sid}")
-    return cleaned
+def load_subject_order_list(order_path: Path) -> List[str]:
+    if not order_path.exists():
+        raise FileNotFoundError(f"未找到顺序文件: {order_path}")
+    df = pd.read_csv(order_path)
+    for col in ["subject", "sub_id", "被试编号"]:
+        if col in df.columns:
+            return df[col].astype(str).tolist()
+    return df.iloc[:, 0].astype(str).tolist()
 
 
 def load_label_gii(path: Path) -> np.ndarray:
@@ -326,15 +300,15 @@ def resolve_beta_path(lss_root: Path, row: pd.Series) -> Path:
 
 
 def zscore_1d(x: np.ndarray) -> np.ndarray:
-    # 对一维向量做 zscore，NaN 保留（并要求有效样本>=10）
+    # 对一维向量做 zscore，NaN 保留
     x = np.asarray(x, dtype=np.float32)
     mask = np.isfinite(x)
-    if int(mask.sum()) < 10:
-        return np.full_like(x, np.nan, dtype=np.float32)
+    if int(mask.sum()) < 2:
+        return x
     mu = float(x[mask].mean())
     sd = float(x[mask].std(ddof=0))
-    if sd <= 0:
-        return np.full_like(x, np.nan, dtype=np.float32)
+    if sd <= 1e-9:
+        return x
     out = (x - mu) / sd
     out[~mask] = np.nan
     return out.astype(np.float32, copy=False)
@@ -394,35 +368,20 @@ def compute_parcel_features(
     n_key = len(common_keys)
     feats = np.full((n_sub, n_parcel, n_key), np.nan, dtype=np.float32)
 
-    keep_subjects: List[str] = []
-    keep_rows: List[int] = []
-
     for si, sub in enumerate(subjects_sorted):
-        ok = True
         for ki, key in enumerate(common_keys):
             p = lookup.get((sub, key))
             if p is None or not p.exists():
-                ok = False
-                break
+                raise FileNotFoundError(f"被试 {sub} 缺失刺激 {key}（请检查 ensure_complete_keys/max_missing 设置）")
             beta = load_beta_gii(p)
             if beta is None or beta.shape[0] != labels.shape[0]:
-                ok = False
-                break
+                raise ValueError(f"读取失败或维度不匹配: {p}")
             sums = np.bincount(labels, weights=beta, minlength=max_label + 1).astype(np.float32)
             means = sums[parcel_ids] / counts[parcel_ids]
             if not np.isfinite(means).all():
-                ok = False
-                break
+                raise ValueError(f"计算得到非有限 parcel 均值: subject={sub}, stimulus={key}")
             feats[si, :, ki] = means
-        if ok:
-            keep_subjects.append(sub)
-            keep_rows.append(si)
-
-    if not keep_subjects:
-        return np.empty((0, n_parcel, n_key), dtype=np.float32), []
-
-    feats = feats[np.array(keep_rows, dtype=int), :, :]
-    return feats, keep_subjects
+    return feats, list(subjects_sorted)
 
 
 def compute_parcel_features_volume(
@@ -453,35 +412,20 @@ def compute_parcel_features_volume(
     n_key = len(common_keys)
     feats = np.full((n_sub, n_parcel, n_key), np.nan, dtype=np.float32)
 
-    keep_subjects: List[str] = []
-    keep_rows: List[int] = []
-
     for si, sub in enumerate(subjects_sorted):
-        ok = True
         for ki, key in enumerate(common_keys):
             p = lookup.get((sub, key))
             if p is None or not p.exists():
-                ok = False
-                break
+                raise FileNotFoundError(f"被试 {sub} 缺失刺激 {key}（请检查 ensure_complete_keys/max_missing 设置）")
             beta_vec = load_beta_nii_flat(p, voxel_idx, ref_img)
             if beta_vec is None or beta_vec.shape[0] != labels_vec.shape[0]:
-                ok = False
-                break
+                raise ValueError(f"读取失败或维度不匹配: {p}")
             sums = np.bincount(labels_vec, weights=beta_vec, minlength=max_label + 1).astype(np.float32)
             means = sums[parcel_ids] / counts[parcel_ids]
             if not np.isfinite(means).all():
-                ok = False
-                break
+                raise ValueError(f"计算得到非有限 parcel 均值: subject={sub}, stimulus={key}")
             feats[si, :, ki] = means
-        if ok:
-            keep_subjects.append(sub)
-            keep_rows.append(si)
-
-    if not keep_subjects:
-        return np.empty((0, n_parcel, n_key), dtype=np.float32), []
-
-    feats = feats[np.array(keep_rows, dtype=int), :, :]
-    return feats, keep_subjects
+    return feats, list(subjects_sorted)
 
 
 def parcel_similarity_vectors_z(feats: np.ndarray) -> np.ndarray:
@@ -514,7 +458,6 @@ def filter_dataframe(
     task: str,
     condition_group: str,
     require_both_tasks: bool,
-    subject_allowlist: Optional[set[str]] = None,
 ) -> pd.DataFrame:
     # 对齐索引过滤：
     # - task: EMO 或 SOC（为空表示不按 task 过滤）
@@ -538,23 +481,42 @@ def filter_dataframe(
         keep = subs_a & subs_b
         df = df[df["subject"].isin(sorted(keep))].copy()
 
-    if subject_allowlist is not None:
-        df = df[df["subject"].isin(subject_allowlist)].copy()
-
     return df
 
 
-def common_subjects_age_sorted(df: pd.DataFrame, age_map: Dict[str, float]) -> List[str]:
-    # 按年龄从小到大排序，缺失年龄放最后（但 run() 会拒绝进入最终样本）
-    subs = sorted(df["subject"].unique().astype(str).tolist())
+def determine_subject_list(
+    out_dir: Path,
+    subject_order_path: Optional[Path],
+    df: pd.DataFrame,
+    age_map: Dict[str, float],
+) -> List[str]:
+    target_order_path = subject_order_path
 
-    def sort_key(sid: str) -> Tuple[float, str]:
-        a = age_map.get(sid, float("nan"))
-        if not np.isfinite(a):
-            return (999.0, sid)
-        return (float(a), sid)
+    if target_order_path is None:
+        auto_path = out_dir / "subject_order_surface_L.csv"
+        default_final_dir = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
+        alt_path = default_final_dir / "subject_order_surface_L.csv"
+        if auto_path.exists():
+            print(f"  [Info] 自动检测到被试列表(Current Dir): {auto_path}")
+            target_order_path = auto_path
+        elif alt_path.exists():
+            print(f"  [Info] 自动检测到被试列表(Default Final Dir): {alt_path}")
+            target_order_path = alt_path
+        else:
+            print("  [Info] 未检测到现有的 subject_order 文件，将基于 aligned CSV 的被试集合。")
 
-    return sorted(subs, key=sort_key)
+    df_subjects = set(df["subject"].unique().astype(str).tolist())
+
+    if target_order_path and target_order_path.exists():
+        ordered = load_subject_order_list(target_order_path)
+        subjects = [s for s in ordered if s in df_subjects]
+    else:
+        subjects = sorted(df_subjects)
+
+    subjects = [s for s in subjects if np.isfinite(age_map.get(s, np.nan))]
+    subjects.sort(key=lambda sid: (age_map.get(sid, np.nan), sid))
+    print(f"  [Result] 最终确定的被试数量: {len(subjects)}")
+    return subjects
 
 
 def common_stimulus_keys(df: pd.DataFrame, subjects: Sequence[str], min_coverage: float) -> List[str]:
@@ -633,10 +595,10 @@ def run(
     task: str,
     condition_group: str,
     lss_root: Optional[Path],
-    subject_allowlist: Optional[Path],
+    subject_order_path: Optional[Path],
     min_coverage: float,
     ensure_complete_keys: bool,
-    max_missing_stimuli: Optional[int],
+    max_missing_stimuli: int,
     require_both_tasks: bool,
     n_perm: int,
     seed: int,
@@ -652,23 +614,21 @@ def run(
     # 7) 置换：打乱年龄顺序生成模型向量，得到 p_perm（单侧，rp>=r_obs）
     # 8) max-stat：每次置换取所有 parcel 的最大 rp，得到 p_fwer（FWER 单侧）
     df_full = pd.read_csv(aligned_csv)
-    allowlist = load_subject_allowlist(subject_allowlist)
     df = filter_dataframe(
         df_full,
         task=task,
         condition_group=condition_group,
         require_both_tasks=require_both_tasks,
-        subject_allowlist=allowlist,
     )
     if df.empty:
         raise ValueError("过滤后 aligned 数据为空，请检查 task/condition_group 设置。")
 
     age_map = load_subject_ages_map(subject_info)
-    subjects_sorted = common_subjects_age_sorted(df, age_map)
+    subjects_sorted = determine_subject_list(out_dir, subject_order_path, df, age_map)
     if len(subjects_sorted) < 10:
         raise ValueError(f"有效被试数过少: {len(subjects_sorted)}")
 
-    root = lss_root if lss_root is not None else aligned_csv.parent
+    root = lss_root if lss_root is not None else aligned_csv.parent.parent
     keys = common_stimulus_keys(df, subjects_sorted, min_coverage=min_coverage)
     if not keys:
         raise ValueError("没有满足覆盖率阈值的公共 stimulus_content。")
@@ -676,22 +636,21 @@ def run(
         keys = filter_keys_complete(df, root, subjects_sorted, keys)
         if not keys:
             raise ValueError("剔除缺失刺激后无可用公共 stimulus_content。")
-    if max_missing_stimuli is not None:
-        max_missing = int(max_missing_stimuli)
-        if max_missing >= 0:
-            before = len(subjects_sorted)
-            subjects_sorted = filter_subjects_by_missing(
-                df,
-                root,
-                subjects_sorted,
-                keys,
-                max_missing,
-            )
-            dropped = before - len(subjects_sorted)
-            if dropped > 0:
-                print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
-            if not subjects_sorted:
-                raise ValueError("剔除缺失被试后无有效被试。")
+    max_missing = int(max_missing_stimuli)
+    if max_missing >= 0:
+        before = len(subjects_sorted)
+        subjects_sorted = filter_subjects_by_missing(
+            df,
+            root,
+            subjects_sorted,
+            keys,
+            max_missing,
+        )
+        dropped = before - len(subjects_sorted)
+        if dropped > 0:
+            print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
+        if not subjects_sorted:
+            raise ValueError("剔除缺失被试后无有效被试。")
     atlas_label_used = atlas_label
 
     if _is_gifti(atlas_label):
@@ -761,39 +720,48 @@ def run(
         if not np.isfinite(mvec_obs[m]).all():
             raise ValueError(f"模型向量 {m} 包含 NaN（可能年龄常数/过少）。")
 
-    r_obs = {m: (sim_z @ mvec_obs[m]) / float(n_pairs) for m in models}
+    r_obs_dict = {m: (sim_z @ mvec_obs[m]) / float(n_pairs) for m in models}
+    r_obs_flat = np.concatenate([r_obs_dict[m] for m in models]).astype(np.float32, copy=False)
+    n_tests = int(r_obs_flat.size)
 
     rng = np.random.default_rng(int(seed))
-    ge_count = {m: np.zeros(sim_z.shape[0], dtype=np.int32) for m in models}
-    max_ge_count = {m: np.zeros(sim_z.shape[0], dtype=np.int32) for m in models}
+    count_raw = np.zeros(n_tests, dtype=np.int64)
+    count_fwer = np.zeros(n_tests, dtype=np.int64)
 
     for _ in range(int(n_perm)):
         perm = rng.permutation(n_sub)
         ages_p = ages[perm]
+
+        current_perm_rs = []
         for m in models:
             mv = build_model_vec(ages_p, iu, ju, model=m, normalize=normalize_models)
             rp = (sim_z @ mv) / float(n_pairs)
-            # 单侧检验：只关心“显著正相关”（rp >= r_obs）
-            ge_count[m] += (rp >= r_obs[m]).astype(np.int32)
-            # max-stat：同一置换下，所有 parcel 的最大统计量用于 FWER
-            max_rp = float(np.max(rp))
-            max_ge_count[m] += (max_rp >= r_obs[m]).astype(np.int32)
+            current_perm_rs.append(rp.astype(np.float32, copy=False))
+
+        flat_perm_rs = np.concatenate(current_perm_rs).astype(np.float32, copy=False)
+
+        count_raw += (flat_perm_rs >= r_obs_flat)
+
+        max_stat = float(flat_perm_rs.max(initial=-1.0))
+        count_fwer += (max_stat >= r_obs_flat)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     ctx = Context(space=space, task=task, condition_group=condition_group).name
 
     rows = []
+    p_perm = (count_raw.astype(np.float64) + 1.0) / (float(n_perm) + 1.0)
+    p_fwer = (count_fwer.astype(np.float64) + 1.0) / (float(n_perm) + 1.0)
+    idx = 0
     for m in models:
-        p_perm = (ge_count[m].astype(np.float64) + 1.0) / (float(n_perm) + 1.0)
-        p_fwer = (max_ge_count[m].astype(np.float64) + 1.0) / (float(n_perm) + 1.0)
-        for pid, r, pp, pf in zip(parcel_ids.tolist(), r_obs[m].tolist(), p_perm.tolist(), p_fwer.tolist()):
+        rs = r_obs_dict[m].astype(np.float64, copy=False)
+        for pid, r in zip(parcel_ids.tolist(), rs.tolist()):
             rows.append(
                 {
                     "parcel_id": int(pid),
                     "model": m,
                     "r_obs": float(r),
-                    "p_perm": float(pp),
-                    "p_fwer": float(pf),
+                    "p_perm": float(p_perm[idx]),
+                    "p_fwer": float(p_fwer[idx]),
                     "tail": "greater",
                     "n_subjects": int(n_sub),
                     "n_pairs": int(n_pairs),
@@ -806,6 +774,7 @@ def run(
                     "atlas_label_used": str(atlas_label_used),
                 }
             )
+            idx += 1
 
     result_path = out_dir / f"parcel_joint_analysis_dev_models_perm_fwer__{ctx}.csv"
     pd.DataFrame(rows).to_csv(result_path, index=False)
@@ -826,10 +795,10 @@ def main() -> None:
         task=str(preset.task).strip(),
         condition_group=str(preset.condition_group).strip(),
         lss_root=Path(preset.lss_root) if preset.lss_root is not None else None,
-        subject_allowlist=Path(preset.subject_allowlist) if preset.subject_allowlist is not None else None,
+        subject_order_path=Path(preset.subject_order_path) if preset.subject_order_path is not None else None,
         min_coverage=float(preset.min_coverage),
         ensure_complete_keys=bool(preset.ensure_complete_keys),
-        max_missing_stimuli=preset.max_missing_stimuli,
+        max_missing_stimuli=int(preset.max_missing_stimuli),
         require_both_tasks=bool(preset.require_both_tasks),
         n_perm=int(preset.n_perm),
         seed=int(preset.seed),

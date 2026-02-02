@@ -8,6 +8,9 @@ plot_dev_model_relationships.py
 默认零参数运行：
 - 年龄表优先读取环境变量 SUBJECT_AGE_TABLE，否则使用项目默认路径
 - 若存在 subject_order_*.csv（通常由 calc_isc_* 生成），自动使用最新文件固定 subjects 顺序
+
+默认读取路径与 emo 分析输出保持一致：
+- LSS_OUTPUT_ROOT（默认 /public/home/dingrui/fmri_analysis/zz_analysis/lss_results）
 """
 
 import os
@@ -32,8 +35,8 @@ DEFAULT_AGE_TABLE = Path(
         "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
     )
 )
-DEFAULT_LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
-DEFAULT_OUT_DIR = Path("./figures_dev_models")
+DEFAULT_LSS_ROOT = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
+DEFAULT_OUT_DIR = Path(os.environ.get("FIG_DEV_MODELS_DIR", str(DEFAULT_LSS_ROOT.parent / "figures_dev_models")))
 
 
 def parse_age(age_str: object) -> float:
@@ -185,4 +188,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -5,9 +5,10 @@ combined_roi_joint_analysis_dev_models_perm_fwer.py [终极整合版]
 
 功能：
 1. 读取 aligned CSV (beta files)，构建被试间相似性矩阵 (ISC)。
-2. 支持 Surface (全脑/ROI) 和 Volume (全脑/Mask) 数据读取。
+2. 支持 Surface（左右半球）和 Volume（皮下/Mask）数据读取。
 3. 与发育模型 (NN, Conv, Div) 进行联合分析。
 4. 统计检验：5000次置换 + 单侧检验(正效应) + FWER (Max-Statistic) 校正。
+5. 可选：置换多元回归（MRM/MRQAP 风格）比较 3 个模型的独立贡献。
 
 核心逻辑：
 - 严格对齐被试：自动寻找 `subject_order_surface_L.csv` 确保与全脑分析被试一致。
@@ -37,23 +38,6 @@ COL_AGE = "age"
 LEGACY_COL_SUB_ID = "被试编号"
 LEGACY_COL_AGE = "采集年龄"
 
-# ROI 定义示例 (Schaefer 200 7Networks)
-ROI_CONFIG = {
-    "Visual": {
-        "L": [1, 2, 3, 4, 5, 6, 7],
-        "R": [101, 102, 103, 104, 105, 106, 107],
-    },
-    "Salience_Insula": {
-        "L": [38, 39, 40, 41, 42],
-        "R": [138, 139, 140, 141, 142],
-    },
-    "Control_PFC": {
-        "L": [57, 58, 59, 60, 61, 62],
-        "R": [157, 158, 159, 160, 161, 162],
-    },
-}
-
-
 # ================= 数据结构定义 =================
 
 @dataclass(frozen=True)
@@ -61,9 +45,7 @@ class SimilaritySpec:
     name: str
     aligned_csv: Path
     space: str  # "surface_L", "surface_R", "volume"
-    kind: str  # "combined", "roi"
-    atlas_label: Optional[Path] = None  # ROI 模式必填 (Surface)
-    roi_labels: Optional[Sequence[int]] = None  # ROI 模式必填
+    kind: str  # 仅支持 "combined"
     volume_mask: Optional[Path] = None  # Volume 模式必填
 
 
@@ -84,6 +66,7 @@ class JointPreset:
     normalize_models: bool = True
     save_similarity: bool = True
     subject_order_path: Optional[Path] = None  # 可选：手动指定被试列表文件
+    analysis_mode: str = "corr"  # "corr" | "mrm" | "both"
 
 
 # ================= 预设配置区 (请在此修改) =================
@@ -119,35 +102,14 @@ PRESETS: Dict[str, JointPreset] = {
                 kind="combined",
                 volume_mask=Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3T_Binary_Mask.nii.gz"),
             ),
-
-            # --- 3. Surface ROI 示例 ---
-            SimilaritySpec(
-                name="surface_L_Visual",
-                aligned_csv=Path(
-                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
-                space="surface_L",
-                kind="roi",
-                atlas_label=Path(
-                    "/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"),
-                roi_labels=ROI_CONFIG["Visual"]["L"],
-            ),
-            SimilaritySpec(
-                name="surface_R_Visual",
-                aligned_csv=Path(
-                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
-                space="surface_R",
-                kind="roi",
-                atlas_label=Path(
-                    "/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"),
-                roi_labels=ROI_CONFIG["Visual"]["R"],
-            ),
         ),
         subject_info=Path("/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv"),
-        out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/joint_perm_fwer_out_roi"),
+        out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/joint_perm_fwer_out"),
         lss_root=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
-        task="EMO",
+        task="",
         condition_group="all",
         n_perm=5000,
+        analysis_mode="both",
     )
 }
 
@@ -385,22 +347,13 @@ def load_beta_data(
         return None
 
     # --- 4. 准备 Mask (Volume 或 ROI) ---
-    roi_mask = None  # for Surface ROI
     vol_mask_idx = None  # for Volume
     mask_img_vol = None  # for Volume Resampling
 
-    # A. Surface ROI
-    if spec.space.startswith("surface") and spec.kind == "roi":
-        if not spec.atlas_label or not spec.roi_labels:
-            raise ValueError(f"{spec.name}: ROI 模式需要 atlas_label 和 roi_labels")
-        g = nib.load(str(spec.atlas_label))
-        # 假设 label 是第一个 darray
-        labels = np.asarray(g.darrays[0].data).reshape(-1)
-        roi_mask = np.isin(labels, spec.roi_labels)
-        print(f"  [Mask] Surface ROI mask created. Voxels/Vertices: {np.sum(roi_mask)}")
+    if spec.kind != "combined":
+        raise ValueError(f"{spec.name}: 当前脚本只支持 kind='combined'（ROI/parcel 请使用 parcel_joint_analysis_* 脚本）")
 
-    # B. Volume
-    elif spec.space == "volume":
+    if spec.space == "volume":
         if not spec.volume_mask:
             raise ValueError(f"{spec.name}: Volume 模式需要 volume_mask")
         mask_img_vol = image.load_img(str(spec.volume_mask))
@@ -431,8 +384,6 @@ def load_beta_data(
                     # Surface Load
                     g = nib.load(str(p))
                     data = g.darrays[0].data.astype(np.float32).reshape(-1)
-                    if roi_mask is not None:
-                        data = data[roi_mask]
                 else:
                     # Volume Load
                     img = image.load_img(str(p))
@@ -496,6 +447,31 @@ def build_dev_models(ages: np.ndarray, n: int, normalize: bool) -> Dict[str, np.
     return models
 
 
+def fit_mrm_betas(
+    S_z: np.ndarray,
+    model_vecs: Sequence[np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray]:
+    Y = np.asarray(S_z, dtype=np.float64).T
+    X = np.stack([np.asarray(v, dtype=np.float64).reshape(-1) for v in model_vecs], axis=1)
+    n = int(Y.shape[0])
+    Xd = np.concatenate([np.ones((n, 1), dtype=np.float64), X], axis=1)
+    XtX = Xd.T @ Xd
+    XtY = Xd.T @ Y
+    XtX_inv = np.linalg.pinv(XtX, rcond=1e-12)
+    coef = XtX_inv @ XtY
+    betas = coef[1:, :].astype(np.float32, copy=False)
+
+    y_sum = Y.sum(axis=0)
+    y_ty = np.sum(Y * Y, axis=0)
+    sst = y_ty - (y_sum * y_sum) / float(n)
+    ssr = np.sum(coef * XtY, axis=0)
+    sse = y_ty - ssr
+    r2 = np.full((Y.shape[1],), np.nan, dtype=np.float32)
+    ok = sst > 0
+    r2[ok] = (1.0 - (sse[ok] / sst[ok])).astype(np.float32, copy=False)
+    return betas, r2
+
+
 def run_analysis(preset: JointPreset):
     print(f"\n{'=' * 60}")
     print(f"开始分析 Preset: {preset.name}")
@@ -503,6 +479,12 @@ def run_analysis(preset: JointPreset):
     print(f"{'=' * 60}\n")
 
     preset.out_dir.mkdir(parents=True, exist_ok=True)
+    ctx_parts = []
+    if preset.task:
+        ctx_parts.append(str(preset.task).strip())
+    if preset.condition_group:
+        ctx_parts.append(str(preset.condition_group).strip())
+    ctx = "__".join([p for p in ctx_parts if p]) or "all"
 
     # 1. 加载年龄表
     print("Loading subject info...")
@@ -529,7 +511,7 @@ def run_analysis(preset: JointPreset):
 
     # 保存本次分析使用的被试列表
     ages = np.array([age_map[s] for s in subjects], dtype=np.float32)
-    pd.DataFrame({"subject": subjects, "age": ages}).to_csv(preset.out_dir / "subjects_common_age_sorted.csv",
+    pd.DataFrame({"subject": subjects, "age": ages}).to_csv(preset.out_dir / f"subjects_common_age_sorted__{ctx}.csv",
                                                             index=False)
 
     # 4. 构建相似性矩阵向量 (Z-scored)
@@ -561,7 +543,7 @@ def run_analysis(preset: JointPreset):
 
         # 保存矩阵 (可选)
         if preset.save_similarity:
-            out_p = preset.out_dir / f"similarity_{spec.name}_AgeSorted.csv"
+            out_p = preset.out_dir / f"similarity_{spec.name}_AgeSorted__{ctx}.csv"
             pd.DataFrame(corr_mat, index=subjects, columns=subjects).to_csv(out_p)
             print(f"  [Save] Matrix saved to {out_p.name}")
 
@@ -590,88 +572,128 @@ def run_analysis(preset: JointPreset):
     dev_models = build_dev_models(ages, n_subs, preset.normalize_models)
     model_keys = ["M_nn", "M_conv", "M_div"]
 
-    # 6. 置换检验 (单侧, FWER)
-    print(f"\n>>> 开始置换检验 (N={preset.n_perm}, 单侧-正效应)...")
+    analysis_mode = str(preset.analysis_mode or "corr").strip().lower()
+    if analysis_mode not in {"corr", "mrm", "both"}:
+        raise ValueError(f"analysis_mode 仅支持 'corr'|'mrm'|'both'，当前: {preset.analysis_mode}")
 
-    # --- 计算观测值 r_obs ---
-    # r_obs_dict[model] -> array of r for each matrix
+    run_corr = analysis_mode in {"corr", "both"}
+    run_mrm = analysis_mode in {"mrm", "both"}
+
     r_obs_dict = {}
-    all_r_obs_flat = []
+    r_obs_flat = None
+    count_raw_corr = None
+    count_fwer_corr = None
 
-    for m in model_keys:
-        m_vec = dev_models[m]
-        # Pearson r approx: dot(z1, z2) / n
-        r_vals = (S_z @ m_vec) / n_pairs
-        r_obs_dict[m] = r_vals
-        all_r_obs_flat.extend(r_vals)
+    beta_obs = None
+    r2_obs = None
+    beta_obs_flat = None
+    count_raw_mrm = None
+    count_fwer_mrm = None
 
-    all_r_obs_flat = np.array(all_r_obs_flat, dtype=np.float32)
-    n_total_tests = len(all_r_obs_flat)
+    if run_corr:
+        r_list = []
+        for m in model_keys:
+            r_vals = (S_z @ dev_models[m]) / n_pairs
+            r_obs_dict[m] = r_vals.astype(np.float32, copy=False)
+            r_list.append(r_obs_dict[m])
+        r_obs_flat = np.concatenate(r_list).astype(np.float32, copy=False)
+        count_raw_corr = np.zeros(int(r_obs_flat.size), dtype=np.int64)
+        count_fwer_corr = np.zeros(int(r_obs_flat.size), dtype=np.int64)
 
-    count_raw = np.zeros(n_total_tests, dtype=np.int64)
-    count_fwer = np.zeros(n_total_tests, dtype=np.int64)
+    if run_mrm:
+        model_vecs_obs = [dev_models[m] for m in model_keys]
+        beta_obs, r2_obs = fit_mrm_betas(S_z, model_vecs_obs)
+        beta_obs_flat = np.concatenate([beta_obs[i, :] for i in range(beta_obs.shape[0])]).astype(np.float32, copy=False)
+        count_raw_mrm = np.zeros(int(beta_obs_flat.size), dtype=np.int64)
+        count_fwer_mrm = np.zeros(int(beta_obs_flat.size), dtype=np.int64)
+
+    print(f"\n>>> 开始置换检验 (N={preset.n_perm}, 单侧-正效应)...")
     rng = np.random.default_rng(preset.seed)
 
-    # --- Permutation Loop ---
-    for i in range(preset.n_perm):
+    for i in range(int(preset.n_perm)):
         if (i + 1) % 500 == 0:
             print(f"  Permutation {i + 1} / {preset.n_perm} ...")
 
-        # 1. 置换年龄
         perm_idx = rng.permutation(n_subs)
         ages_perm = ages[perm_idx]
-
-        # 2. 重建模型向量
         models_perm = build_dev_models(ages_perm, n_subs, preset.normalize_models)
 
-        # 3. 计算所有 matrix * model 组合的 r
-        current_perm_rs = []
+        if run_corr:
+            current_perm_rs = []
+            for m in model_keys:
+                r_p = (S_z @ models_perm[m]) / n_pairs
+                current_perm_rs.append(r_p.astype(np.float32, copy=False))
+            flat_perm_rs = np.concatenate(current_perm_rs).astype(np.float32, copy=False)
+            count_raw_corr += (flat_perm_rs >= r_obs_flat)
+            max_stat = float(flat_perm_rs.max(initial=-1.0))
+            count_fwer_corr += (max_stat >= r_obs_flat)
+
+        if run_mrm:
+            model_vecs_p = [models_perm[m] for m in model_keys]
+            beta_p, _ = fit_mrm_betas(S_z, model_vecs_p)
+            flat_beta_p = np.concatenate([beta_p[i, :] for i in range(beta_p.shape[0])]).astype(np.float32, copy=False)
+            count_raw_mrm += (flat_beta_p >= beta_obs_flat)
+            max_stat_b = float(flat_beta_p.max(initial=-1.0))
+            count_fwer_mrm += (max_stat_b >= beta_obs_flat)
+
+    if run_corr:
+        p_raw = (count_raw_corr + 1.0) / (preset.n_perm + 1.0)
+        p_fwer = (count_fwer_corr + 1.0) / (preset.n_perm + 1.0)
+        results = []
+        idx = 0
         for m in model_keys:
-            m_vec_p = models_perm[m]
-            r_p = (S_z @ m_vec_p) / n_pairs
-            current_perm_rs.append(r_p)
+            rs = r_obs_dict[m]
+            for mat_i, mat_name in enumerate(sim_names):
+                results.append(
+                    {
+                        "matrix": mat_name,
+                        "model": m,
+                        "r_obs": float(rs[mat_i]),
+                        "p_perm_one_tailed": float(p_raw[idx]),
+                        "p_fwer_one_tailed": float(p_fwer[idx]),
+                        "n_subjects": int(n_subs),
+                        "n_pairs": int(n_pairs),
+                        "n_perm": int(preset.n_perm),
+                        "seed": int(preset.seed),
+                        "threshold": float(preset.min_coverage),
+                        "normalize_models": bool(preset.normalize_models),
+                    }
+                )
+                idx += 1
+        res_df = pd.DataFrame(results)
+        out_csv = preset.out_dir / f"joint_analysis_dev_models_perm_fwer_onesided__{ctx}.csv"
+        res_df.to_csv(out_csv, index=False)
+        print(f"\n✅ 相关分析结果已保存: {out_csv}")
 
-        # 展平为 1D 数组，顺序必须与 all_r_obs_flat 一致
-        flat_perm_rs = np.concatenate(current_perm_rs)
-
-        # 4. Raw P (One-sided: Positive Effect)
-        # 计数规则: r_perm >= r_obs
-        count_raw += (flat_perm_rs >= all_r_obs_flat)
-
-        # 5. FWER (Max Statistic for One-sided)
-        # 找出当前置换中所有检验里的最大值 (algebraic max, not abs)
-        max_stat = flat_perm_rs.max()
-        # 如果随机数据的最大值 >= 观测值，则该观测值的 FWER 计数 +1
-        count_fwer += (max_stat >= all_r_obs_flat)
-
-    # 计算 P 值
-    p_raw = (count_raw + 1.0) / (preset.n_perm + 1.0)
-    p_fwer = (count_fwer + 1.0) / (preset.n_perm + 1.0)
-
-    # 7. 整理结果
-    results = []
-    idx = 0
-    # 顺序必须与 all_r_obs_flat 构建顺序一致 (model -> matrix)
-    for m in model_keys:
-        rs = r_obs_dict[m]
-        for mat_i, mat_name in enumerate(sim_names):
-            results.append({
-                "matrix": mat_name,
-                "model": m,
-                "r_obs": float(rs[mat_i]),
-                "p_perm_one_tailed": float(p_raw[idx]),
-                "p_fwer_one_tailed": float(p_fwer[idx]),
-                "n_subjects": n_subs,
-                "n_pairs": n_pairs,
-                "n_perm": preset.n_perm,
-                "threshold": preset.min_coverage
-            })
-            idx += 1
-
-    res_df = pd.DataFrame(results)
-    out_csv = preset.out_dir / "joint_analysis_dev_models_perm_fwer_onesided.csv"
-    res_df.to_csv(out_csv, index=False)
-    print(f"\n✅ 分析完成。结果已保存: {out_csv}")
+    if run_mrm:
+        p_raw_b = (count_raw_mrm + 1.0) / (preset.n_perm + 1.0)
+        p_fwer_b = (count_fwer_mrm + 1.0) / (preset.n_perm + 1.0)
+        rows = []
+        idx = 0
+        for pred_i, pred_name in enumerate(model_keys):
+            b = beta_obs[pred_i, :].astype(np.float32, copy=False)
+            for mat_i, mat_name in enumerate(sim_names):
+                rows.append(
+                    {
+                        "matrix": mat_name,
+                        "predictor": pred_name,
+                        "beta_obs": float(b[mat_i]),
+                        "r2_obs": float(r2_obs[mat_i]),
+                        "p_perm_one_tailed": float(p_raw_b[idx]),
+                        "p_fwer_one_tailed": float(p_fwer_b[idx]),
+                        "tail": "greater",
+                        "n_subjects": int(n_subs),
+                        "n_pairs": int(n_pairs),
+                        "n_perm": int(preset.n_perm),
+                        "seed": int(preset.seed),
+                        "threshold": float(preset.min_coverage),
+                        "normalize_models": bool(preset.normalize_models),
+                    }
+                )
+                idx += 1
+        out_mrm = preset.out_dir / f"joint_analysis_dev_models_mrm_perm_fwer_onesided__{ctx}.csv"
+        pd.DataFrame(rows).to_csv(out_mrm, index=False)
+        print(f"\n✅ 多元回归(MRM/MRQAP)结果已保存: {out_mrm}")
 
 
 def choose_preset(name: str, presets: Dict[str, JointPreset]) -> JointPreset:

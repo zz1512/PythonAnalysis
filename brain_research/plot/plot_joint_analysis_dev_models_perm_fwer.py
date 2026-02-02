@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 import re
 from typing import List, Optional, Tuple
@@ -18,16 +19,25 @@ def _find_latest(paths: List[Path]) -> Optional[Path]:
 
 
 def _auto_find_result_csv() -> Optional[Path]:
+    lss_root = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
     roots = [
         Path.cwd(),
-        Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
-        Path("/public/home/dingrui/fmri_analysis/zz_analysis"),
+        lss_root,
+        lss_root.parent,
     ]
     candidates: List[Path] = []
     for r in roots:
         if r.exists():
-            candidates.extend(list(r.rglob("joint_analysis_dev_models_perm_fwer.csv")))
+            candidates.extend(list(r.rglob("joint_analysis_dev_models_perm_fwer*.csv")))
     return _find_latest(candidates)
+
+
+def _default_fig_out_dir() -> Path:
+    p = os.environ.get("FIG_JOINT_DIR", "")
+    if p:
+        return Path(p)
+    lss_root = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
+    return lss_root.parent / "figures_joint"
 
 
 def _parse_star_thresholds(stars: str) -> List[float]:
@@ -84,7 +94,14 @@ def plot_heatmap(
     fmt: str,
 ) -> List[Path]:
     df = pd.read_csv(result_csv)
-    p_col = "p_fwer"
+    p_col = None
+    for c in ["p_fwer", "p_fwer_one_tailed", "p_fwer_two_tailed"]:
+        if c in df.columns:
+            p_col = c
+            break
+    if p_col is None:
+        raise ValueError(f"结果文件缺少 p 值列（支持：p_fwer / p_fwer_one_tailed / p_fwer_two_tailed），当前列={list(df.columns)}")
+
     required = {"matrix", "model", "r_obs", p_col}
     missing = required - set(df.columns)
     if missing:
@@ -131,7 +148,7 @@ def plot_heatmap(
         cbar_kws={"label": "r (Similarity vs. Development Model)"},
     )
 
-    title = "Joint Analysis (Permutation + FWER; p_fwer)"
+    title = f"Joint Analysis (Permutation + FWER; {p_col})"
     if n_subjects is not None:
         title += f"\nN={n_subjects}"
     if n_perm is not None:
@@ -153,7 +170,7 @@ def plot_heatmap(
     out_dir.mkdir(parents=True, exist_ok=True)
     out_paths = []
     for ext in [fmt]:
-        out_path = out_dir / f"joint_analysis_dev_models_heatmap_p_fwer.{ext}"
+        out_path = out_dir / f"joint_analysis_dev_models_heatmap_{p_col}.{ext}"
         fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
         out_paths.append(out_path)
     plt.close(fig)
@@ -163,7 +180,7 @@ def plot_heatmap(
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="绘制 joint_analysis_dev_models_perm_fwer.csv 论文图")
     p.add_argument("--input-csv", type=Path, default=None, help="joint_analysis_dev_models_perm_fwer.csv 路径（不填则自动搜索最新文件）")
-    p.add_argument("--out-dir", type=Path, default=Path("./figures_joint"), help="输出目录")
+    p.add_argument("--out-dir", type=Path, default=_default_fig_out_dir(), help="输出目录")
     p.add_argument("--stars", type=str, default="0.05,0.01,0.001", help="星号阈值（逗号分隔，升序或降序均可）")
     p.add_argument("--dpi", type=int, default=300, help="输出分辨率")
     p.add_argument("--format", type=str, default="png", choices=["png", "pdf"], help="输出格式")

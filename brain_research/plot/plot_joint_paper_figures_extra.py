@@ -33,8 +33,9 @@ COL_AGE = "age"
 LEGACY_COL_SUB_ID = "被试编号"
 LEGACY_COL_AGE = "采集年龄"
 
-DEFAULT_FINAL_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
-DEFAULT_ROI_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
+LSS_OUTPUT_ROOT = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
+DEFAULT_FINAL_DIR = Path(os.environ.get("SIM_FINAL_DIR", str(LSS_OUTPUT_ROOT / "similarity_matrices_final_age_sorted")))
+DEFAULT_ROI_DIR = Path(os.environ.get("SIM_ROI_DIR", str(LSS_OUTPUT_ROOT / "similarity_matrices_roi_age_sorted")))
 DEFAULT_SUBJECT_INFO_PATH = Path(
     os.environ.get(
         "SUBJECT_AGE_TABLE",
@@ -57,19 +58,33 @@ def _find_latest(paths: List[Path]) -> Optional[Path]:
 
 
 def auto_find_joint_csv() -> Path:
+    lss_root = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
     roots = [
         Path.cwd(),
-        Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
-        Path("/public/home/dingrui/fmri_analysis/zz_analysis"),
+        lss_root,
+        lss_root.parent,
     ]
     candidates: List[Path] = []
     for r in roots:
         if r.exists():
-            candidates.extend(list(r.rglob("joint_analysis_dev_models_perm_fwer.csv")))
+            candidates.extend(list(r.rglob("joint_analysis_dev_models_perm_fwer*.csv")))
     p = _find_latest(candidates)
     if p is None:
-        raise FileNotFoundError("未找到 joint_analysis_dev_models_perm_fwer.csv")
+        raise FileNotFoundError("未找到 joint_analysis_dev_models_perm_fwer*.csv")
     return p
+
+
+def _choose_p_fwer_column(df: pd.DataFrame) -> str:
+    for c in ["p_fwer", "p_fwer_one_tailed", "p_fwer_two_tailed"]:
+        if c in df.columns:
+            return c
+    raise ValueError("结果CSV缺少 p_fwer 列（支持：p_fwer / p_fwer_one_tailed / p_fwer_two_tailed）")
+
+
+def _find_subject_age_sorted(joint_csv: Path) -> Optional[Path]:
+    parent = Path(joint_csv).parent
+    candidates = list(parent.glob("subjects_common_age_sorted*.csv"))
+    return _find_latest(candidates)
 
 
 def parse_chinese_age_exact(age_str: object) -> float:
@@ -326,7 +341,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--final-dir", type=Path, default=DEFAULT_FINAL_DIR, help="全脑相似性矩阵目录")
     p.add_argument("--roi-dir", type=Path, default=DEFAULT_ROI_DIR, help="ROI 相似性矩阵目录")
     p.add_argument("--subject-info", type=Path, default=DEFAULT_SUBJECT_INFO_PATH, help="被试信息表路径")
-    p.add_argument("--out-dir", type=Path, default=Path("./figures_joint"), help="输出目录")
+    default_out = Path(os.environ.get("FIG_JOINT_DIR", str(LSS_OUTPUT_ROOT.parent / "figures_joint")))
+    p.add_argument("--out-dir", type=Path, default=default_out, help="输出目录")
     p.add_argument("--top-k", type=int, default=4, help="置换分布图绘制的检验个数（按 p_fwer 最小排序）")
     p.add_argument("--n-perm-plot", type=int, default=5000, help="用于画零分布的置换次数（不必等于主分析 n_perm）")
     p.add_argument("--n-boot", type=int, default=300, help="bootstrap 次数（用于 CI）")
@@ -337,7 +353,8 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     joint_csv = Path(args.joint_csv) if args.joint_csv is not None else auto_find_joint_csv()
     res_df = pd.read_csv(joint_csv)
-    required = {"matrix", "model", "r_obs", "p_fwer"}
+    p_fwer_col = _choose_p_fwer_column(res_df)
+    required = {"matrix", "model", "r_obs", p_fwer_col}
     miss = required - set(res_df.columns)
     if miss:
         raise ValueError(f"结果CSV缺少列: {sorted(miss)}")
@@ -345,8 +362,8 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    subject_age_sorted = joint_csv.parent / "subjects_common_age_sorted.csv"
-    if subject_age_sorted.exists():
+    subject_age_sorted = _find_subject_age_sorted(joint_csv)
+    if subject_age_sorted is not None and subject_age_sorted.exists():
         sub_df = pd.read_csv(subject_age_sorted)
         subjects_all = sub_df["subject"].astype(str).tolist()
         ages_all = sub_df["age"].to_numpy(dtype=np.float32)
@@ -373,8 +390,8 @@ def main() -> None:
     seed = int(res_df["seed"].dropna().iloc[0]) if "seed" in res_df.columns and res_df["seed"].notna().any() else 42
 
     best = res_df.copy()
-    best["p_fwer"] = pd.to_numeric(best["p_fwer"], errors="coerce")
-    best = best[np.isfinite(best["p_fwer"].to_numpy(dtype=float))].sort_values(["p_fwer", "matrix", "model"])
+    best[p_fwer_col] = pd.to_numeric(best[p_fwer_col], errors="coerce")
+    best = best[np.isfinite(best[p_fwer_col].to_numpy(dtype=float))].sort_values([p_fwer_col, "matrix", "model"])
     best = best.head(int(args.top_k))
 
     for _, row in best.iterrows():

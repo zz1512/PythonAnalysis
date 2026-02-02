@@ -143,7 +143,7 @@ def main() -> None:
     if args.beta_root:
         beta_root = Path(args.beta_root)
     else:
-        from glm_config import Config
+        from emo.glm_config import Config
 
         config = Config(data_space="volume")
         beta_root = config.OUTPUT_ROOT

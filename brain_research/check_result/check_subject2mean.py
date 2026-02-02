@@ -9,13 +9,11 @@ check_subject_to_group.py
 3. 快速定位 "Bad Subjects" (离群值)。
 """
 
-import os
 import numpy as np
 import pandas as pd
-import nibabel as nib
 from collections import Counter
 from tqdm import tqdm
-from pathlib import Path
+from qc_utils import load_gifti_flatten, resolve_beta_path, safe_corr
 
 # ================= 配置区 =================
 # 必须与你服务器的实际路径一致
@@ -24,53 +22,6 @@ LSS_ROOT = "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"
 
 
 # ==========================================
-
-def load_gifti_flatten(path):
-    """读取 Gifti 并转为 1D float32"""
-    try:
-        g = nib.load(str(path))
-        return np.asarray(g.darrays[0].data).reshape(-1).astype(np.float32, copy=False)
-    except Exception as e:
-        print(f"Error loading {path}: {e}")
-        return None
-
-
-def safe_corr(a, b):
-    """安全计算 Pearson 相关"""
-    m = np.isfinite(a) & np.isfinite(b)
-    if m.sum() < 10: return np.nan
-    aa, bb = a[m], b[m]
-
-    # 标准化 (减均值除标准差的变体，用于 dot product)
-    aa = aa - aa.mean()
-    bb = bb - bb.mean()
-
-    norm_a = np.linalg.norm(aa)
-    norm_b = np.linalg.norm(bb)
-
-    if norm_a == 0 or norm_b == 0: return np.nan
-
-    return float(np.dot(aa, bb) / (norm_a * norm_b))
-
-
-def resolve_beta_path(lss_root, task, subject, run, rel_file):
-    """解决路径大小写和文件夹结构问题"""
-    root = Path(lss_root)
-    # 尝试多种路径组合
-    # 1. 小写 task 文件夹 (emo/sub/file)
-    p1 = root / task.lower() / subject / rel_file
-    if p1.exists(): return p1
-
-    # 2. 小写 task + run 文件夹 (emo/sub/run-1/file)
-    p2 = root / task.lower() / subject / f"run-{run}" / rel_file
-    if p2.exists(): return p2
-
-    # 3. 大写 Task (EMO/sub/file)
-    p3 = root / task.upper() / subject / rel_file
-    if p3.exists(): return p3
-
-    return None
-
 
 def run_group_check(aligned_csv, lss_root, task, n_stimuli=3, min_frac=0.9):
     print(f"--- Starting Subject-to-Group Check (Task: {task}) ---")

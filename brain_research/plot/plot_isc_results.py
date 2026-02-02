@@ -3,6 +3,10 @@
 """
 plot_isc_results.py
 绘制 被试*被试相关矩阵 分析结果的热图和直方图
+
+默认读取路径与 emo 分析输出保持一致：
+- LSS_OUTPUT_ROOT（默认 /public/home/dingrui/fmri_analysis/zz_analysis/lss_results）
+- 默认读取 <LSS_OUTPUT_ROOT>/similarity_matrices_final_age_sorted 下的 similarity_*AgeSorted.csv
 """
 
 import pandas as pd
@@ -15,12 +19,14 @@ import os
 import re
 
 # ================= 配置区 =================
-# CSV 所在的文件夹：全脑：similarity_matrices_final；具体roi：similarity_matrices_roi
-INPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
-# INPUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_roi_age_sorted")
+LSS_OUTPUT_ROOT = Path(os.environ.get("LSS_OUTPUT_ROOT", "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"))
+
+# CSV 所在的文件夹：全脑/ROI 二选一
+INPUT_DIR = Path(os.environ.get("ISC_INPUT_DIR", str(LSS_OUTPUT_ROOT / "similarity_matrices_final_age_sorted")))
+# INPUT_DIR = Path(os.environ.get("ISC_INPUT_DIR", str(LSS_OUTPUT_ROOT / "similarity_matrices_roi_age_sorted")))
 
 # 图片输出文件夹
-FIGURE_DIR = INPUT_DIR / "figures"
+FIGURE_DIR = Path(os.environ.get("FIG_ISC_DIR", str(INPUT_DIR / "figures")))
 
 # 被试信息表路径（用于年龄注释；环境变量 SUBJECT_AGE_TABLE 可覆盖）
 SUBJECT_INFO_PATH = Path(
