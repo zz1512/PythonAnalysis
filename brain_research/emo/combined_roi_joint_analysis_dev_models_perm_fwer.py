@@ -1,89 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-combined_roi_joint_analysis_dev_models_perm_fwer.py
+combined_roi_joint_analysis_dev_models_perm_fwer.py [终极整合版]
 
-目的
--
-把“整块脑区 combined”与“ROI 相似性矩阵”的构建、以及 joint 的置换检验整合到一个脚本中。
-对 EMO/SOC 或单任务条件下：
-1) 从 aligned 索引读取 beta，构建相似性矩阵（combined + ROI）
-2) 基于共同被试做 joint 分析（3 个发育模型 + permutation + FWER）
+功能：
+1. 读取 aligned CSV (beta files)，构建被试间相似性矩阵 (ISC)。
+2. 支持 Surface (全脑/ROI) 和 Volume (全脑/Mask) 数据读取。
+3. 与发育模型 (NN, Conv, Div) 进行联合分析。
+4. 统计检验：5000次置换 + 单侧检验(正效应) + FWER (Max-Statistic) 校正。
 
-说明
--
-- 支持 surface_L / surface_R / volume 的 combined
-- ROI 默认基于 Schaefer200 的 7Networks parcel id（surface）
-- 自动取多个矩阵的共同被试，保证被试一致
-
-使用方法
--
-1) 根据你的数据路径修改 PRESETS（建议复制一个新 preset）：
-   - aligned_csv: 对应 space 的 lss_index_*_aligned.csv
-   - atlas_label/roi_labels: ROI 模式必填（surface）
-   - volume_mask: volume combined 必填
-   - task/condition_group/min_coverage/require_both_tasks: 过滤规则
-   - ensure_complete_keys=True: 自动剔除缺失刺激以保留被试
-   - max_missing_stimuli=0: 允许每个被试最多缺失多少刺激（为 None 则不剔除被试）
-2) 修改 ACTIVE_PRESET 为你的 preset 名称。
-3) 直接运行本脚本：
-   python combined_roi_joint_analysis_dev_models_perm_fwer.py
-
-输出
--
-- similarity_{name}_AgeSorted.csv（可选，save_similarity=True 时）
-- subjects_common_age_sorted.csv
-- joint_analysis_dev_models_perm_fwer.csv（最终统计结果）
+核心逻辑：
+- 严格对齐被试：自动寻找 `subject_order_surface_L.csv` 确保与全脑分析被试一致。
+- 数据清洗：使用 "Ensure Complete Keys" 策略，优先剔除缺失的刺激以保留完整被试。
+- 兼容性：同时支持 .gii (Surface) and .nii.gz (Volume)。
 """
 
 from __future__ import annotations
 
 import re
+import gc
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Set
 
 import numpy as np
 import pandas as pd
 import nibabel as nib
 from nilearn import image
+from tqdm import tqdm
+
+# ================= 配置常量 =================
 
 COL_SUB_ID = "sub_id"
 COL_AGE = "age"
 LEGACY_COL_SUB_ID = "被试编号"
 LEGACY_COL_AGE = "采集年龄"
 
-
-@dataclass(frozen=True)
-class SimilaritySpec:
-    name: str
-    aligned_csv: Path
-    space: str
-    kind: str  # "combined" | "roi"
-    atlas_label: Optional[Path] = None
-    roi_labels: Optional[Sequence[int]] = None
-    volume_mask: Optional[Path] = None
-
-
-@dataclass(frozen=True)
-class JointPreset:
-    name: str
-    specs: Sequence[SimilaritySpec]
-    subject_info: Path
-    out_dir: Path
-    lss_root: Optional[Path]
-    task: str
-    condition_group: str
-    require_both_tasks: bool = False
-    min_coverage: float = 0.9
-    ensure_complete_keys: bool = True
-    max_missing_stimuli: Optional[int] = 0
-    n_perm: int = 10000
-    seed: int = 42
-    normalize_models: bool = True
-    save_similarity: bool = True
-
-
+# ROI 定义示例 (Schaefer 200 7Networks)
 ROI_CONFIG = {
     "Visual": {
         "L": [1, 2, 3, 4, 5, 6, 7],
@@ -100,130 +54,128 @@ ROI_CONFIG = {
 }
 
 
-ACTIVE_PRESET = "EXAMPLE_EMO_joint_all"
+# ================= 数据结构定义 =================
 
+@dataclass(frozen=True)
+class SimilaritySpec:
+    name: str
+    aligned_csv: Path
+    space: str  # "surface_L", "surface_R", "volume"
+    kind: str  # "combined", "roi"
+    atlas_label: Optional[Path] = None  # ROI 模式必填 (Surface)
+    roi_labels: Optional[Sequence[int]] = None  # ROI 模式必填
+    volume_mask: Optional[Path] = None  # Volume 模式必填
+
+
+@dataclass(frozen=True)
+class JointPreset:
+    name: str
+    specs: Sequence[SimilaritySpec]
+    subject_info: Path
+    out_dir: Path
+    lss_root: Optional[Path]
+    task: str  # "EMO", "SOC"
+    condition_group: str  # "all", "emotion_regulation" etc.
+    min_coverage: float = 0.9
+    ensure_complete_keys: bool = True  # 核心策略：丢刺激，保被试
+    max_missing_stimuli: int = 0  # 允许每个被试缺失多少个刺激 (建议为0)
+    n_perm: int = 5000  # 默认 5000 次
+    seed: int = 42
+    normalize_models: bool = True
+    save_similarity: bool = True
+    subject_order_path: Optional[Path] = None  # 可选：手动指定被试列表文件
+
+
+# ================= 预设配置区 (请在此修改) =================
+
+ACTIVE_PRESET = "EXAMPLE_EMO_joint_all"
 
 PRESETS: Dict[str, JointPreset] = {
     "EXAMPLE_EMO_joint_all": JointPreset(
         name="EXAMPLE_EMO_joint_all",
         specs=(
+            # --- 1. Surface 全脑 (Combined) ---
             SimilaritySpec(
                 name="surface_L",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
+                aligned_csv=Path(
+                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
                 space="surface_L",
                 kind="combined",
             ),
             SimilaritySpec(
                 name="surface_R",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
+                aligned_csv=Path(
+                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
                 space="surface_R",
                 kind="combined",
             ),
+
+            # --- 2. Volume 全脑 (需提供 Mask) ---
             SimilaritySpec(
                 name="volume",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_volume_aligned.csv"),
+                aligned_csv=Path(
+                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_volume_aligned.csv"),
                 space="volume",
                 kind="combined",
                 volume_mask=Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3T_Binary_Mask.nii.gz"),
             ),
+
+            # --- 3. Surface ROI 示例 ---
             SimilaritySpec(
                 name="surface_L_Visual",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
+                aligned_csv=Path(
+                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
                 space="surface_L",
                 kind="roi",
-                atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"),
+                atlas_label=Path(
+                    "/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"),
                 roi_labels=ROI_CONFIG["Visual"]["L"],
             ),
             SimilaritySpec(
                 name="surface_R_Visual",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
+                aligned_csv=Path(
+                    "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
                 space="surface_R",
                 kind="roi",
-                atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"),
+                atlas_label=Path(
+                    "/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"),
                 roi_labels=ROI_CONFIG["Visual"]["R"],
-            ),
-            SimilaritySpec(
-                name="surface_L_Salience_Insula",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
-                space="surface_L",
-                kind="roi",
-                atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"),
-                roi_labels=ROI_CONFIG["Salience_Insula"]["L"],
-            ),
-            SimilaritySpec(
-                name="surface_R_Salience_Insula",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
-                space="surface_R",
-                kind="roi",
-                atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"),
-                roi_labels=ROI_CONFIG["Salience_Insula"]["R"],
-            ),
-            SimilaritySpec(
-                name="surface_L_Control_PFC",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_L_aligned.csv"),
-                space="surface_L",
-                kind="roi",
-                atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"),
-                roi_labels=ROI_CONFIG["Control_PFC"]["L"],
-            ),
-            SimilaritySpec(
-                name="surface_R_Control_PFC",
-                aligned_csv=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/lss_index_surface_R_aligned.csv"),
-                space="surface_R",
-                kind="roi",
-                atlas_label=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"),
-                roi_labels=ROI_CONFIG["Control_PFC"]["R"],
             ),
         ),
         subject_info=Path("/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv"),
-        out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/joint_perm_fwer_out"),
+        out_dir=Path("/public/home/dingrui/fmri_analysis/zz_analysis/joint_perm_fwer_out_roi"),
         lss_root=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results"),
         task="EMO",
         condition_group="all",
-        require_both_tasks=False,
-        min_coverage=0.9,
-        ensure_complete_keys=True,
-        max_missing_stimuli=0,
-        n_perm=10000,
-        seed=42,
-        normalize_models=True,
-        save_similarity=True,
+        n_perm=5000,
     )
 }
 
 
-def choose_preset(name: str, presets: Dict[str, JointPreset]) -> JointPreset:
-    if name in presets:
-        return presets[name]
-    keys = sorted(presets.keys())
-    if not keys:
-        raise ValueError("未配置任何 preset。")
-    print("可用 presets：")
-    for i, k in enumerate(keys, start=1):
-        print(f"  [{i}] {k}")
-    s = input(f"请输入编号 (1-{len(keys)}): ").strip()
-    idx = int(s) - 1
-    if idx < 0 or idx >= len(keys):
-        raise ValueError("编号超出范围。")
-    return presets[keys[idx]]
+# ================= 辅助函数：年龄与被试解析 =================
 
-
-def _parse_age_exact(age_str: object) -> float:
+def parse_chinese_age_exact(age_str: object) -> float:
+    """健壮的年龄解析函数"""
     if pd.isna(age_str) or str(age_str).strip() == "":
-        return float("nan")
+        return np.nan
+
     if isinstance(age_str, (int, float, np.integer, np.floating)):
         return float(age_str)
+
     s = str(age_str).strip()
     try:
         return float(s)
     except Exception:
         pass
-    y = re.search(r"(\d+)\s*岁", s)
-    m = re.search(r"(\d+)\s*个月", s) or re.search(r"(\d+)\s*月", s)
-    d = re.search(r"(\d+)\s*天", s)
-    years = int(y.group(1)) if y else 0
-    months = int(m.group(1)) if m else 0
-    days = int(d.group(1)) if d else 0
+
+    y_match = re.search(r'(\d+)\s*岁', s)
+    m_match = re.search(r'(\d+)\s*个月', s) or re.search(r'(\d+)\s*月', s)
+    d_match = re.search(r'(\d+)\s*天', s)
+
+    years = int(y_match.group(1)) if y_match else 0
+    months = int(m_match.group(1)) if m_match else 0
+    days = int(d_match.group(1)) if d_match else 0
+
     return years + (months / 12.0) + (days / 365.0)
 
 
@@ -238,478 +190,501 @@ def load_subject_ages_map(subject_info_path: Path) -> Dict[str, float]:
     else:
         raise ValueError("不支持的文件格式，请使用 .tsv, .csv 或 .xlsx")
 
+    # 兼容列名
     if COL_SUB_ID in info_df.columns and COL_AGE in info_df.columns:
         sub_col, age_col = COL_SUB_ID, COL_AGE
     elif LEGACY_COL_SUB_ID in info_df.columns and LEGACY_COL_AGE in info_df.columns:
         sub_col, age_col = LEGACY_COL_SUB_ID, LEGACY_COL_AGE
     else:
-        raise ValueError(
-            "年龄表缺少必要列。需要以下任意一组列名：\n"
-            f"- {COL_SUB_ID}, {COL_AGE}\n"
-            f"- {LEGACY_COL_SUB_ID}, {LEGACY_COL_AGE}\n"
-            f"实际列名: {list(info_df.columns)}"
-        )
+        raise ValueError(f"年龄表缺少必要列: {info_df.columns}")
 
     age_map: Dict[str, float] = {}
     for _, row in info_df.iterrows():
         raw_id = str(row[sub_col]).strip()
-        sub_id = raw_id if raw_id.startswith("sub-") else f"sub-{raw_id}"
-        age_map[sub_id] = _parse_age_exact(row[age_col])
+        sub_id = f"sub-{raw_id}" if not raw_id.startswith("sub-") else raw_id
+        age_map[sub_id] = parse_chinese_age_exact(row[age_col])
     return age_map
 
 
+def load_subject_order_list(order_path: Path) -> List[str]:
+    """读取 CSV 中的 subject 列"""
+    if not order_path.exists():
+        raise FileNotFoundError(f"未找到顺序文件: {order_path}")
+    df = pd.read_csv(order_path)
+    # 尝试常见的列名
+    for col in ["subject", "sub_id", "被试编号"]:
+        if col in df.columns:
+            return df[col].astype(str).tolist()
+    # 保底：取第一列
+    return df.iloc[:, 0].astype(str).tolist()
+
+
+# ================= 辅助函数：文件加载与数据清洗 =================
+
 def infer_condition_group(row: pd.Series) -> str:
     cg = str(row.get("condition_group", "")).strip()
-    if cg:
-        return cg
+    if cg and cg.lower() != "nan": return cg
     raw_cond = str(row.get("raw_condition", "")).strip()
     raw_emo = str(row.get("raw_emotion", "")).strip()
-    if raw_cond == "Reappraisal":
-        return "emotion_regulation"
+    if raw_cond == "Reappraisal": return "emotion_regulation"
     if raw_cond == "PassiveLook":
-        if raw_emo.lower().startswith("neutral"):
-            return "neutral_response"
-        return "emotion_generation"
+        return "neutral_response" if raw_emo.lower().startswith("neutral") else "emotion_generation"
     return "other"
-
-
-def filter_dataframe(
-    df: pd.DataFrame,
-    task: str,
-    condition_group: str,
-    require_both_tasks: bool,
-) -> pd.DataFrame:
-    df = df.dropna(subset=["subject", "stimulus_content", "file", "task"]).copy()
-    df["subject"] = df["subject"].astype(str)
-    df["task"] = df["task"].astype(str)
-    df["stimulus_content"] = df["stimulus_content"].astype(str)
-    df["condition_group"] = df.apply(infer_condition_group, axis=1)
-
-    if task:
-        df = df[df["task"] == task].copy()
-
-    if condition_group and condition_group != "all":
-        df = df[df["condition_group"] == condition_group].copy()
-
-    if require_both_tasks:
-        subs_a = set(df[df["task"] == "EMO"]["subject"].unique().tolist())
-        subs_b = set(df[df["task"] == "SOC"]["subject"].unique().tolist())
-        keep = subs_a & subs_b
-        df = df[df["subject"].isin(sorted(keep))].copy()
-
-    return df
-
-
-def common_stimulus_keys(df: pd.DataFrame, subjects: Sequence[str], min_coverage: float) -> List[str]:
-    df = df[df["subject"].isin(set(subjects))].copy()
-    counts = df["stimulus_content"].value_counts()
-    thr = int(np.floor(float(min_coverage) * len(subjects)))
-    thr = max(thr, 1)
-    keys = counts[counts >= thr].index.astype(str).tolist()
-    keys.sort()
-    return keys
-
-
-def filter_keys_complete(
-    df: pd.DataFrame,
-    lss_root: Path,
-    subjects: Sequence[str],
-    keys: Sequence[str],
-) -> List[str]:
-    key_set = set(keys)
-    sub_set = set(subjects)
-    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
-    lookup = {}
-    for _, row in df.iterrows():
-        s = str(row.get("subject", ""))
-        k = str(row.get("stimulus_content", ""))
-        lookup[(s, k)] = resolve_beta_path(lss_root, row)
-    keep_keys = []
-    for key in keys:
-        ok = True
-        for sub in subjects:
-            fpath = lookup.get((sub, key))
-            if fpath is None or not fpath.exists():
-                ok = False
-                break
-        if ok:
-            keep_keys.append(key)
-    return keep_keys
-
-
-def filter_subjects_by_missing(
-    df: pd.DataFrame,
-    lss_root: Path,
-    subjects: Sequence[str],
-    keys: Sequence[str],
-    max_missing: int,
-) -> List[str]:
-    key_set = set(keys)
-    sub_set = set(subjects)
-    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
-    lookup = {}
-    for _, row in df.iterrows():
-        s = str(row.get("subject", ""))
-        k = str(row.get("stimulus_content", ""))
-        lookup[(s, k)] = resolve_beta_path(lss_root, row)
-    keep_subjects = []
-    for sub in subjects:
-        missing = 0
-        for key in keys:
-            fpath = lookup.get((sub, key))
-            if fpath is None or not fpath.exists():
-                missing += 1
-                if missing > max_missing:
-                    break
-        if missing <= max_missing:
-            keep_subjects.append(sub)
-    return keep_subjects
 
 
 def resolve_beta_path(lss_root: Path, row: pd.Series) -> Path:
     f = str(row.get("file", ""))
-    if f.startswith("/"):
-        return Path(f)
+    if f.startswith("/"): return Path(f)
     task = str(row.get("task", "")).lower()
     sub = str(row.get("subject", ""))
-    p = lss_root / task / sub / f
-    if p.exists():
-        return p
+    # 优先查找: root/task/sub/file
+    p1 = lss_root / task / sub / f
+    if p1.exists(): return p1
+    # 其次查找: root/task/sub/run-x/file
     run = str(row.get("run", ""))
     return lss_root / task / sub / f"run-{run}" / f
 
 
-def load_label_gii(path: Path) -> np.ndarray:
-    g = nib.load(str(path))
-    return np.asarray(g.darrays[0].data).reshape(-1).astype(np.int32)
+def filter_dataframe(df: pd.DataFrame, task: str, condition_group: str) -> pd.DataFrame:
+    """基础过滤：筛选任务和条件组"""
+    # 必须包含这些列
+    df = df.dropna(subset=["subject", "stimulus_content", "file", "task"]).copy()
+    df["subject"] = df["subject"].astype(str)
+    df["task"] = df["task"].astype(str)
+    df["condition_group"] = df.apply(infer_condition_group, axis=1)
+
+    if task:
+        df = df[df["task"] == task].copy()
+    if condition_group and condition_group != "all":
+        df = df[df["condition_group"] == condition_group].copy()
+    return df
 
 
-def load_beta_gii(path: Path) -> Optional[np.ndarray]:
-    try:
-        g = nib.load(str(path))
-        return np.asarray(g.darrays[0].data).reshape(-1).astype(np.float32)
-    except Exception:
-        return None
+def determine_subject_list(
+        preset: JointPreset,
+        age_map: Dict[str, float],
+        dfs: List[pd.DataFrame]
+) -> List[str]:
+    """
+    核心逻辑：确定最终被试列表。
+    1. 优先使用 preset 指定的 subject_order_path。
+    2. 其次自动查找 out_dir 下的 subject_order_surface_L.csv (或默认final目录)。
+    3. 最后计算所有 dfs 的被试交集并按年龄排序。
+    """
+    target_order_path = preset.subject_order_path
 
+    # --- 自动查找逻辑 ---
+    if target_order_path is None:
+        # 1. 检查当前输出目录
+        auto_path = preset.out_dir / "subject_order_surface_L.csv"
 
-def load_beta_nii_flat(
-    path: Path,
-    voxel_idx: np.ndarray,
-    mask_img: nib.spatialimages.SpatialImage,
-) -> Optional[np.ndarray]:
-    try:
-        img = image.load_img(str(path))
-        if img.shape != mask_img.shape or not np.allclose(img.affine, mask_img.affine):
-            img = image.resample_to_img(img, mask_img, interpolation="continuous")
-        data = img.get_fdata(dtype=np.float32).reshape(-1)
-        return data[voxel_idx].astype(np.float32, copy=False)
-    except Exception:
-        return None
+        # 2. 检查默认的 calc_isc_combined_strict 输出目录 (Common Fallback)
+        default_final_dir = Path(
+            "/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/similarity_matrices_final_age_sorted")
+        alt_path = default_final_dir / "subject_order_surface_L.csv"
 
+        if auto_path.exists():
+            print(f"  [Info] 自动检测到被试列表(Current Dir): {auto_path}")
+            target_order_path = auto_path
+        elif alt_path.exists():
+            print(f"  [Info] 自动检测到被试列表(Default Final Dir): {alt_path}")
+            target_order_path = alt_path
+        else:
+            print("  [Info] 未检测到现有的 subject_order 文件，将通过交集计算。")
 
-def build_roi_mask(atlas_label: Path, roi_labels: Sequence[int]) -> np.ndarray:
-    labels = load_label_gii(atlas_label)
-    mask = np.isin(labels, np.asarray(roi_labels, dtype=np.int32))
-    return mask
+    subjects_final = []
 
+    if target_order_path and target_order_path.exists():
+        print(f"  [Process] 使用外部文件限制被试范围: {target_order_path}")
+        ordered_subs = load_subject_order_list(target_order_path)
 
-def build_lookup(df: pd.DataFrame, lss_root: Path, subjects: Sequence[str], keys: Sequence[str]) -> Dict[Tuple[str, str], Path]:
-    sub_set = set(subjects)
-    key_set = set(keys)
-    df = df[df["subject"].astype(str).isin(sub_set) & df["stimulus_content"].astype(str).isin(key_set)].copy()
-    lookup: Dict[Tuple[str, str], Path] = {}
-    for _, row in df.iterrows():
-        s = str(row.get("subject", ""))
-        k = str(row.get("stimulus_content", ""))
-        lookup[(s, k)] = resolve_beta_path(lss_root, row)
-    return lookup
+        # 验证这些被试是否在所有 aligned CSV 中都存在
+        available_sets = [set(d["subject"].unique()) for d in dfs]
+        common_available = set.intersection(*available_sets)
 
+        valid_subs = [s for s in ordered_subs if s in common_available]
 
-def build_subject_feature_matrix(
-    df: pd.DataFrame,
-    spec: SimilaritySpec,
-    lss_root: Path,
-    subjects: Sequence[str],
-    keys: Sequence[str],
-) -> Tuple[np.ndarray, List[str]]:
-    lookup = build_lookup(df, lss_root, subjects, keys)
-    subject_vectors: List[np.ndarray] = []
-    keep_subjects: List[str] = []
+        # 过滤无年龄数据的
+        valid_subs = [s for s in valid_subs if np.isfinite(age_map.get(s, np.nan))]
 
-    if spec.space.startswith("surface"):
-        roi_mask = None
-        if spec.kind == "roi":
-            if spec.atlas_label is None or not spec.roi_labels:
-                raise ValueError(f"{spec.name} 缺少 ROI atlas/labels。")
-            roi_mask = build_roi_mask(spec.atlas_label, spec.roi_labels)
-        for sub in subjects:
-            feats: List[np.ndarray] = []
-            ok = True
-            for key in keys:
-                p = lookup.get((sub, key))
-                if p is None or not p.exists():
-                    ok = False
-                    break
-                beta = load_beta_gii(p)
-                if beta is None:
-                    ok = False
-                    break
-                if roi_mask is not None:
-                    beta = beta[roi_mask]
-                feats.append(beta)
-            if ok and feats:
-                subject_vectors.append(np.concatenate(feats).astype(np.float32, copy=False))
-                keep_subjects.append(sub)
-    elif spec.space == "volume":
-        if spec.kind != "combined":
-            raise ValueError("volume 仅支持 combined。")
-        if spec.volume_mask is None:
-            raise ValueError("volume 模式需要提供 volume_mask。")
-        mask_img = image.load_img(str(spec.volume_mask))
-        mask = mask_img.get_fdata() > 0
-        voxel_idx = np.where(mask.reshape(-1))[0].astype(np.int64)
-        for sub in subjects:
-            feats: List[np.ndarray] = []
-            ok = True
-            for key in keys:
-                p = lookup.get((sub, key))
-                if p is None or not p.exists():
-                    ok = False
-                    break
-                beta = load_beta_nii_flat(p, voxel_idx, mask_img)
-                if beta is None:
-                    ok = False
-                    break
-                feats.append(beta)
-            if ok and feats:
-                subject_vectors.append(np.concatenate(feats).astype(np.float32, copy=False))
-                keep_subjects.append(sub)
+        diff = len(ordered_subs) - len(valid_subs)
+        if diff > 0:
+            print(f"  [Warn] 外部列表中的 {diff} 个被试在当前数据中缺失或无年龄，已剔除。")
+        subjects_final = valid_subs
+
     else:
-        raise ValueError(f"未知空间类型: {spec.space}")
+        print("  [Process] 计算所有输入数据的被试交集...")
+        sets = [set(d["subject"].unique()) for d in dfs]
+        common = set.intersection(*sets)
 
-    if not keep_subjects:
-        return np.empty((0, 0), dtype=np.float32), []
-    return np.stack(subject_vectors, axis=0), keep_subjects
+        # 按年龄排序
+        sorted_common = sorted(list(common), key=lambda s: (age_map.get(s, np.nan), s))
+        # 过滤无年龄
+        subjects_final = [s for s in sorted_common if np.isfinite(age_map.get(s, np.nan))]
 
+    print(f"  [Result] 最终确定的被试数量: {len(subjects_final)}")
+    if subjects_final:
+        print(f"           First: {subjects_final[0]}, Last: {subjects_final[-1]}")
+
+    return subjects_final
+
+
+def load_beta_data(
+        spec: SimilaritySpec,
+        df: pd.DataFrame,
+        subjects: List[str],
+        lss_root: Path,
+        preset: JointPreset,
+) -> Optional[np.ndarray]:
+    """
+    加载数据并展平，返回 (n_sub, n_features)。
+    包含 Volume/Surface 处理及 ROI 提取逻辑。
+    包含 'Ensure Complete Keys' 逻辑。
+    """
+
+    # --- 1. 确定公共刺激 ---
+    df_sub = df[df["subject"].isin(subjects)].copy()
+    counts = df_sub["stimulus_content"].value_counts()
+
+    # 刺激覆盖率阈值
+    threshold = int(len(subjects) * preset.min_coverage)
+    keys = counts[counts >= threshold].index.tolist()
+    keys.sort()
+
+    if not keys:
+        print(f"  [Skip] {spec.name}: 无公共刺激 (Threshold={threshold})。")
+        return None
+
+    # --- 2. 建立路径查找表 ---
+    lookup = {}
+    for _, row in df_sub.iterrows():
+        lookup[(str(row["subject"]), str(row["stimulus_content"]))] = resolve_beta_path(lss_root, row)
+
+    # --- 3. 过滤完整性 (Ensure Complete Keys) ---
+    # 策略：如果一个刺激在任何一个被试中缺失，则剔除该刺激，以保证被试数量不减少。
+    if preset.ensure_complete_keys:
+        valid_keys = []
+        for k in keys:
+            # 检查是否所有 subjects 都有这个 key 的文件
+            is_complete = True
+            for s in subjects:
+                fpath = lookup.get((s, k))
+                if fpath is None or not fpath.exists():
+                    is_complete = False
+                    break
+            if is_complete:
+                valid_keys.append(k)
+
+        dropped = len(keys) - len(valid_keys)
+        if dropped > 0:
+            print(f"  [Data] {spec.name}: 为保被试完整，剔除 {dropped} 个有缺失的刺激。剩余刺激数: {len(valid_keys)}")
+        keys = valid_keys
+
+    if not keys:
+        print(f"  [Skip] {spec.name}: 剔除缺失刺激后，无剩余刺激。")
+        return None
+
+    # --- 4. 准备 Mask (Volume 或 ROI) ---
+    roi_mask = None  # for Surface ROI
+    vol_mask_idx = None  # for Volume
+    mask_img_vol = None  # for Volume Resampling
+
+    # A. Surface ROI
+    if spec.space.startswith("surface") and spec.kind == "roi":
+        if not spec.atlas_label or not spec.roi_labels:
+            raise ValueError(f"{spec.name}: ROI 模式需要 atlas_label 和 roi_labels")
+        g = nib.load(str(spec.atlas_label))
+        # 假设 label 是第一个 darray
+        labels = np.asarray(g.darrays[0].data).reshape(-1)
+        roi_mask = np.isin(labels, spec.roi_labels)
+        print(f"  [Mask] Surface ROI mask created. Voxels/Vertices: {np.sum(roi_mask)}")
+
+    # B. Volume
+    elif spec.space == "volume":
+        if not spec.volume_mask:
+            raise ValueError(f"{spec.name}: Volume 模式需要 volume_mask")
+        mask_img_vol = image.load_img(str(spec.volume_mask))
+        mask_data = mask_img_vol.get_fdata() > 0
+        vol_mask_idx = np.where(mask_data.reshape(-1))[0]
+        print(f"  [Mask] Volume mask loaded. Voxels: {len(vol_mask_idx)}")
+
+    # --- 5. 加载数据 ---
+    matrix_list = []
+    print(f"  [Load] Loading data for {spec.name} ({len(keys)} stimuli x {len(subjects)} subjects)...")
+
+    # 检查最大允许缺失 (虽然 ensure_complete_keys 应该已经解决了这个问题，但作为双重保障)
+    for s in subjects:
+        for k in keys:
+            if not (lookup.get((s, k)) and lookup[(s, k)].exists()):
+                # 如果代码走到这里，说明 ensure_complete_keys=False 或者逻辑有漏网之鱼
+                msg = f"被试 {s} 缺失刺激 {k}。当前配置不允许缺失(或已通过keys过滤)。"
+                if preset.max_missing_stimuli == 0:
+                    raise FileNotFoundError(msg)
+
+    for s in tqdm(subjects, leave=False, desc=f"Reading {spec.name}"):
+        feats = []
+        for k in keys:
+            p = lookup.get((s, k))
+            # 这里 assume 文件存在，因为上面已经过滤了 keys
+            try:
+                if spec.space.startswith("surface"):
+                    # Surface Load
+                    g = nib.load(str(p))
+                    data = g.darrays[0].data.astype(np.float32).reshape(-1)
+                    if roi_mask is not None:
+                        data = data[roi_mask]
+                else:
+                    # Volume Load
+                    img = image.load_img(str(p))
+                    # Resample if needed
+                    if img.shape != mask_img_vol.shape or not np.allclose(img.affine, mask_img_vol.affine):
+                        img = image.resample_to_img(img, mask_img_vol, interpolation="nearest")
+
+                    data = img.get_fdata(dtype=np.float32).reshape(-1)
+                    if vol_mask_idx is not None:
+                        data = data[vol_mask_idx]
+
+                feats.append(data)
+            except Exception as e:
+                print(f"Error loading {p}: {e}")
+                raise e
+
+        if feats:
+            # Concat features for one subject -> 1D array
+            matrix_list.append(np.concatenate(feats))
+
+    # Stack -> (n_sub, n_features)
+    return np.stack(matrix_list)
+
+
+# ================= 核心分析流程 =================
 
 def zscore_1d(x: np.ndarray) -> np.ndarray:
+    """对向量进行 Z-score 标准化，处理常数/NaN情况"""
     x = np.asarray(x, dtype=np.float32)
     mask = np.isfinite(x)
-    if mask.sum() < 10:
-        return np.full_like(x, np.nan, dtype=np.float32)
-    mu = float(x[mask].mean())
-    sd = float(x[mask].std(ddof=0))
-    if sd <= 0:
-        return np.full_like(x, np.nan, dtype=np.float32)
+    if mask.sum() < 2: return x
+    mu = x[mask].mean()
+    sd = x[mask].std(ddof=0)
+    if sd <= 1e-9: return x  # 避免除零
     out = (x - mu) / sd
     out[~mask] = np.nan
-    return out.astype(np.float32, copy=False)
+    return out
 
 
-def triu_indices(n: int) -> Tuple[np.ndarray, np.ndarray]:
-    return np.triu_indices(n, k=1)
+def build_dev_models(ages: np.ndarray, n: int, normalize: bool) -> Dict[str, np.ndarray]:
+    """构建三种发育模型的上三角向量"""
+    iu, ju = np.triu_indices(n, k=1)
+    a = ages.reshape(-1)
+    amax = np.nanmax(a)
+
+    ai, aj = a[iu], a[ju]
+
+    models = {}
+    # 1. NN (Nearest Neighbor): 相似度随年龄差增大而减小
+    raw = amax - np.abs(ai - aj)
+    models["M_nn"] = zscore_1d(raw) if normalize else raw
+
+    # 2. Conv (Convergence): 相似度随最小年龄增大而增大 (都大才像)
+    raw = np.minimum(ai, aj)
+    models["M_conv"] = zscore_1d(raw) if normalize else raw
+
+    # 3. Div (Divergence): 相似度随平均年龄增大而减小 (越大约不一样)
+    raw = amax - 0.5 * (ai + aj)
+    models["M_div"] = zscore_1d(raw) if normalize else raw
+
+    return models
 
 
-def build_model_vec(ages: np.ndarray, iu: np.ndarray, ju: np.ndarray, model: str, normalize: bool) -> np.ndarray:
-    a = np.asarray(ages, dtype=np.float32).reshape(-1)
-    amax = float(np.nanmax(a))
-    ai = a[iu]
-    aj = a[ju]
-    if model == "M_nn":
-        v = (amax - np.abs(ai - aj)).astype(np.float32, copy=False)
-    elif model == "M_conv":
-        v = np.minimum(ai, aj).astype(np.float32, copy=False)
-    elif model == "M_div":
-        v = (amax - 0.5 * (ai + aj)).astype(np.float32, copy=False)
-    else:
-        raise ValueError(f"未知模型: {model}")
-    return zscore_1d(v) if normalize else v
+def run_analysis(preset: JointPreset):
+    print(f"\n{'=' * 60}")
+    print(f"开始分析 Preset: {preset.name}")
+    print(f"Task: {preset.task}, Condition: {preset.condition_group}")
+    print(f"{'=' * 60}\n")
 
+    preset.out_dir.mkdir(parents=True, exist_ok=True)
 
-def prepare_similarity_vectors(
-    matrices: Dict[str, np.ndarray],
-    subjects: Sequence[str],
-) -> Tuple[np.ndarray, List[str], int]:
-    n = len(subjects)
-    iu, ju = triu_indices(n)
-    vecs = []
-    names = []
-    for name, mat in matrices.items():
-        v = mat[iu, ju]
-        v_z = zscore_1d(v)
-        if not np.isfinite(v_z).any():
-            raise ValueError(f"相似性矩阵向量无有效值: {name}")
-        vecs.append(v_z)
-        names.append(name)
-    S = np.stack(vecs, axis=0).astype(np.float32, copy=False)
-    return S, names, int(iu.size)
-
-
-def run_joint_analysis(preset: JointPreset) -> Path:
+    # 1. 加载年龄表
+    print("Loading subject info...")
     age_map = load_subject_ages_map(preset.subject_info)
-    if not age_map:
-        raise ValueError("无法加载年龄信息。")
 
+    # 2. 读取并预过滤所有 aligned CSV
     dfs = []
+    print("Loading aligned CSVs...")
     for spec in preset.specs:
-        df_full = pd.read_csv(spec.aligned_csv)
-        df = filter_dataframe(df_full, preset.task, preset.condition_group, preset.require_both_tasks)
+        if not spec.aligned_csv.exists():
+            raise FileNotFoundError(f"Aligned CSV not found: {spec.aligned_csv}")
+        df = pd.read_csv(spec.aligned_csv)
+        df = filter_dataframe(df, preset.task, preset.condition_group)
         if df.empty:
-            raise ValueError(f"{spec.name} 过滤后 aligned 数据为空。")
+            raise ValueError(f"{spec.name} data is empty after filtering!")
         dfs.append(df)
 
-    subject_sets = []
-    for df in dfs:
-        subs = set(df["subject"].astype(str).tolist())
-        subs = {s if s.startswith("sub-") else f"sub-{s}" for s in subs}
-        subs = {s for s in subs if np.isfinite(age_map.get(s, np.nan))}
-        subject_sets.append(subs)
+    # 3. 确定统一被试列表 (关键步骤)
+    subjects = determine_subject_list(preset, age_map, dfs)
 
-    common_subjects = set.intersection(*subject_sets) if subject_sets else set()
-    if not common_subjects:
-        raise ValueError("不同空间之间没有共同被试。")
+    if len(subjects) < 10:
+        print("❌ 有效被试过少 (<10)，终止分析。")
+        return
 
-    subjects_sorted = sorted(common_subjects, key=lambda s: (age_map.get(s, np.nan), s))
-    if len(subjects_sorted) < 10:
-        raise ValueError(f"共同被试数量过少: {len(subjects_sorted)}")
+    # 保存本次分析使用的被试列表
+    ages = np.array([age_map[s] for s in subjects], dtype=np.float32)
+    pd.DataFrame({"subject": subjects, "age": ages}).to_csv(preset.out_dir / "subjects_common_age_sorted.csv",
+                                                            index=False)
 
-    lss_root = preset.lss_root if preset.lss_root is not None else preset.specs[0].aligned_csv.parent
+    # 4. 构建相似性矩阵向量 (Z-scored)
+    sim_vectors = []
+    sim_names = []
 
-    features: Dict[str, np.ndarray] = {}
-    subjects_by_spec: Dict[str, List[str]] = {}
-    keys_by_spec: Dict[str, List[str]] = {}
+    # 确定 lss_root (如果未指定，推测为 aligned_csv 的上两级)
+    lss_root = preset.lss_root if preset.lss_root else preset.specs[0].aligned_csv.parent.parent
 
+    # 三角索引
+    n_subs = len(subjects)
+    iu, ju = np.triu_indices(n_subs, k=1)
+
+    print("\n>>> 开始构建相似性矩阵...")
     for spec, df in zip(preset.specs, dfs):
-        keys = common_stimulus_keys(df, subjects_sorted, preset.min_coverage)
-        if not keys:
-            raise ValueError(f"{spec.name} 无公共 stimulus_content。")
-        if preset.ensure_complete_keys:
-            keys = filter_keys_complete(df, lss_root, subjects_sorted, keys)
-            if not keys:
-                raise ValueError(f"{spec.name} 剔除缺失刺激后无可用 stimulus_content。")
-        if preset.max_missing_stimuli is not None:
-            max_missing = int(preset.max_missing_stimuli)
-            if max_missing >= 0:
-                before = len(subjects_sorted)
-                subjects_sorted = filter_subjects_by_missing(
-                    df,
-                    lss_root,
-                    subjects_sorted,
-                    keys,
-                    max_missing,
-                )
-                dropped = before - len(subjects_sorted)
-                if dropped > 0:
-                    print(f"  - {spec.name}: 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
-                if not subjects_sorted:
-                    raise ValueError(f"{spec.name} 剔除缺失被试后无可用被试。")
-        feats, subjects_kept = build_subject_feature_matrix(
-            df=df,
-            spec=spec,
-            lss_root=lss_root,
-            subjects=subjects_sorted,
-            keys=keys,
-        )
-        if feats.size == 0:
-            raise ValueError(f"{spec.name} 无有效被试（可能缺失 beta）。")
-        features[spec.name] = feats
-        subjects_by_spec[spec.name] = subjects_kept
-        keys_by_spec[spec.name] = keys
+        print(f"\n--- Processing {spec.name} [{spec.space}] ---")
+        try:
+            data_mat = load_beta_data(spec, df, subjects, lss_root, preset)
+        except Exception as e:
+            print(f"⚠️ {spec.name} 数据加载失败: {e}")
+            continue
 
-    common_subjects_final = set(subjects_sorted)
-    for subs in subjects_by_spec.values():
-        common_subjects_final &= set(subs)
-    if not common_subjects_final:
-        raise ValueError("加载 beta 后无共同被试。")
+        if data_mat is None:
+            continue
 
-    subjects_final = sorted(common_subjects_final, key=lambda s: (age_map.get(s, np.nan), s))
-    if len(subjects_final) < 10:
-        raise ValueError(f"最终共同被试数量过少: {len(subjects_final)}")
+        # 计算相关矩阵 (Subjects x Subjects)
+        print(f"  [Corr] Calculating correlation matrix ({n_subs}x{n_subs})...")
+        corr_mat = np.corrcoef(data_mat)
 
-    matrices: Dict[str, np.ndarray] = {}
-    for spec_name, feats in features.items():
-        subs = subjects_by_spec[spec_name]
-        idx = [subs.index(s) for s in subjects_final]
-        feats_use = feats[np.array(idx, dtype=int), :]
-        matrices[spec_name] = np.corrcoef(feats_use)
+        # 保存矩阵 (可选)
+        if preset.save_similarity:
+            out_p = preset.out_dir / f"similarity_{spec.name}_AgeSorted.csv"
+            pd.DataFrame(corr_mat, index=subjects, columns=subjects).to_csv(out_p)
+            print(f"  [Save] Matrix saved to {out_p.name}")
 
-    out_dir = preset.out_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
+        # 提取上三角并 Z-score
+        vec = corr_mat[iu, ju]
+        vec_z = zscore_1d(vec)
 
-    if preset.save_similarity:
-        for name, mat in matrices.items():
-            out_path = out_dir / f"similarity_{name}_AgeSorted.csv"
-            pd.DataFrame(mat, index=subjects_final, columns=subjects_final).to_csv(out_path)
+        if np.isnan(vec_z).any():
+            print(f"⚠️ {spec.name} 矩阵包含 NaN，跳过。")
+        else:
+            sim_vectors.append(vec_z)
+            sim_names.append(spec.name)
 
-    ages = np.array([age_map[s] for s in subjects_final], dtype=np.float32)
-    pd.DataFrame({"subject": subjects_final, "age": ages}).to_csv(out_dir / "subjects_common_age_sorted.csv", index=False)
+        # 内存回收
+        del data_mat, corr_mat, vec, vec_z
+        gc.collect()
 
-    S_z, matrix_names, n_pairs = prepare_similarity_vectors(matrices, subjects_final)
-    iu, ju = triu_indices(len(subjects_final))
-    models = ["M_nn", "M_conv", "M_div"]
-    model_vecs = {m: build_model_vec(ages, iu, ju, model=m, normalize=preset.normalize_models) for m in models}
-    for m in models:
-        if not np.isfinite(model_vecs[m]).all():
-            raise ValueError(f"模型向量 {m} 包含 NaN。")
+    if not sim_vectors:
+        print("❌ 无有效相似性矩阵生成，终止。")
+        return
 
-    r_obs = {m: (S_z @ model_vecs[m]) / float(n_pairs) for m in models}
-    n_mats = S_z.shape[0]
-    n_tests = n_mats * len(models)
+    S_z = np.stack(sim_vectors)  # shape: (n_mats, n_pairs)
+    n_mats, n_pairs = S_z.shape
 
-    count_raw = np.zeros(n_tests, dtype=np.int64)
-    count_fwer = np.zeros(n_tests, dtype=np.int64)
+    # 5. 构建发育模型向量
+    dev_models = build_dev_models(ages, n_subs, preset.normalize_models)
+    model_keys = ["M_nn", "M_conv", "M_div"]
+
+    # 6. 置换检验 (单侧, FWER)
+    print(f"\n>>> 开始置换检验 (N={preset.n_perm}, 单侧-正效应)...")
+
+    # --- 计算观测值 r_obs ---
+    # r_obs_dict[model] -> array of r for each matrix
+    r_obs_dict = {}
+    all_r_obs_flat = []
+
+    for m in model_keys:
+        m_vec = dev_models[m]
+        # Pearson r approx: dot(z1, z2) / n
+        r_vals = (S_z @ m_vec) / n_pairs
+        r_obs_dict[m] = r_vals
+        all_r_obs_flat.extend(r_vals)
+
+    all_r_obs_flat = np.array(all_r_obs_flat, dtype=np.float32)
+    n_total_tests = len(all_r_obs_flat)
+
+    count_raw = np.zeros(n_total_tests, dtype=np.int64)
+    count_fwer = np.zeros(n_total_tests, dtype=np.int64)
     rng = np.random.default_rng(preset.seed)
-    abs_r_obs = np.abs(np.concatenate([r_obs[m] for m in models]))
 
-    for _ in range(int(preset.n_perm)):
-        perm = rng.permutation(len(subjects_final))
-        ages_p = ages[perm]
-        r_perm_all = np.empty(n_tests, dtype=np.float32)
-        offset = 0
-        for m in models:
-            mv = build_model_vec(ages_p, iu, ju, model=m, normalize=preset.normalize_models)
-            r_mats = (S_z @ mv) / float(n_pairs)
-            r_perm_all[offset:offset + n_mats] = r_mats.astype(np.float32, copy=False)
-            offset += n_mats
-        abs_r_perm = np.abs(r_perm_all)
-        count_raw += (abs_r_perm >= abs_r_obs)
-        max_abs = float(abs_r_perm.max(initial=0.0))
-        count_fwer += (max_abs >= abs_r_obs)
+    # --- Permutation Loop ---
+    for i in range(preset.n_perm):
+        if (i + 1) % 500 == 0:
+            print(f"  Permutation {i + 1} / {preset.n_perm} ...")
 
-    p_perm = (count_raw + 1.0) / (float(preset.n_perm) + 1.0)
-    p_fwer = (count_fwer + 1.0) / (float(preset.n_perm) + 1.0)
+        # 1. 置换年龄
+        perm_idx = rng.permutation(n_subs)
+        ages_perm = ages[perm_idx]
 
-    rows = []
+        # 2. 重建模型向量
+        models_perm = build_dev_models(ages_perm, n_subs, preset.normalize_models)
+
+        # 3. 计算所有 matrix * model 组合的 r
+        current_perm_rs = []
+        for m in model_keys:
+            m_vec_p = models_perm[m]
+            r_p = (S_z @ m_vec_p) / n_pairs
+            current_perm_rs.append(r_p)
+
+        # 展平为 1D 数组，顺序必须与 all_r_obs_flat 一致
+        flat_perm_rs = np.concatenate(current_perm_rs)
+
+        # 4. Raw P (One-sided: Positive Effect)
+        # 计数规则: r_perm >= r_obs
+        count_raw += (flat_perm_rs >= all_r_obs_flat)
+
+        # 5. FWER (Max Statistic for One-sided)
+        # 找出当前置换中所有检验里的最大值 (algebraic max, not abs)
+        max_stat = flat_perm_rs.max()
+        # 如果随机数据的最大值 >= 观测值，则该观测值的 FWER 计数 +1
+        count_fwer += (max_stat >= all_r_obs_flat)
+
+    # 计算 P 值
+    p_raw = (count_raw + 1.0) / (preset.n_perm + 1.0)
+    p_fwer = (count_fwer + 1.0) / (preset.n_perm + 1.0)
+
+    # 7. 整理结果
+    results = []
     idx = 0
-    for m in models:
-        r_vals = r_obs[m]
-        for mi, name in enumerate(matrix_names):
-            rows.append(
-                {
-                    "matrix": name,
-                    "model": m,
-                    "r_obs": float(r_vals[mi]),
-                    "p_perm": float(p_perm[idx]),
-                    "p_fwer": float(p_fwer[idx]),
-                    "n_subjects": int(len(subjects_final)),
-                    "n_pairs": int(n_pairs),
-                    "n_perm": int(preset.n_perm),
-                    "seed": int(preset.seed),
-                    "normalize_models": bool(preset.normalize_models),
-                }
-            )
+    # 顺序必须与 all_r_obs_flat 构建顺序一致 (model -> matrix)
+    for m in model_keys:
+        rs = r_obs_dict[m]
+        for mat_i, mat_name in enumerate(sim_names):
+            results.append({
+                "matrix": mat_name,
+                "model": m,
+                "r_obs": float(rs[mat_i]),
+                "p_perm_one_tailed": float(p_raw[idx]),
+                "p_fwer_one_tailed": float(p_fwer[idx]),
+                "n_subjects": n_subs,
+                "n_pairs": n_pairs,
+                "n_perm": preset.n_perm,
+                "threshold": preset.min_coverage
+            })
             idx += 1
 
-    res_df = pd.DataFrame(rows).sort_values(["matrix", "model"])
-    out_path = out_dir / "joint_analysis_dev_models_perm_fwer.csv"
-    res_df.to_csv(out_path, index=False)
-    return out_path
+    res_df = pd.DataFrame(results)
+    out_csv = preset.out_dir / "joint_analysis_dev_models_perm_fwer_onesided.csv"
+    res_df.to_csv(out_csv, index=False)
+    print(f"\n✅ 分析完成。结果已保存: {out_csv}")
 
 
-def main() -> None:
+def choose_preset(name: str, presets: Dict[str, JointPreset]) -> JointPreset:
+    if name in presets: return presets[name]
+    print(f"Error: Preset '{name}' not found.")
+    print("Available presets:")
+    for k in sorted(presets.keys()): print(f" - {k}")
+    raise ValueError(f"Preset {name} not found.")
+
+
+def main():
     preset = choose_preset(ACTIVE_PRESET, PRESETS)
-    out = run_joint_analysis(preset)
-    print(f"结果已保存: {out}")
+    run_analysis(preset)
 
 
 if __name__ == "__main__":
