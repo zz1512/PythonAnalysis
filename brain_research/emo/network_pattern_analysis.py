@@ -247,12 +247,17 @@ def run_pattern_analysis(preset: NetworkAnalysisPreset):
 
     # 1. 读取 & 筛选
     df = pd.read_csv(preset.aligned_csv)
+    df["task"] = df["task"].astype(str)
     subjects, age_map = get_subjects_intersection(df, preset.subject_info)
     ages = np.array([age_map[s] for s in subjects])
     n_sub = len(subjects)
 
     # 2. Stimuli
-    df_task = df[df['task'] == preset.task]
+    task = str(preset.task).strip()
+    if task:
+        df_task = df[df["task"] == task].copy()
+    else:
+        df_task = df.copy()
     std_subs_series = df_task['subject'].apply(standardize_sub_id)
     counts = df_task[std_subs_series.isin(subjects)]["stimulus_content"].value_counts()
     threshold = int(n_sub * preset.min_coverage)
