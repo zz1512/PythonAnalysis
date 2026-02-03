@@ -68,6 +68,7 @@ class ParcelAnalysisPreset:
     ensure_complete_keys: bool = True
     max_missing_stimuli: int = 0
     require_both_tasks: bool = False
+    expected_stimuli_per_task: int = 21
     n_perm: int = 5000
     seed: int = 42
     normalize_models: bool = True
@@ -484,6 +485,31 @@ def filter_dataframe(
     return df
 
 
+def filter_subjects_complete_joint_tasks(
+    df: pd.DataFrame,
+    expected_stimuli_per_task: int,
+) -> Tuple[pd.DataFrame, List[str]]:
+    df = df[df["task"].isin(["EMO", "SOC"])].copy()
+    task_counts = df.groupby("task")["stimulus_content"].nunique()
+    for task in ["EMO", "SOC"]:
+        if task not in task_counts.index:
+            raise ValueError(f"联合分析缺失任务 {task} 数据，无法继续。")
+        task_unique = int(task_counts.loc[task])
+        if task_unique != expected_stimuli_per_task:
+            raise ValueError(
+                f"任务 {task} 的刺激数量为 {task_unique}，"
+                f"期望为 {expected_stimuli_per_task}。"
+            )
+
+    counts = df.groupby(["subject", "task"])["stimulus_content"].nunique().unstack(fill_value=0)
+    valid = counts[
+        (counts.get("EMO", 0) == expected_stimuli_per_task)
+        & (counts.get("SOC", 0) == expected_stimuli_per_task)
+    ].index.astype(str)
+    valid_subjects = sorted(valid.tolist())
+    return df[df["subject"].isin(valid_subjects)].copy(), valid_subjects
+
+
 def determine_subject_list(
     out_dir: Path,
     subject_order_path: Optional[Path],
@@ -600,6 +626,7 @@ def run(
     ensure_complete_keys: bool,
     max_missing_stimuli: int,
     require_both_tasks: bool,
+    expected_stimuli_per_task: int,
     n_perm: int,
     seed: int,
     normalize_models: bool,
@@ -623,34 +650,45 @@ def run(
     if df.empty:
         raise ValueError("过滤后 aligned 数据为空，请检查 task/condition_group 设置。")
 
+    strict_joint = require_both_tasks and not task
+    if strict_joint:
+        df, _ = filter_subjects_complete_joint_tasks(df, expected_stimuli_per_task)
+        if df.empty:
+            raise ValueError("联合分析过滤后无有效被试（刺激完整性筛选失败）。")
+
     age_map = load_subject_ages_map(subject_info)
     subjects_sorted = determine_subject_list(out_dir, subject_order_path, df, age_map)
     if len(subjects_sorted) < 10:
         raise ValueError(f"有效被试数过少: {len(subjects_sorted)}")
 
     root = lss_root if lss_root is not None else aligned_csv.parent.parent
-    keys = common_stimulus_keys(df, subjects_sorted, min_coverage=min_coverage)
-    if not keys:
-        raise ValueError("没有满足覆盖率阈值的公共 stimulus_content。")
-    if ensure_complete_keys:
-        keys = filter_keys_complete(df, root, subjects_sorted, keys)
+    if strict_joint:
+        keys = sorted(df[df["subject"].isin(subjects_sorted)]["stimulus_content"].unique().tolist())
         if not keys:
-            raise ValueError("剔除缺失刺激后无可用公共 stimulus_content。")
-    max_missing = int(max_missing_stimuli)
-    if max_missing >= 0:
-        before = len(subjects_sorted)
-        subjects_sorted = filter_subjects_by_missing(
-            df,
-            root,
-            subjects_sorted,
-            keys,
-            max_missing,
-        )
-        dropped = before - len(subjects_sorted)
-        if dropped > 0:
-            print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
-        if not subjects_sorted:
-            raise ValueError("剔除缺失被试后无有效被试。")
+            raise ValueError("联合分析未找到完整刺激集合。")
+    else:
+        keys = common_stimulus_keys(df, subjects_sorted, min_coverage=min_coverage)
+        if not keys:
+            raise ValueError("没有满足覆盖率阈值的公共 stimulus_content。")
+        if ensure_complete_keys:
+            keys = filter_keys_complete(df, root, subjects_sorted, keys)
+            if not keys:
+                raise ValueError("剔除缺失刺激后无可用公共 stimulus_content。")
+        max_missing = int(max_missing_stimuli)
+        if max_missing >= 0:
+            before = len(subjects_sorted)
+            subjects_sorted = filter_subjects_by_missing(
+                df,
+                root,
+                subjects_sorted,
+                keys,
+                max_missing,
+            )
+            dropped = before - len(subjects_sorted)
+            if dropped > 0:
+                print(f"  - 已剔除 {dropped} 个缺失过多的被试 (max_missing={max_missing})")
+            if not subjects_sorted:
+                raise ValueError("剔除缺失被试后无有效被试。")
     atlas_label_used = atlas_label
 
     if _is_gifti(atlas_label):
@@ -800,6 +838,7 @@ def main() -> None:
         ensure_complete_keys=bool(preset.ensure_complete_keys),
         max_missing_stimuli=int(preset.max_missing_stimuli),
         require_both_tasks=bool(preset.require_both_tasks),
+        expected_stimuli_per_task=int(preset.expected_stimuli_per_task),
         n_perm=int(preset.n_perm),
         seed=int(preset.seed),
         normalize_models=bool(preset.normalize_models),

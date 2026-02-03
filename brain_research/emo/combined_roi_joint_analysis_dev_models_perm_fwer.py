@@ -61,6 +61,7 @@ class JointPreset:
     min_coverage: float = 0.9
     ensure_complete_keys: bool = True  # 核心策略：丢刺激，保被试
     max_missing_stimuli: int = 0  # 允许每个被试缺失多少个刺激 (建议为0)
+    expected_stimuli_per_task: int = 21
     n_perm: int = 5000  # 默认 5000 次
     seed: int = 42
     normalize_models: bool = True
@@ -112,6 +113,9 @@ PRESETS: Dict[str, JointPreset] = {
         analysis_mode="both",
     )
 }
+
+
+JOINT_TASKS = ("EMO", "SOC")
 
 
 # ================= 辅助函数：年龄与被试解析 =================
@@ -222,10 +226,35 @@ def filter_dataframe(df: pd.DataFrame, task: str, condition_group: str) -> pd.Da
     return df
 
 
+def subjects_with_complete_joint_tasks(
+    df: pd.DataFrame,
+    expected_stimuli_per_task: int,
+    spec_name: str,
+) -> Set[str]:
+    df = df[df["task"].isin(JOINT_TASKS)].copy()
+    task_counts = df.groupby("task")["stimulus_content"].nunique()
+    for task in JOINT_TASKS:
+        if task not in task_counts.index:
+            raise ValueError(f"{spec_name}: 联合分析缺失任务 {task} 数据，无法继续。")
+        task_unique = int(task_counts.loc[task])
+        if task_unique != expected_stimuli_per_task:
+            raise ValueError(
+                f"{spec_name}: 任务 {task} 的刺激数量为 {task_unique}，"
+                f"期望为 {expected_stimuli_per_task}。"
+            )
+    counts = df.groupby(["subject", "task"])["stimulus_content"].nunique().unstack(fill_value=0)
+    valid = counts[
+        (counts.get("EMO", 0) == expected_stimuli_per_task)
+        & (counts.get("SOC", 0) == expected_stimuli_per_task)
+    ].index.astype(str)
+    return set(valid.tolist())
+
+
 def determine_subject_list(
         preset: JointPreset,
         age_map: Dict[str, float],
-        dfs: List[pd.DataFrame]
+        dfs: List[pd.DataFrame],
+        strict_joint: bool,
 ) -> List[str]:
     """
     核心逻辑：确定最终被试列表。
@@ -255,15 +284,26 @@ def determine_subject_list(
             print("  [Info] 未检测到现有的 subject_order 文件，将通过交集计算。")
 
     subjects_final = []
+    available_sets = [set(d["subject"].unique()) for d in dfs]
+    common_available = set.intersection(*available_sets)
+
+    if strict_joint:
+        complete_sets = []
+        for spec, df in zip(preset.specs, dfs):
+            complete_sets.append(
+                subjects_with_complete_joint_tasks(
+                    df,
+                    expected_stimuli_per_task=preset.expected_stimuli_per_task,
+                    spec_name=spec.name,
+                )
+            )
+        common_available = common_available & set.intersection(*complete_sets)
 
     if target_order_path and target_order_path.exists():
         print(f"  [Process] 使用外部文件限制被试范围: {target_order_path}")
         ordered_subs = load_subject_order_list(target_order_path)
 
         # 验证这些被试是否在所有 aligned CSV 中都存在
-        available_sets = [set(d["subject"].unique()) for d in dfs]
-        common_available = set.intersection(*available_sets)
-
         valid_subs = [s for s in ordered_subs if s in common_available]
 
         # 过滤无年龄数据的
@@ -276,11 +316,8 @@ def determine_subject_list(
 
     else:
         print("  [Process] 计算所有输入数据的被试交集...")
-        sets = [set(d["subject"].unique()) for d in dfs]
-        common = set.intersection(*sets)
-
         # 按年龄排序
-        sorted_common = sorted(list(common), key=lambda s: (age_map.get(s, np.nan), s))
+        sorted_common = sorted(list(common_available), key=lambda s: (age_map.get(s, np.nan), s))
         # 过滤无年龄
         subjects_final = [s for s in sorted_common if np.isfinite(age_map.get(s, np.nan))]
 
@@ -297,6 +334,7 @@ def load_beta_data(
         subjects: List[str],
         lss_root: Path,
         preset: JointPreset,
+        strict_joint: bool,
 ) -> Optional[np.ndarray]:
     """
     加载数据并展平，返回 (n_sub, n_features)。
@@ -306,16 +344,23 @@ def load_beta_data(
 
     # --- 1. 确定公共刺激 ---
     df_sub = df[df["subject"].isin(subjects)].copy()
-    counts = df_sub["stimulus_content"].value_counts()
+    if strict_joint:
+        df_sub = df_sub[df_sub["task"].isin(JOINT_TASKS)].copy()
+        keys = sorted(df_sub["stimulus_content"].unique().tolist())
+        if not keys:
+            print(f"  [Skip] {spec.name}: 联合分析未找到刺激集合。")
+            return None
+    else:
+        counts = df_sub["stimulus_content"].value_counts()
 
-    # 刺激覆盖率阈值
-    threshold = int(len(subjects) * preset.min_coverage)
-    keys = counts[counts >= threshold].index.tolist()
-    keys.sort()
+        # 刺激覆盖率阈值
+        threshold = int(len(subjects) * preset.min_coverage)
+        keys = counts[counts >= threshold].index.tolist()
+        keys.sort()
 
-    if not keys:
-        print(f"  [Skip] {spec.name}: 无公共刺激 (Threshold={threshold})。")
-        return None
+        if not keys:
+            print(f"  [Skip] {spec.name}: 无公共刺激 (Threshold={threshold})。")
+            return None
 
     # --- 2. 建立路径查找表 ---
     lookup = {}
@@ -324,7 +369,7 @@ def load_beta_data(
 
     # --- 3. 过滤完整性 (Ensure Complete Keys) ---
     # 策略：如果一个刺激在任何一个被试中缺失，则剔除该刺激，以保证被试数量不减少。
-    if preset.ensure_complete_keys:
+    if preset.ensure_complete_keys and not strict_joint:
         valid_keys = []
         for k in keys:
             # 检查是否所有 subjects 都有这个 key 的文件
@@ -369,9 +414,8 @@ def load_beta_data(
     for s in subjects:
         for k in keys:
             if not (lookup.get((s, k)) and lookup[(s, k)].exists()):
-                # 如果代码走到这里，说明 ensure_complete_keys=False 或者逻辑有漏网之鱼
                 msg = f"被试 {s} 缺失刺激 {k}。当前配置不允许缺失(或已通过keys过滤)。"
-                if preset.max_missing_stimuli == 0:
+                if strict_joint or preset.max_missing_stimuli == 0:
                     raise FileNotFoundError(msg)
 
     for s in tqdm(subjects, leave=False, desc=f"Reading {spec.name}"):
@@ -502,8 +546,13 @@ def run_analysis(preset: JointPreset):
             raise ValueError(f"{spec.name} data is empty after filtering!")
         dfs.append(df)
 
+    strict_joint = (
+        not preset.task
+        and all(set(JOINT_TASKS).issubset(set(df["task"].unique())) for df in dfs)
+    )
+
     # 3. 确定统一被试列表 (关键步骤)
-    subjects = determine_subject_list(preset, age_map, dfs)
+    subjects = determine_subject_list(preset, age_map, dfs, strict_joint)
 
     if len(subjects) < 10:
         print("❌ 有效被试过少 (<10)，终止分析。")
@@ -529,7 +578,7 @@ def run_analysis(preset: JointPreset):
     for spec, df in zip(preset.specs, dfs):
         print(f"\n--- Processing {spec.name} [{spec.space}] ---")
         try:
-            data_mat = load_beta_data(spec, df, subjects, lss_root, preset)
+            data_mat = load_beta_data(spec, df, subjects, lss_root, preset, strict_joint)
         except Exception as e:
             print(f"⚠️ {spec.name} 数据加载失败: {e}")
             continue
