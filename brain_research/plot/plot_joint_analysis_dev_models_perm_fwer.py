@@ -95,7 +95,7 @@ def plot_heatmap(
 ) -> List[Path]:
     df = pd.read_csv(result_csv)
     p_col = None
-    for c in ["p_fwer", "p_fwer_one_tailed", "p_fwer_two_tailed"]:
+    for c in ["p_fwer", "p_fwer_one_tailed", "p_fwer_model_wise"]:
         if c in df.columns:
             p_col = c
             break

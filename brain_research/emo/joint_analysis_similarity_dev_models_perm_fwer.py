@@ -2,11 +2,13 @@
 对8个被试×被试相似性矩阵（全脑L/R + 3 ROI×L/R）做联合分析：
 - 统计量：相似性矩阵上三角向量 与 3个发育模型上三角向量 的 Pearson r
 - 显著性：对年龄标签做置换（label permutation）得到经验 p 值
-- 多重比较：Westfall–Young max-statistic，在同一批置换中控制FWER
-- 修正与改进：
-    1. 自动寻找 subject_order 文件（优先查找 subject_order_surface_L.csv），无需手动指定。
+- 多重比较：Westfall–Young max-statistic (按模型分组校正)
+    - 修改点：FWER 校正在**每个模型内部**独立进行 (Model-wise correction)。
+    - 即：NN 模型内部校正 8 个矩阵，Conv 内部校正 8 个矩阵...
+- 其他特性：
+    1. 自动寻找 subject_order 文件。
     2. 只关注正效应（单侧检验）。
-    3. 默认置换次数改为 5000。
+    3. 默认置换次数 5000。
 """
 
 from __future__ import annotations
@@ -181,21 +183,12 @@ def resolve_automatic_subject_list(
     similarity_dfs: Sequence[pd.DataFrame],
     input_order_path: Optional[Path]
 ) -> List[str]:
-    """
-    仿照 Script A (joint_analysis_similarity_dev_models.py) 的逻辑确定被试列表：
-    1. 如果用户手动指定了文件，用它。
-    2. 如果没指定，尝试在 final_dir 找 subject_order_surface_L.csv (最可能的标准文件)。
-    3. 如果还没找到，尝试找 subject_order_surface_R.csv。
-    4. 如果完全找不到 order 文件，使用 similarity_surface_L_AgeSorted.csv 的索引 (Script A 的保底逻辑)。
-    """
-
     # 1. 确定要使用的 Order 文件路径
     target_order_path: Optional[Path] = None
 
     if input_order_path is not None:
         target_order_path = input_order_path
     else:
-        # 自动寻找
         candidate_l = final_dir / "subject_order_surface_L.csv"
         candidate_r = final_dir / "subject_order_surface_R.csv"
 
@@ -214,15 +207,11 @@ def resolve_automatic_subject_list(
     if target_order_path and target_order_path.exists():
         base_subjects = load_subject_order_list(target_order_path)
     else:
-        # 保底：使用 surface_L 的矩阵索引 (假设它是列表中的第一个或主要矩阵)
-        # 注意：expected_similarity_inputs 将 surface_L 放在第一个
-        print("使用 surface_L 相似性矩阵的索引作为被试基准 (与 Script A 逻辑一致)。")
+        print("使用 surface_L 相似性矩阵的索引作为被试基准。")
         base_subjects = similarity_dfs[0].index.astype(str).tolist()
 
-    # 3. 与所有矩阵的实际存在被试取交集 (确保安全)
-    # 虽然 Script A 是直接用，但这里涉及多个 ROI 矩阵，防止 ROI 矩阵缺人导致崩溃
+    # 3. 与所有矩阵的实际存在被试取交集
     available_in_all = set(intersect_subjects(similarity_dfs))
-
     final_subjects = [s for s in base_subjects if s in available_in_all]
 
     removed_count = len(base_subjects) - len(final_subjects)
@@ -242,7 +231,6 @@ def prepare_similarity_vectors(
     names = []
     for item in inputs:
         df = load_similarity_df(item.path)
-        # 严格按照 subjects 的顺序索引
         df = df.loc[subjects, subjects]
         mat = df.to_numpy(dtype=np.float32, copy=False)
         v = mat[iu, ju]
@@ -272,17 +260,14 @@ def run_fwer_permutation(
     # 加载年龄
     age_map = load_subject_ages_map(subject_info_path)
 
-    # 确定被试列表 (自动逻辑)
+    # 确定被试列表
     subjects = resolve_automatic_subject_list(
         final_dir_for_auto_order,
         similarity_dfs,
         subject_order_path
     )
 
-    # 过滤掉没有年龄数据的
     subjects = [s for s in subjects if s in age_map and np.isfinite(age_map[s])]
-
-    # 按年龄排序 (为了可视化和模型构建的一致性)
     subjects.sort(key=lambda sid: (age_map.get(sid, np.nan), sid))
 
     if len(subjects) < 10:
@@ -294,7 +279,7 @@ def run_fwer_permutation(
     out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"subject": subjects, "age": ages}).to_csv(out_dir / "subjects_perm_analysis.csv", index=False)
 
-    # 提取相似性向量
+    # 提取相似性向量 (n_mats, n_pairs)
     S_z, matrix_names, n_pairs = prepare_similarity_vectors(inputs, subjects)
     n_mats = S_z.shape[0]
 
@@ -304,12 +289,16 @@ def run_fwer_permutation(
     model_names = ("M_nn", "M_conv", "M_div")
     model_vecs_obs = (models_obs.nn, models_obs.conv, models_obs.div)
 
+    # -------------------------------------------------------------------------
     # 计算观测值相关系数 (r_obs)
+    # 注意：这里的 r_obs 列表结构是 [Model1_Mat1, Model1_Mat2... Model1_MatN, Model2_Mat1...]
+    # 这对后续按模型分组校正至关重要
+    # -------------------------------------------------------------------------
     r_obs = []
     tests = []
     for mi, mname in enumerate(model_names):
         mvec = model_vecs_obs[mi]
-        # Pearson correlation ~ dot product of z-scores / n
+        # Pearson r
         r_mats = (S_z @ mvec) / float(n_pairs)
         for si in range(n_mats):
             tests.append({"matrix": matrix_names[si], "model": mname})
@@ -320,6 +309,7 @@ def run_fwer_permutation(
 
     # --- Permutation Test (One-sided, Positive Effect) ---
     print(f"开始置换检验 (N={n_perm}, 单侧-正效应)...")
+    print(f"校正策略: Model-wise FWER (在每个发育模型内部独立校正)")
 
     count_raw = np.zeros(n_tests, dtype=np.int64)
     count_fwer = np.zeros(n_tests, dtype=np.int64)
@@ -332,10 +322,11 @@ def run_fwer_permutation(
         perm = rng.permutation(len(subjects))
         ages_p = ages[perm]
 
-        # 仅重构模型矩阵
+        # 重构置换后的模型
         models_p = build_dev_model_vectors(ages_p, iu, ju, normalize=normalize_models)
         model_vecs_p = (models_p.nn, models_p.conv, models_p.div)
 
+        # 计算当前置换下所有 Matrix x Model 的相关值
         r_perm_all = np.empty(n_tests, dtype=np.float32)
         offset = 0
         for mvec in model_vecs_p:
@@ -343,12 +334,31 @@ def run_fwer_permutation(
             r_perm_all[offset:offset + n_mats] = r_mats.astype(np.float32, copy=False)
             offset += n_mats
 
-        # 1. 原始 P 值 (单侧: Count r_perm >= r_obs)
+        # 1. 原始 P 值 (无校正)
         count_raw += (r_perm_all >= r_obs_arr)
 
-        # 2. FWER 校正 (Max-Statistic for Positive Effect)
-        max_stat = float(r_perm_all.max(initial=-1.0))
-        count_fwer += (max_stat >= r_obs_arr)
+        # 2. FWER 校正 (Model-wise Max Statistic)
+        # 针对每个模型（包含 n_mats 个矩阵），计算该模型下的最大统计量
+        # 然后只用这个最大值去比较该模型下的观测值
+        offset = 0
+        for mi in range(len(model_names)):
+            start_idx = offset
+            end_idx = offset + n_mats
+
+            # 当前模型下的置换统计量 (长度为 n_mats)
+            r_perm_subset = r_perm_all[start_idx:end_idx]
+
+            # 当前模型下的观测统计量
+            r_obs_subset = r_obs_arr[start_idx:end_idx]
+
+            # 计算该模型内部的最大统计量
+            max_stat_model = float(r_perm_subset.max(initial=-1.0))
+
+            # 更新该模型对应测试的 FWER 计数
+            # (如果该模型下的最大噪音 >= 观测值，则计数)
+            count_fwer[start_idx:end_idx] += (max_stat_model >= r_obs_subset)
+
+            offset += n_mats
 
     # 计算 P 值
     p_perm = (count_raw + 1.0) / (float(n_perm) + 1.0)
@@ -363,7 +373,7 @@ def run_fwer_permutation(
                 "model": meta["model"],
                 "r_obs": float(r_obs_arr[i]),
                 "p_perm_one_tailed": float(p_perm[i]),
-                "p_fwer_one_tailed": float(p_fwer[i]),
+                "p_fwer_model_wise": float(p_fwer[i]), # 列名变更为 model_wise 以区分
                 "n_subjects": int(len(subjects)),
                 "n_pairs": int(n_pairs),
                 "n_perm": int(n_perm),
@@ -372,22 +382,22 @@ def run_fwer_permutation(
             }
         )
 
-    res_df = pd.DataFrame(rows).sort_values(["matrix", "model"])
-    out_path = out_dir / "joint_analysis_dev_models_perm_fwer_onesided.csv"
+    res_df = pd.DataFrame(rows).sort_values(["model", "matrix"]) # 按模型排序更易读
+    out_path = out_dir / "joint_analysis_dev_models_perm_fwer.csv"
     res_df.to_csv(out_path, index=False)
     return out_path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="相似性矩阵与发育模型的置换检验 + FWER 校正 (修正版: 自动识别被试)")
-    p.add_argument("--final-dir", type=Path, default=DEFAULT_FINAL_DIR, help="全脑相似性矩阵目录 (也是寻找被试顺序文件的默认目录)")
+    p = argparse.ArgumentParser(description="相似性矩阵与发育模型的置换检验 + Model-wise FWER 校正")
+    p.add_argument("--final-dir", type=Path, default=DEFAULT_FINAL_DIR, help="全脑相似性矩阵目录")
     p.add_argument("--roi-dir", type=Path, default=DEFAULT_ROI_DIR, help="ROI 相似性矩阵目录")
     p.add_argument("--subject-info", type=Path, default=DEFAULT_SUBJECT_INFO_PATH, help="被试信息表路径")
     p.add_argument(
         "--subject-order",
         type=Path,
         default=None,
-        help="[可选] 手动指定 subject_order 文件。如果不提供，将自动在 final-dir 中查找 subject_order_surface_L.csv"
+        help="[可选] 手动指定 subject_order 文件"
     )
     p.add_argument("--out-dir", type=Path, default=Path("./joint_perm_fwer_out"), help="输出目录")
     p.add_argument("--n-perm", type=int, default=5000, help="置换次数 (默认 5000)")
@@ -401,7 +411,7 @@ def main() -> None:
     args = build_arg_parser().parse_args()
 
     print(f"设定置换次数: {args.n_perm}")
-    print(f"设定检验方向: 单侧 (One-sided, Positive Effect Only)")
+    print(f"设定检验方向: 单侧 (One-sided, Positive Effect)")
 
     rois = [x.strip() for x in str(args.rois).split(",") if x.strip()]
     inputs = expected_similarity_inputs(args.final_dir, args.roi_dir, rois)
