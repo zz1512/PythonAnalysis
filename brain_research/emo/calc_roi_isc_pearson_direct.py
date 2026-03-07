@@ -229,9 +229,14 @@ def get_subject_roi_vector(
             # 简单的 NaN 处理
             if np.isnan(roi_data).any():
                 roi_data = np.nan_to_num(roi_data)
-                
+            # 标准化：去均值并除以标准差，消除量纲影响
+            std_val = np.std(roi_data)
+            if std_val > 0:
+                roi_data = (roi_data - np.mean(roi_data)) / std_val
+            else:
+                roi_data = roi_data - np.mean(roi_data)
             feats.append(roi_data)
-            
+
         except Exception as e:
             logger.error(f"加载失败 {subject} {stim}: {e}")
             return None
