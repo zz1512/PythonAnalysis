@@ -129,12 +129,12 @@ def reclassify_events(df):
 
 def create_lss_events(target_idx, all_events, event_name_col="Choice"):
     """
-    LSS 核心：Target vs Others（完全匹配你的 E-Prime 点分隔列名）
+    LSS 核心：Target vs Others（使用 Observe/Feeling 时间列）
 
     参数说明：
     - target_idx: 目标试次的索引（list/array，如 [3,5,7]）
-    - all_events: E-Prime 行为数据 DataFrame（必须包含点分隔列名，如 `Choice.OnsetTime`/`Choice.RTTime`）
-    - event_name_col: 事件名称列名（如 'event_name'，值为 'Choice'/'Face' 等，用于匹配屏幕名称）
+    - all_events: E-Prime 行为数据 DataFrame（必须包含 `Observe.OnsetTime` 与 `Feeling.FinishTime`）
+    - event_name_col: 保留参数，仅为兼容旧调用（当前不用于时间提取）
     """
     lss_df = all_events.copy()
 
@@ -143,45 +143,28 @@ def create_lss_events(target_idx, all_events, event_name_col="Choice"):
     lss_df.loc[target_idx, "trial_type"] = "LSS_TARGET"
 
     # --------------------------
-    # 核心：从事件名称提取屏幕名称（如 'Choice'/'Face'）
-    # --------------------------
-    def get_screen_events(event_name):
-        """从事件名称中提取屏幕名称（如事件名是 'emo_Choice' → 提取 'Choice'）"""
-        if pd.isna(event_name):
-            raise ValueError("事件名称为空，请检查数据")
-        parts = str(event_name).split('_')
-        # 取最后一部分作为屏幕名称（适配 'emo_Choice' → 'Choice'，'emo_Face' → 'Face'）
-        return parts[-1]
-
-    # --------------------------
-    # 2. 提取 Onset（匹配点分隔列名：{screen}.OnsetTime）
+    # 2. 提取 Onset（固定使用 Observe.OnsetTime）
     # --------------------------
     def get_onset(row):
-        screen = event_name_col
-        onset_field = f"{screen}.OnsetTime"  # 如 'Choice.OnsetTime'
+        onset_field = "Observe.OnsetTime"
         if onset_field not in lss_df.columns:
             raise ValueError(f"数据缺少列：{onset_field}（请检查 E-Prime 导出的列名）")
         # 毫秒转秒
         return row[onset_field] / 1000
 
     # --------------------------
-    # 3. 提取 Duration（严格匹配你的列名：Choice 用 RTTime，非 Choice 用 Duration）
+    # 3. 提取 Duration（Feeling.FinishTime - Observe.OnsetTime）
     # --------------------------
     def get_duration(row):
-        screen = event_name_col
-        if screen == "Choice":
-            # Choice 事件：用 Choice.RTTime 作为 duration（完全匹配你的截图列名）
-            duration_field = f"{screen}.RTTime"
-        else:
-            # 非 Choice 事件：用 {screen}.Duration（如 'Face.Duration'）
-            duration_field = f"{screen}.Duration"
+        finish_field = "Feeling.FinishTime"
+        onset_field = "Observe.OnsetTime"
 
-        if duration_field not in lss_df.columns:
-            raise ValueError(
-                f"数据缺少列：{duration_field}（Choice 事件需 {screen}.RTTime，非 Choice 需 {screen}.Duration）")
+        for col in (finish_field, onset_field):
+            if col not in lss_df.columns:
+                raise ValueError(f"数据缺少列：{col}（请检查 E-Prime 导出的列名）")
 
-        # 毫秒转秒 + 异常值处理
-        duration_ms = row[duration_field]
+        # 毫秒差值 + 异常值处理
+        duration_ms = row[finish_field] - row[onset_field]
         if pd.isna(duration_ms) or duration_ms <= 0 or duration_ms == -99999:
             return 0  # 处理无效值（如你的截图里的 -99999）
         return duration_ms / 1000
