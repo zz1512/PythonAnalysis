@@ -110,9 +110,22 @@ def process_one_index(index_file: Path, lss_root: Path, out_dir: Path, stim_col:
         preview += ", ..."
     print(f"[条件] {index_file.name} 从 {audit_file.name}:{condition_col} 提取 {len(valid_conditions)} 个条件: {preview}")
 
-    df = df.dropna(subset=[stim_col]).copy()
-    stim_values = df[stim_col].astype("string").str.strip()
-    df = df[stim_values.isin(valid_conditions)].copy()
+    if "label" in df.columns:
+        label_series = df["label"].astype("string").str.strip()
+        matched_condition = pd.Series(pd.NA, index=df.index, dtype="string")
+        for cond in sorted(valid_conditions, key=len, reverse=True):
+            starts_with_cond = label_series.str.startswith(cond, na=False)
+            matched_condition = matched_condition.mask(matched_condition.isna() & starts_with_cond, cond)
+
+        df = df.assign(_matched_condition=matched_condition)
+        df = df[df["_matched_condition"].notna()].copy()
+        df[stim_col] = df["_matched_condition"]
+    else:
+        print(f"[提示] {index_file.name} 缺少 label 列，回退为使用 {stim_col} 列进行条件过滤")
+        df = df.dropna(subset=[stim_col]).copy()
+        stim_values = df[stim_col].astype("string").str.strip()
+        df = df[stim_values.isin(valid_conditions)].copy()
+
     if task_filter.upper() != "ALL":
         df = df[df["task"].astype(str).str.upper() == task_filter.upper()].copy()
 
