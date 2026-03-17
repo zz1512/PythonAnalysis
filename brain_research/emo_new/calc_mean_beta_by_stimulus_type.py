@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import nibabel as nib
 import numpy as np
@@ -59,16 +59,18 @@ def infer_file_path(row: pd.Series, lss_root: Path) -> Path:
     return p1
 
 
-def load_beta(path: Path, is_volume: bool) -> np.ndarray:
+def load_beta(path: Path, is_volume: bool) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     if is_volume:
-        return image.load_img(str(path)).get_fdata(dtype=np.float32)
-    return surface.load_surf_data(str(path)).astype(np.float32)
+        img = image.load_img(str(path))
+        return img.get_fdata(dtype=np.float32), np.asarray(img.affine)
+    return surface.load_surf_data(str(path)).astype(np.float32), None
 
 
-def save_mean_beta(arr: np.ndarray, out_path: Path, is_volume: bool) -> None:
+def save_mean_beta(arr: np.ndarray, out_path: Path, is_volume: bool, affine: Optional[np.ndarray]) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if is_volume:
-        nib.Nifti1Image(arr.astype(np.float32), affine=np.eye(4)).to_filename(str(out_path))
+        aff = affine if affine is not None else np.eye(4)
+        nib.Nifti1Image(arr.astype(np.float32), affine=aff).to_filename(str(out_path))
         return
     da = nib.gifti.GiftiDataArray(arr.reshape(-1).astype(np.float32), intent="NIFTI_INTENT_ESTIMATE")
     nib.save(nib.gifti.GiftiImage(darrays=[da]), str(out_path))
@@ -99,12 +101,16 @@ def process_one_index(index_file: Path, lss_root: Path, out_dir: Path, stim_col:
     for (sub, stim_value), g in grouped:
         stim_key = sanitize_token(stim_value)
         arrs = []
+        affine = None
         for _, row in g.iterrows():
             p = infer_file_path(row, lss_root)
             if not p.exists():
                 continue
             try:
-                arrs.append(load_beta(p, is_volume=is_volume))
+                arr, aff = load_beta(p, is_volume=is_volume)
+                arrs.append(arr)
+                if affine is None and aff is not None:
+                    affine = aff
             except Exception:
                 continue
 
@@ -113,7 +119,7 @@ def process_one_index(index_file: Path, lss_root: Path, out_dir: Path, stim_col:
 
         mean_beta = np.mean(np.stack(arrs, axis=0), axis=0)
         out_file = out_dir / scenario / stim_key / str(sub) / f"mean_beta{ext}"
-        save_mean_beta(mean_beta, out_file, is_volume=is_volume)
+        save_mean_beta(mean_beta, out_file, is_volume=is_volume, affine=affine)
 
         records.append(
             {
