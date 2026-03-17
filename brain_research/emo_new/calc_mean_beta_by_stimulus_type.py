@@ -82,13 +82,27 @@ def process_one_index(index_file: Path, lss_root: Path, out_dir: Path, stim_col:
     ext = ".nii.gz" if is_volume else ".gii"
 
     df = pd.read_csv(index_file)
-    required = {"subject", "file", "task", stim_col}
+    condition_col = "raw_condition"
+    required = {"subject", "file", "task", stim_col, condition_col}
     if not required.issubset(df.columns):
         missing = required - set(df.columns)
         print(f"[跳过] {index_file.name} 缺少列: {sorted(missing)}")
         return
 
+    condition_series = df[condition_col].astype("string").str.strip()
+    valid_conditions = sorted({c for c in condition_series.dropna().tolist() if c})
+    if not valid_conditions:
+        print(f"[跳过] {index_file.name} 的 {condition_col} 无有效条件")
+        return
+
+    preview = ", ".join(valid_conditions[:10])
+    if len(valid_conditions) > 10:
+        preview += ", ..."
+    print(f"[条件] {index_file.name} 从 {condition_col} 提取 {len(valid_conditions)} 个条件: {preview}")
+
     df = df.dropna(subset=[stim_col]).copy()
+    stim_values = df[stim_col].astype("string").str.strip()
+    df = df[stim_values.isin(valid_conditions)].copy()
     if task_filter.upper() != "ALL":
         df = df[df["task"].astype(str).str.upper() == task_filter.upper()].copy()
 
