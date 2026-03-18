@@ -67,6 +67,15 @@ def _is_non_decreasing(x: np.ndarray) -> bool:
     return bool(np.all(np.diff(x) >= -1e-12))
 
 
+def _has_required_columns(df: pd.DataFrame, required: Sequence[str]) -> Tuple[bool, List[str]]:
+    miss = [c for c in required if c not in df.columns]
+    return len(miss) == 0, miss
+
+
+def _safe_series_stripped(df: pd.DataFrame, col: str) -> pd.Series:
+    return df[col].astype(str).str.strip()
+
+
 def _check_corr_cube_properties(
     cube: np.ndarray,
     sample_size: int,
@@ -119,6 +128,66 @@ def _summarize_npz_feature_dims(npz: np.lib.npyio.NpzFile, keys: Sequence[str]) 
     if not widths:
         return 0, 0, 0.0
     return int(min(widths)), int(max(widths)), float(np.median(np.asarray(widths, dtype=np.float64)))
+
+
+def check_emo_new_step0_mean_beta(avg_dir: Path, rows: List[CheckRow]) -> Dict[str, Dict[str, set[str]]]:
+    """
+    返回结构：
+    {
+      "L": {stimulus_type: {subject1, subject2, ...}},
+      "R": {stimulus_type: {subject1, subject2, ...}},
+    }
+    """
+    stage = "emo_new_step0_mean_beta"
+    out: Dict[str, Dict[str, set[str]]] = {"L": {}, "R": {}}
+
+    idx_files = {
+        "L": avg_dir / "avg_beta_index_surface_L.csv",
+        "R": avg_dir / "avg_beta_index_surface_R.csv",
+    }
+    miss = [str(p) for p in idx_files.values() if not p.exists()]
+    rows.append(CheckRow(stage, "emo_new", "required_index_files", len(miss) == 0, "missing=" + (", ".join(miss) if miss else "None")))
+    if miss:
+        return out
+
+    required_cols = ["subject", "stimulus_type", "n_trials", "file"]
+    for hemi, path in idx_files.items():
+        scope = f"emo_new/{hemi}"
+        df = pd.read_csv(path)
+
+        ok_cols, miss_cols = _has_required_columns(df, required_cols)
+        rows.append(CheckRow(stage, scope, "required_columns", ok_cols, f"missing={miss_cols}" if miss_cols else "ok"))
+        if not ok_cols:
+            continue
+
+        rows.append(CheckRow(stage, scope, "non_empty_index", len(df) > 0, f"n_rows={len(df)}"))
+        if df.empty:
+            continue
+
+        subjects = _safe_series_stripped(df, "subject")
+        stimuli = _safe_series_stripped(df, "stimulus_type")
+        n_trials = pd.to_numeric(df["n_trials"], errors="coerce")
+        files = _safe_series_stripped(df, "file")
+
+        rows.append(CheckRow(stage, scope, "subject_non_empty", bool((subjects.str.len() > 0).all()), f"n_subject={subjects.nunique()}"))
+        rows.append(CheckRow(stage, scope, "stimulus_non_empty", bool((stimuli.str.len() > 0).all()), f"n_stim={stimuli.nunique()}"))
+        rows.append(CheckRow(stage, scope, "n_trials_positive", bool((n_trials > 0).all()), f"n_invalid={(~(n_trials > 0)).sum()}"))
+
+        pair_dup = int(df.duplicated(subset=["subject", "stimulus_type"]).sum())
+        rows.append(CheckRow(stage, scope, "unique_subject_stimulus_pair", pair_dup == 0, f"duplicate_pairs={pair_dup}"))
+
+        exist_flags = files.map(lambda x: Path(x).exists())
+        exist_ratio = float(exist_flags.mean()) if len(exist_flags) > 0 else 0.0
+        rows.append(CheckRow(stage, scope, "indexed_mean_beta_file_exists_ratio", exist_ratio >= 0.999, f"exists_ratio={exist_ratio:.6f}"))
+
+        grp = df.groupby("stimulus_type", dropna=False)["subject"].nunique()
+        out[hemi] = {
+            str(stim).strip(): set(grp_sub["subject"].astype(str).str.strip().tolist())
+            for stim, grp_sub in df.groupby("stimulus_type")
+        }
+        rows.append(CheckRow(stage, scope, "stimulus_subject_coverage_nonzero", bool((grp > 0).all()), f"n_stim={len(grp)}"))
+
+    return out
 
 
 def check_emo(root: Path, rows: List[CheckRow], sample_size: int, rng: np.random.Generator, diag_tol: float, sym_tol: float) -> None:
@@ -181,7 +250,16 @@ def check_emo(root: Path, rows: List[CheckRow], sample_size: int, rng: np.random
     rows.append(CheckRow("emo_step2_isc", scope, "age_non_decreasing", _is_non_decreasing(ages), f"n_age={ages.size}"))
 
 
-def check_emo_new(root: Path, rows: List[CheckRow], sample_size: int, rng: np.random.Generator, diag_tol: float, sym_tol: float, stimuli: Optional[List[str]]) -> None:
+def check_emo_new(
+    root: Path,
+    rows: List[CheckRow],
+    sample_size: int,
+    rng: np.random.Generator,
+    diag_tol: float,
+    sym_tol: float,
+    stimuli: Optional[List[str]],
+    step0_subjects_by_stim: Dict[str, Dict[str, set[str]]],
+) -> None:
     base = root / "by_stimulus"
     if not base.exists():
         rows.append(CheckRow("emo_new", "emo_new", "by_stimulus_dir", False, f"目录不存在: {base}"))
@@ -233,6 +311,20 @@ def check_emo_new(root: Path, rows: List[CheckRow], sample_size: int, rng: np.ra
             fr = float(np.mean(finite_ratios)) if finite_ratios else 0.0
             rows.append(CheckRow("emo_new_step1_beta", scope, "mean_finite_ratio_over_rois", fr >= 0.999, f"mean_finite_ratio={fr:.6f}"))
 
+        step0_l = step0_subjects_by_stim.get("L", {}).get(stim, set())
+        step0_r = step0_subjects_by_stim.get("R", {}).get(stim, set())
+        if step0_l and step0_r:
+            step0_both = step0_l & step0_r
+            rows.append(
+                CheckRow(
+                    "emo_new_step1_beta",
+                    scope,
+                    "subjects_subset_of_step0_mean_beta",
+                    set(subs).issubset(step0_both),
+                    f"step1_n={len(subs)}, step0_lr_intersection_n={len(step0_both)}",
+                )
+            )
+
         isc = stim_dir / "roi_isc_spearman_by_age.npy"
         isc_rois = stim_dir / "roi_isc_spearman_by_age_rois.csv"
         isc_subs = stim_dir / "roi_isc_spearman_by_age_subjects_sorted.csv"
@@ -262,10 +354,61 @@ def check_emo_new(root: Path, rows: List[CheckRow], sample_size: int, rng: np.ra
         ages = _safe_ages(isc_subs)
         rows.append(CheckRow("emo_new_step2_isc", scope, "age_non_decreasing", _is_non_decreasing(ages), f"n_age={ages.size}"))
 
+        # Step3: development model permutation + FWER
+        dev_csv = stim_dir / "roi_isc_dev_models_perm_fwer.csv"
+        dev_rois = stim_dir / "roi_isc_dev_models_perm_fwer_rois.csv"
+        dev_subs = stim_dir / "roi_isc_dev_models_perm_fwer_subjects_sorted.csv"
+        req3 = [dev_csv, dev_rois, dev_subs]
+        miss3 = [str(p) for p in req3 if not p.exists()]
+        rows.append(CheckRow("emo_new_step3_dev_models", scope, "required_files", len(miss3) == 0, "missing=" + (", ".join(miss3) if miss3 else "None")))
+        if not miss3:
+            ddf = pd.read_csv(dev_csv)
+            d_rois = _read_list_csv(dev_rois, ["roi"])
+            d_subs = _read_list_csv(dev_subs, ["subject", "sub_id"])
+
+            req_cols = ["roi", "model", "r_obs", "p_perm_one_tailed", "p_fwer_model_wise", "n_subjects", "n_pairs", "n_perm"]
+            ok_cols, miss_cols = _has_required_columns(ddf, req_cols)
+            rows.append(CheckRow("emo_new_step3_dev_models", scope, "required_columns", ok_cols, f"missing={miss_cols}" if miss_cols else "ok"))
+            if ok_cols:
+                rows.append(
+                    CheckRow(
+                        "emo_new_step3_dev_models",
+                        scope,
+                        "expected_row_count_n_rois_x_3models",
+                        len(ddf) == len(d_rois) * 3,
+                        f"n_rows={len(ddf)}, n_rois={len(d_rois)}",
+                    )
+                )
+                rows.append(CheckRow("emo_new_step3_dev_models", scope, "model_set_is_complete", set(ddf["model"].astype(str)) == {"M_nn", "M_conv", "M_div"}, f"models={sorted(set(ddf['model'].astype(str)))}"))
+                rows.append(CheckRow("emo_new_step3_dev_models", scope, "roi_set_consistent_with_step2", set(d_rois) == set(rois2), f"step2_n={len(rois2)}, step3_n={len(d_rois)}"))
+                rows.append(CheckRow("emo_new_step3_dev_models", scope, "subjects_order_consistent_with_step2", d_subs == subs2, f"step2_n={len(subs2)}, step3_n={len(d_subs)}"))
+
+                p1 = pd.to_numeric(ddf["p_perm_one_tailed"], errors="coerce")
+                p2 = pd.to_numeric(ddf["p_fwer_model_wise"], errors="coerce")
+                rows.append(CheckRow("emo_new_step3_dev_models", scope, "p_perm_in_0_1", bool(((p1 >= 0) & (p1 <= 1)).all()), f"invalid_count={(~((p1 >= 0) & (p1 <= 1))).sum()}"))
+                rows.append(CheckRow("emo_new_step3_dev_models", scope, "p_fwer_in_0_1", bool(((p2 >= 0) & (p2 <= 1)).all()), f"invalid_count={(~((p2 >= 0) & (p2 <= 1))).sum()}"))
+                n_perm_unique = sorted(set(pd.to_numeric(ddf["n_perm"], errors="coerce").dropna().astype(int).tolist()))
+                rows.append(CheckRow("emo_new_step3_dev_models", scope, "n_perm_positive", bool(all(x > 0 for x in n_perm_unique)), f"n_perm_unique={n_perm_unique[:5]}"))
+
+        # Step4: plotting artifacts (FWER/FDR)
+        fig_dir = root / "figures"
+        rows.append(CheckRow("emo_new_step4_plot", scope, "figures_dir_exists", fig_dir.exists(), f"path={fig_dir}"))
+        if fig_dir.exists():
+            all_files = [p.name for p in fig_dir.iterdir() if p.is_file()]
+            fwer_heat = [x for x in all_files if ("emo_new_roi_isc_dev_models_sig_heatmap" in x and "fdr_" not in x and stim in x)]
+            fwer_tab = [x for x in all_files if ("emo_new_roi_isc_dev_models_sig_table" in x and "fdr_" not in x and stim in x)]
+            fdr_heat = [x for x in all_files if ("emo_new_roi_isc_dev_models_sig_heatmap" in x and "fdr_" in x and stim in x)]
+            fdr_tab = [x for x in all_files if ("emo_new_roi_isc_dev_models_sig_table" in x and "fdr_" in x and stim in x)]
+            rows.append(CheckRow("emo_new_step4_plot", scope, "fwer_heatmap_exists_for_stim", len(fwer_heat) > 0, f"n={len(fwer_heat)}"))
+            rows.append(CheckRow("emo_new_step4_plot", scope, "fwer_sig_table_exists_for_stim", len(fwer_tab) > 0, f"n={len(fwer_tab)}"))
+            rows.append(CheckRow("emo_new_step4_plot", scope, "fdr_heatmap_exists_for_stim", len(fdr_heat) > 0, f"n={len(fdr_heat)}"))
+            rows.append(CheckRow("emo_new_step4_plot", scope, "fdr_sig_table_exists_for_stim", len(fdr_tab) > 0, f"n={len(fdr_tab)}"))
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="质检 emo / emo_new 阶段输出（.npy/.npz）")
     p.add_argument("--roi-results-dir", type=Path, default=Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results"), help="结果根目录")
+    p.add_argument("--avg-dir", type=Path, default=Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results/averaged_betas_by_stimulus"), help="Step0 平均beta索引目录（含 avg_beta_index_surface_L/R.csv）")
     p.add_argument("--skip-emo", action="store_true", help="跳过 emo 链路结果检查")
     p.add_argument("--skip-emo-new", action="store_true", help="跳过 emo_new 链路结果检查")
     p.add_argument("--stimuli", type=str, default="", help="仅检查指定条件，逗号分隔（emo_new）")
@@ -298,6 +441,10 @@ def main() -> None:
         )
 
     if not bool(args.skip_emo_new):
+        step0_subjects_by_stim = check_emo_new_step0_mean_beta(
+            avg_dir=Path(args.avg_dir),
+            rows=rows,
+        )
         check_emo_new(
             root=Path(args.roi_results_dir),
             rows=rows,
@@ -306,6 +453,7 @@ def main() -> None:
             diag_tol=float(args.diag_tol),
             sym_tol=float(args.sym_tol),
             stimuli=stimuli if stimuli else None,
+            step0_subjects_by_stim=step0_subjects_by_stim,
         )
 
     if not rows:
