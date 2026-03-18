@@ -123,10 +123,9 @@ def run(avg_dir: Path, out_dir: Path, threshold_ratio: float) -> None:
 
     valid_subjects, valid_stimuli = intelligent_filter_pairs(df_l, threshold_ratio=float(threshold_ratio))
     stimuli_sorted = sorted(valid_stimuli)
-    subjects_raw = list(valid_subjects)
 
-    df_l = df_l[df_l["subject"].astype(str).isin(subjects_raw) & df_l["stimulus_type"].astype(str).isin(stimuli_sorted)].copy()
-    df_r = df_r[df_r["subject"].astype(str).isin(subjects_raw) & df_r["stimulus_type"].astype(str).isin(stimuli_sorted)].copy()
+    df_l = df_l[df_l["subject"].astype(str).isin(valid_subjects) & df_l["stimulus_type"].astype(str).isin(stimuli_sorted)].copy()
+    df_r = df_r[df_r["subject"].astype(str).isin(valid_subjects) & df_r["stimulus_type"].astype(str).isin(stimuli_sorted)].copy()
     lookup_l = build_lookup(df_l)
     lookup_r = build_lookup(df_r)
 
@@ -137,22 +136,31 @@ def run(avg_dir: Path, out_dir: Path, threshold_ratio: float) -> None:
     if len(roi_ids_l) != 100 or len(roi_ids_r) != 100:
         raise ValueError(f"ROI 数量异常: L={len(roi_ids_l)} R={len(roi_ids_r)}")
 
-    n_sub = len(subjects_raw)
-    n_stim = len(stimuli_sorted)
-    if n_sub < 3 or n_stim < 2:
-        raise ValueError(f"样本不足: n_sub={n_sub}, n_stim={n_stim}")
+    rois = [f"L_{rid}" for rid in roi_ids_l] + [f"R_{rid}" for rid in roi_ids_r]
+    out_prefix = "roi_beta_matrix_200"
+    written = []
 
-    mats_l = [np.zeros((n_sub, n_stim * int(idx.size)), dtype=np.float32) for idx in roi_idx_l]
-    mats_r = [np.zeros((n_sub, n_stim * int(idx.size)), dtype=np.float32) for idx in roi_idx_r]
+    for stim in stimuli_sorted:
+        subjects_this = sorted(
+            {
+                s
+                for s in valid_subjects
+                if (s, stim) in lookup_l
+                and (s, stim) in lookup_r
+                and lookup_l[(s, stim)].exists()
+                and lookup_r[(s, stim)].exists()
+            }
+        )
+        n_sub = len(subjects_this)
+        if n_sub < 3:
+            continue
 
-    for si, sub in enumerate(subjects_raw):
-        for ki, stim in enumerate(stimuli_sorted):
-            p_l = lookup_l.get((sub, stim))
-            p_r = lookup_r.get((sub, stim))
-            if p_l is None or not p_l.exists():
-                raise FileNotFoundError(f"缺失 beta 文件: surface_L subject={sub} stim={stim}")
-            if p_r is None or not p_r.exists():
-                raise FileNotFoundError(f"缺失 beta 文件: surface_R subject={sub} stim={stim}")
+        mats_l = [np.zeros((n_sub, int(idx.size)), dtype=np.float32) for idx in roi_idx_l]
+        mats_r = [np.zeros((n_sub, int(idx.size)), dtype=np.float32) for idx in roi_idx_r]
+
+        for si, sub in enumerate(subjects_this):
+            p_l = lookup_l[(sub, stim)]
+            p_r = lookup_r[(sub, stim)]
 
             vec_l = surface.load_surf_data(str(p_l)).astype(np.float32).reshape(-1)
             vec_r = surface.load_surf_data(str(p_r)).astype(np.float32).reshape(-1)
@@ -162,24 +170,27 @@ def run(avg_dir: Path, out_dir: Path, threshold_ratio: float) -> None:
                 raise ValueError(f"surface_R 顶点数不匹配: {sub} {stim} beta={vec_r.shape[0]} atlas={atlas_r.shape[0]}")
 
             for ri, idx in enumerate(roi_idx_l):
-                a = int(idx.size)
-                mats_l[ri][si, ki * a:(ki + 1) * a] = vec_l[idx]
+                mats_l[ri][si, :] = vec_l[idx]
             for ri, idx in enumerate(roi_idx_r):
-                a = int(idx.size)
-                mats_r[ri][si, ki * a:(ki + 1) * a] = vec_r[idx]
+                mats_r[ri][si, :] = vec_r[idx]
 
-    rois = [f"L_{rid}" for rid in roi_ids_l] + [f"R_{rid}" for rid in roi_ids_r]
-    roi_mats: Dict[str, np.ndarray] = {}
-    for i, rid in enumerate(roi_ids_l):
-        roi_mats[f"L_{rid}"] = mats_l[i]
-    for i, rid in enumerate(roi_ids_r):
-        roi_mats[f"R_{rid}"] = mats_r[i]
+        roi_mats: Dict[str, np.ndarray] = {}
+        for i, rid in enumerate(roi_ids_l):
+            roi_mats[f"L_{rid}"] = mats_l[i]
+        for i, rid in enumerate(roi_ids_r):
+            roi_mats[f"R_{rid}"] = mats_r[i]
 
-    out_prefix = "roi_beta_matrix_200"
-    np.savez_compressed(out_dir / f"{out_prefix}.npz", **roi_mats)
-    pd.DataFrame({"roi": rois}).to_csv(out_dir / f"{out_prefix}_rois.csv", index=False)
-    pd.DataFrame({"subject": subjects_raw}).to_csv(out_dir / f"{out_prefix}_subjects.csv", index=False)
-    pd.DataFrame({"stimulus_type": stimuli_sorted}).to_csv(out_dir / f"{out_prefix}_stimuli.csv", index=False)
+        stim_dir = out_dir / "by_stimulus" / stim
+        stim_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(stim_dir / f"{out_prefix}.npz", **roi_mats)
+        pd.DataFrame({"roi": rois}).to_csv(stim_dir / f"{out_prefix}_rois.csv", index=False)
+        pd.DataFrame({"subject": subjects_this}).to_csv(stim_dir / f"{out_prefix}_subjects.csv", index=False)
+        pd.DataFrame({"stimulus_type": [stim]}).to_csv(stim_dir / f"{out_prefix}_stimuli.csv", index=False)
+        written.append({"stimulus_type": stim, "n_subjects": n_sub})
+
+    if not written:
+        raise ValueError("没有任何 stimulus_type 满足条件（至少 3 名被试且 L/R 数据完整）")
+    pd.DataFrame(written).sort_values("stimulus_type").to_csv(out_dir / "roi_beta_matrix_200_by_stimulus_summary.csv", index=False)
 
 
 def main() -> None:

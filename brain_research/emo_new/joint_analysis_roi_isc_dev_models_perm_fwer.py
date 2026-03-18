@@ -93,7 +93,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def run(
+def run_one_stimulus(
     matrix_dir: Path,
     isc: Path = None,
     subjects_sorted: Path = None,
@@ -102,7 +102,7 @@ def run(
     n_perm: int = 5000,
     seed: int = 42,
     normalize_models: bool = True,
-) -> None:
+) -> pd.DataFrame:
     isc_prefix = "roi_isc_spearman_by_age"
     isc_path = isc or (matrix_dir / f"{isc_prefix}.npy")
     subs_path = subjects_sorted or (matrix_dir / f"{isc_prefix}_subjects_sorted.csv")
@@ -203,6 +203,50 @@ def run(
     out_df.to_csv(out_dir2 / f"{out_prefix}.csv", index=False)
     pd.DataFrame({"subject": subjects, "age": ages}).to_csv(out_dir2 / f"{out_prefix}_subjects_sorted.csv", index=False)
     pd.DataFrame({"roi": rois_list}).to_csv(out_dir2 / f"{out_prefix}_rois.csv", index=False)
+    return out_df
+
+
+def run(
+    matrix_dir: Path,
+    isc: Path = None,
+    subjects_sorted: Path = None,
+    rois: Path = None,
+    out_dir: Path = None,
+    n_perm: int = 5000,
+    seed: int = 42,
+    normalize_models: bool = True,
+) -> None:
+    by_stim_dir = matrix_dir / "by_stimulus"
+    if not by_stim_dir.exists():
+        raise FileNotFoundError(f"缺少目录: {by_stim_dir}")
+
+    stim_dirs = sorted([p for p in by_stim_dir.iterdir() if p.is_dir()])
+    if not stim_dirs:
+        raise FileNotFoundError(f"{by_stim_dir} 下未找到条件子目录")
+
+    records = []
+    for stim_dir in stim_dirs:
+        out_df = run_one_stimulus(
+            matrix_dir=stim_dir,
+            isc=isc,
+            subjects_sorted=subjects_sorted,
+            rois=rois,
+            out_dir=stim_dir,
+            n_perm=n_perm,
+            seed=seed,
+            normalize_models=normalize_models,
+        )
+        records.append(
+            {
+                "stimulus_type": stim_dir.name,
+                "n_rows": int(out_df.shape[0]),
+                "n_significant_fwer": int((out_df["p_fwer_model_wise"] < 0.05).sum()),
+            }
+        )
+
+    pd.DataFrame(records).sort_values("stimulus_type").to_csv(
+        matrix_dir / "roi_isc_dev_models_perm_fwer_by_stimulus_summary.csv", index=False
+    )
 
 
 def main() -> None:
