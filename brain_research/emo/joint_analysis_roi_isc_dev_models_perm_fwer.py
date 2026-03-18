@@ -68,7 +68,7 @@ def load_rois(path: Path) -> List[str]:
 
 def main() -> None:
     """主流程：读入 ROI 相关矩阵，构造模型并置换检验，输出统计结果。"""
-    ISC_MATRIX_PATH = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/roi_isc_pearson_by_age.npy")
+    ISC_MATRIX_PATH = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/roi_isc_spearman_by_age.npy")
     SUBJECTS_SORTED_PATH = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/roi_isc_spearman_by_age_subjects_sorted.csv")
     ROI_PATH = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/roi_beta_matrix_232_rois.csv")
     OUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results")
