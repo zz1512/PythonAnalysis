@@ -70,6 +70,8 @@ def load_subject_ages_map(subject_info_path: Path) -> Dict[str, float]:
     age_map: Dict[str, float] = {}
     for _, row in info_df.iterrows():
         raw = str(row[sub_col]).strip()
+        if raw.endswith(".0"):
+            raw = raw[:-2]
         sid = raw if raw.startswith("sub-") else f"sub-{raw}"
         age_map[sid] = parse_chinese_age(row[age_col])
     return age_map
@@ -141,8 +143,10 @@ def run(matrix_dir: Path, subject_info: Path) -> None:
     rows = []
     for stim_dir in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
         rows.append(run_one_stimulus(stim_dir, subject_info))
-
-    pd.DataFrame(rows).sort_values("stimulus_type").to_csv(matrix_dir / "roi_isc_spearman_by_age_summary.csv", index=False)
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("stimulus_type")
+    out.to_csv(matrix_dir / "roi_isc_spearman_by_age_summary.csv", index=False)
 
 
 def main() -> None:

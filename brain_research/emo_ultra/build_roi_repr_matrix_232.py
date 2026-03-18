@@ -56,7 +56,7 @@ def load_lss_index(lss_root: Path, stim_type_col: str, stim_id_col: str) -> pd.D
         if not required.issubset(df.columns):
             continue
         df = df.copy()
-        df["scenario"] = f.stem.replace("lss_index_", "").replace("_aligned", "")
+        df["scenario"] = f.stem.replace("lss_index_", "").replace("_aligned", "").strip().lower()
         dfs.append(df)
 
     if not dfs:
@@ -94,8 +94,16 @@ def resolve_beta_path(lss_root: Path, row: pd.Series) -> Path:
 
 
 def load_surface_atlas(path: Path) -> Tuple[List[int], List[np.ndarray]]:
-    labels, _, _ = nib.freesurfer.read_annot(str(path))
-    labels = labels.reshape(-1)
+    ext = "".join(path.suffixes).lower()
+    if ext.endswith(".label.gii") or path.suffix.lower() == ".gii":
+        gii = nib.load(str(path))
+        if not hasattr(gii, "darrays") or len(gii.darrays) == 0:
+            raise ValueError(f"表面图谱不包含 darrays: {path}")
+        labels = np.asarray(gii.darrays[0].data).reshape(-1)
+    else:
+        labels, _, _ = nib.freesurfer.read_annot(str(path))
+        labels = np.asarray(labels).reshape(-1)
+
     roi_ids = sorted(np.unique(labels[labels > 0]).astype(int).tolist())
     roi_indices = [np.where(labels == rid)[0] for rid in roi_ids]
     return roi_ids, roi_indices
@@ -103,7 +111,7 @@ def load_surface_atlas(path: Path) -> Tuple[List[int], List[np.ndarray]]:
 
 def load_volume_atlas(path: Path) -> Tuple[object, List[int], List[np.ndarray]]:
     img = image.load_img(str(path))
-    data = img.get_fdata().reshape(-1)
+    data = np.rint(img.get_fdata()).astype(np.int32).reshape(-1)
     roi_ids = sorted(np.unique(data[data > 0]).astype(int).tolist())
     roi_indices = [np.where(data == rid)[0] for rid in roi_ids]
     return img, roi_ids, roi_indices
@@ -151,6 +159,20 @@ def build_lookup(df: pd.DataFrame, lss_root: Path) -> Dict[Tuple[str, str, str, 
     return out
 
 
+def _lookup_beta(
+    lookup: Dict[Tuple[str, str, str, str], Path],
+    subject: str,
+    stim_type: str,
+    stim_id: str,
+    scenario_candidates: List[str],
+) -> Path | None:
+    for sc in scenario_candidates:
+        p = lookup.get((sc, subject, stim_type, stim_id))
+        if p is not None:
+            return p
+    return None
+
+
 def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, threshold_ratio: float) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     df = load_lss_index(lss_root, stim_type_col=stim_type_col, stim_id_col=stim_id_col)
@@ -182,9 +204,9 @@ def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, thr
             feats_v = [np.zeros((n_stim, int(idx.size)), dtype=np.float32) for idx in roi_idx_v]
 
             for ki, stim_id in enumerate(stim_ids):
-                p_l = lookup.get(("surface_L", sub, stim_type, stim_id))
-                p_r = lookup.get(("surface_R", sub, stim_type, stim_id))
-                p_v = lookup.get(("volume", sub, stim_type, stim_id))
+                p_l = _lookup_beta(lookup, sub, stim_type, stim_id, ["surface_l", "surface_left", "lh", "left", "surface-l"])
+                p_r = _lookup_beta(lookup, sub, stim_type, stim_id, ["surface_r", "surface_right", "rh", "right", "surface-r"])
+                p_v = _lookup_beta(lookup, sub, stim_type, stim_id, ["volume", "vol"])
                 if p_l is None or p_r is None or p_v is None:
                     raise FileNotFoundError(f"缺少 beta：{sub} {stim_type} {stim_id}")
                 if (not p_l.exists()) or (not p_r.exists()) or (not p_v.exists()):

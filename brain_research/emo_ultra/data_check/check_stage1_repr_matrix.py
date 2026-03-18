@@ -25,7 +25,9 @@ def main() -> None:
         first = np.asarray(npz[rois[0]])
         ok_shape = first.shape == (len(subs), len(stim_order), len(stim_order))
         rows.append({"stimulus_type": d.name, "n_rois": len(rois), "n_subjects": len(subs), "n_stimuli": len(stim_order), "shape_ok": bool(ok_shape)})
-    out = pd.DataFrame(rows).sort_values("stimulus_type")
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("stimulus_type")
     out.to_csv(args.matrix_dir / "data_check_stage1.csv", index=False)
     print(out)
 
