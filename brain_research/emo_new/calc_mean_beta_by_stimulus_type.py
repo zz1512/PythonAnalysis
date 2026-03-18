@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lss-root", type=Path, default=DEFAULT_LSS_ROOT)
     p.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     p.add_argument("--stim-col", type=str, default="raw_emotion", help="刺激类型列名（默认 raw_emotion）")
-    p.add_argument("--task", type=str, default="ALL", help="仅使用该 task（默认 EMO）；传 ALL 表示不过滤")
+    p.add_argument("--task", type=str, default="ALL", help="仅使用该 task（默认 ALL）；传 ALL 表示不过滤")
     return p.parse_args()
 
 
