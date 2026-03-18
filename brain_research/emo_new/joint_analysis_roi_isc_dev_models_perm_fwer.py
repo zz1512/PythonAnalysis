@@ -43,6 +43,28 @@ def zscore_1d(x: np.ndarray) -> np.ndarray:
     return out.astype(np.float32, copy=False)
 
 
+def validate_model_vector(name: str, x: np.ndarray, min_n: int = 10) -> None:
+    """确保模型向量可用于统计检验，避免 NaN 传播导致伪显著。"""
+    arr = np.asarray(x, dtype=np.float32).reshape(-1)
+    n_fin = int(np.isfinite(arr).sum())
+    if n_fin < int(min_n):
+        raise ValueError(f"{name} 有效元素不足（finite={n_fin} < {min_n}），无法进行置换检验。")
+
+
+def assoc_with_model(S_z: np.ndarray, mvec: np.ndarray) -> np.ndarray:
+    """
+    计算每个 ROI 与模型向量的关联分数：
+    - 仅使用模型向量中的有限值
+    - 分母使用有效 pair 数，避免 NaN 导致比较恒 False
+    """
+    mv = np.asarray(mvec, dtype=np.float32).reshape(-1)
+    mask = np.isfinite(mv)
+    n_valid = int(mask.sum())
+    if n_valid <= 1:
+        return np.full((S_z.shape[0],), np.nan, dtype=np.float32)
+    return (S_z[:, mask] @ mv[mask]) / float(n_valid)
+
+
 def triu_indices(n: int) -> Tuple[np.ndarray, np.ndarray]:
     return np.triu_indices(n, k=1)
 
@@ -134,12 +156,14 @@ def run_one_stimulus(
     m_nn, m_conv, m_div = build_dev_model_vectors(ages, iu, ju, normalize=bool(normalize_models))
     model_names = ("M_nn", "M_conv", "M_div")
     model_vecs_obs = (m_nn, m_conv, m_div)
+    for mname, mvec in zip(model_names, model_vecs_obs):
+        validate_model_vector(mname, mvec, min_n=10)
 
     r_obs = []
     tests = []
     for mi, mname in enumerate(model_names):
         mvec = model_vecs_obs[mi]
-        r_rois = (S_z @ mvec) / float(n_pairs)
+        r_rois = assoc_with_model(S_z, mvec)
         for ri in range(len(rois_list)):
             tests.append({"roi": rois_list[ri], "model": mname})
             r_obs.append(float(r_rois[ri]))
@@ -160,11 +184,12 @@ def run_one_stimulus(
         r_perm_all = np.empty(n_tests, dtype=np.float32)
         offset = 0
         for mvec in model_vecs_p:
-            r_rois = (S_z @ mvec) / float(n_pairs)
+            r_rois = assoc_with_model(S_z, mvec)
             r_perm_all[offset:offset + n_rois] = r_rois.astype(np.float32, copy=False)
             offset += n_rois
 
-        count_raw += (r_perm_all >= r_obs_arr)
+        valid_raw = np.isfinite(r_perm_all) & np.isfinite(r_obs_arr)
+        count_raw[valid_raw] += (r_perm_all[valid_raw] >= r_obs_arr[valid_raw])
 
         offset = 0
         for _ in range(len(model_names)):
@@ -172,12 +197,20 @@ def run_one_stimulus(
             end_idx = offset + n_rois
             r_perm_subset = r_perm_all[start_idx:end_idx]
             r_obs_subset = r_obs_arr[start_idx:end_idx]
-            max_stat_model = float(r_perm_subset.max(initial=-1.0))
-            count_fwer[start_idx:end_idx] += (max_stat_model >= r_obs_subset)
+            finite_perm = np.isfinite(r_perm_subset)
+            finite_obs = np.isfinite(r_obs_subset)
+            valid_subset = finite_perm & finite_obs
+            if np.any(valid_subset):
+                max_stat_model = float(np.max(r_perm_subset[valid_subset]))
+                obs_idx = np.where(finite_obs)[0] + start_idx
+                count_fwer[obs_idx] += (max_stat_model >= r_obs_arr[obs_idx])
             offset += n_rois
 
-    p_perm = (count_raw + 1.0) / (float(n_perm) + 1.0)
-    p_fwer = (count_fwer + 1.0) / (float(n_perm) + 1.0)
+    p_perm = np.full(n_tests, np.nan, dtype=np.float32)
+    p_fwer = np.full(n_tests, np.nan, dtype=np.float32)
+    valid_obs = np.isfinite(r_obs_arr)
+    p_perm[valid_obs] = (count_raw[valid_obs] + 1.0) / (float(n_perm) + 1.0)
+    p_fwer[valid_obs] = (count_fwer[valid_obs] + 1.0) / (float(n_perm) + 1.0)
 
     rows = []
     for i in range(n_tests):
