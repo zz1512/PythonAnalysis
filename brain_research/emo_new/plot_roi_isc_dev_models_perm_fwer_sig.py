@@ -107,6 +107,16 @@ def _pick_three_conditions(all_conds: List[str], arg_stimuli: Optional[str]) -> 
     return picked
 
 
+def _pick_conditions(all_conds: List[str], arg_stimuli: Optional[str]) -> List[str]:
+    if arg_stimuli:
+        picked = [x.strip() for x in arg_stimuli.split(",") if x.strip()]
+    else:
+        picked = sorted(all_conds)
+    if not picked:
+        raise ValueError("未选择任何条件")
+    return picked
+
+
 def _prepare_sig_df(result_csv: Path, alpha: float, positive_only: bool) -> Tuple[pd.DataFrame, str]:
     df = pd.read_csv(result_csv)
     p_col = None
@@ -227,9 +237,10 @@ def plot_three_conditions(
         ax.set_title(stim)
         ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
         if i == 0:
+            ax.tick_params(axis="y", which="both", left=True, labelleft=True)
             ax.set_yticklabels(ylabels, rotation=0)
         else:
-            ax.set_yticklabels([])
+            ax.tick_params(axis="y", which="both", left=False, labelleft=False)
         ax.set_xlabel("")
         ax.set_ylabel("")
         if hm.collections and i != 2:
@@ -260,6 +271,101 @@ def plot_three_conditions(
     return [fig_out, csv_out]
 
 
+def plot_each_condition(
+    roi_root: Path,
+    out_dir: Path,
+    stimuli_arg: Optional[str],
+    alpha: float,
+    positive_only: bool,
+    atlas_l: Path,
+    atlas_r: Path,
+    dpi: int,
+    fmt: str,
+) -> List[Path]:
+    cond2csv = _collect_condition_csvs(roi_root)
+    stimuli = _pick_conditions(list(cond2csv.keys()), stimuli_arg)
+
+    map_l = _load_surface_label_map(atlas_l)
+    map_r = _load_surface_label_map(atlas_r)
+    models = ["M_nn", "M_conv", "M_div"]
+    outs: List[Path] = []
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stim in stimuli:
+        if stim not in cond2csv:
+            raise FileNotFoundError(f"条件 {stim} 缺少结果文件")
+        sub, p_col = _prepare_sig_df(cond2csv[stim], alpha=float(alpha), positive_only=bool(positive_only))
+        if sub.empty:
+            continue
+
+        roi_order = (
+            sub[["roi", p_col]]
+            .groupby("roi", as_index=False)[p_col]
+            .min()
+            .sort_values(p_col)["roi"]
+            .astype(str)
+            .tolist()
+        )
+        ylabels = [_build_roi_display(r, map_l, map_r) for r in roi_order]
+        mat_r = sub.pivot(index="roi", columns="model", values="r_obs").reindex(index=roi_order, columns=models)
+        mat_p = sub.pivot(index="roi", columns="model", values=p_col).reindex(index=roi_order, columns=models)
+
+        vmax = 0.1
+        v = mat_r.to_numpy(dtype=float)
+        if np.isfinite(v).any():
+            vmax = max(vmax, float(np.nanmax(np.abs(v))))
+
+        fig_h = max(4.5, 0.26 * len(roi_order) + 2.2)
+        fig, ax = plt.subplots(1, 1, figsize=(5.8, fig_h))
+        annot = mat_r.copy().astype(object)
+        for r in range(annot.shape[0]):
+            for c in range(annot.shape[1]):
+                rv = mat_r.iat[r, c]
+                pv = mat_p.iat[r, c]
+                annot.iat[r, c] = f"{rv:.2f}\n(p={pv:.3g})" if np.isfinite(rv) and np.isfinite(pv) else ""
+
+        sns.heatmap(
+            mat_r,
+            ax=ax,
+            cmap="RdBu_r",
+            center=0.0,
+            vmin=-vmax,
+            vmax=vmax,
+            annot=annot,
+            fmt="",
+            linewidths=0.5,
+            linecolor="white",
+            cbar=True,
+            cbar_kws={"label": "r (ROI ISC vs. Development Model)"},
+        )
+        ax.set_title(stim)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
+        ax.tick_params(axis="y", which="both", left=True, labelleft=True)
+        ax.set_yticklabels(ylabels, rotation=0)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        title = f"emo_new Significant ROI ISC Effects (FWER; {p_col}≤{alpha:g})"
+        if positive_only:
+            title += "\n(positive r only)"
+        fig.suptitle(title, y=0.995)
+        plt.tight_layout(rect=[0, 0, 1, 0.98])
+
+        fig_out = out_dir / f"emo_new_roi_isc_dev_models_sig_heatmap_single__{stim}__{p_col}__a{alpha:g}.{fmt}"
+        fig.savefig(fig_out, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        outs.append(fig_out)
+
+        sub_out = sub.copy().sort_values(["model", p_col, "r_obs"], ascending=[True, True, False])
+        sub_out.insert(0, "stimulus_type", stim)
+        csv_out = out_dir / f"emo_new_roi_isc_dev_models_sig_table_single__{stim}__{p_col}__a{alpha:g}.csv"
+        sub_out.to_csv(csv_out, index=False)
+        outs.append(csv_out)
+
+    if not outs:
+        raise ValueError("指定条件下均无显著 ROI，未生成单条件图")
+    return outs
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     roi_root = _default_roi_root()
     p = argparse.ArgumentParser(description="emo_new: 3 条件 FWER 显著 ROI 热图")
@@ -272,22 +378,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--atlas-r", type=Path, default=DEFAULT_R_ATLAS)
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--format", type=str, default="png", choices=["png", "pdf"])
+    p.add_argument("--per-condition", action="store_true", help="额外输出每个条件的单独热图")
+    p.add_argument("--per-condition-only", action="store_true", help="仅输出每个条件的单独热图，不生成3条件并排图")
     return p
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    outs = plot_three_conditions(
-        roi_root=Path(args.roi_root),
-        out_dir=Path(args.out_dir),
-        stimuli_arg=args.stimuli,
-        alpha=float(args.alpha),
-        positive_only=bool(args.positive_only),
-        atlas_l=Path(args.atlas_l),
-        atlas_r=Path(args.atlas_r),
-        dpi=int(args.dpi),
-        fmt=str(args.format),
-    )
+    outs: List[Path] = []
+    if not bool(args.per_condition_only):
+        outs.extend(
+            plot_three_conditions(
+                roi_root=Path(args.roi_root),
+                out_dir=Path(args.out_dir),
+                stimuli_arg=args.stimuli,
+                alpha=float(args.alpha),
+                positive_only=bool(args.positive_only),
+                atlas_l=Path(args.atlas_l),
+                atlas_r=Path(args.atlas_r),
+                dpi=int(args.dpi),
+                fmt=str(args.format),
+            )
+        )
+    if bool(args.per_condition) or bool(args.per_condition_only):
+        outs.extend(
+            plot_each_condition(
+                roi_root=Path(args.roi_root),
+                out_dir=Path(args.out_dir),
+                stimuli_arg=args.stimuli,
+                alpha=float(args.alpha),
+                positive_only=bool(args.positive_only),
+                atlas_l=Path(args.atlas_l),
+                atlas_r=Path(args.atlas_r),
+                dpi=int(args.dpi),
+                fmt=str(args.format),
+            )
+        )
     for p in outs:
         print(f"已保存: {p}")
 
