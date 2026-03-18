@@ -126,6 +126,19 @@ def process_one_index(index_file: Path, lss_root: Path, out_dir: Path, stim_col:
         stim_values = df[stim_col].astype("string").str.strip()
         df = df[stim_values.isin(valid_conditions)].copy()
 
+    # 仅保留同时具有 EMO 与 SOC 任务的被试。
+    task_sets = (
+        df.assign(_task_upper=df["task"].astype("string").str.strip().str.upper())
+        .groupby("subject", dropna=True)["_task_upper"]
+        .agg(lambda x: {t for t in x.dropna().tolist() if t})
+    )
+    eligible_subjects = task_sets[task_sets.apply(lambda x: {"EMO", "SOC"}.issubset(x))].index
+    df = df[df["subject"].isin(eligible_subjects)].copy()
+
+    if df.empty:
+        print(f"[跳过] {index_file.name} 无同时包含 EMO+SOC 的被试")
+        return
+
     if task_filter.upper() != "ALL":
         df = df[df["task"].astype(str).str.upper() == task_filter.upper()].copy()
 
