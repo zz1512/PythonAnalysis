@@ -124,11 +124,11 @@ def spearman_corr_matrix_rows(X: np.ndarray) -> np.ndarray:
     return corr.astype(np.float32, copy=False)
 
 
-def run(matrix_dir: Path, subject_info: Path) -> None:
+def run_one_stimulus(stim_dir: Path, subject_info: Path) -> None:
     beta_prefix = "roi_beta_matrix_200"
-    beta_path = matrix_dir / f"{beta_prefix}.npz"
-    subjects_path = matrix_dir / f"{beta_prefix}_subjects.csv"
-    rois_path = matrix_dir / f"{beta_prefix}_rois.csv"
+    beta_path = stim_dir / f"{beta_prefix}.npz"
+    subjects_path = stim_dir / f"{beta_prefix}_subjects.csv"
+    rois_path = stim_dir / f"{beta_prefix}_rois.csv"
 
     if not beta_path.exists():
         raise FileNotFoundError(f"缺少文件: {beta_path}")
@@ -157,12 +157,33 @@ def run(matrix_dir: Path, subject_info: Path) -> None:
         isc[ri] = spearman_corr_matrix_rows(Xs)
 
     out_prefix = "roi_isc_spearman_by_age"
-    matrix_dir.mkdir(parents=True, exist_ok=True)
-    np.save(matrix_dir / f"{out_prefix}.npy", isc)
+    stim_dir.mkdir(parents=True, exist_ok=True)
+    np.save(stim_dir / f"{out_prefix}.npy", isc)
     pd.DataFrame({"subject": subjects_sorted, "age": ages_sorted}).to_csv(
-        matrix_dir / f"{out_prefix}_subjects_sorted.csv", index=False
+        stim_dir / f"{out_prefix}_subjects_sorted.csv", index=False
     )
-    pd.DataFrame({"roi": rois}).to_csv(matrix_dir / f"{out_prefix}_rois.csv", index=False)
+    pd.DataFrame({"roi": rois}).to_csv(stim_dir / f"{out_prefix}_rois.csv", index=False)
+
+
+def run(matrix_dir: Path, subject_info: Path) -> None:
+    by_stim_dir = matrix_dir / "by_stimulus"
+    if not by_stim_dir.exists():
+        raise FileNotFoundError(f"缺少目录: {by_stim_dir}")
+
+    stim_dirs = sorted([p for p in by_stim_dir.iterdir() if p.is_dir()])
+    if not stim_dirs:
+        raise FileNotFoundError(f"{by_stim_dir} 下未找到条件子目录")
+
+    records = []
+    for stim_dir in stim_dirs:
+        run_one_stimulus(stim_dir, subject_info)
+        sub_path = stim_dir / "roi_isc_spearman_by_age_subjects_sorted.csv"
+        n_subjects = int(pd.read_csv(sub_path).shape[0])
+        records.append({"stimulus_type": stim_dir.name, "n_subjects": n_subjects})
+
+    pd.DataFrame(records).sort_values("stimulus_type").to_csv(
+        matrix_dir / "roi_isc_spearman_by_age_by_stimulus_summary.csv", index=False
+    )
 
 
 def main() -> None:
