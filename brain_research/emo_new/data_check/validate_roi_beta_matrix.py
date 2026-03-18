@@ -18,15 +18,15 @@ import numpy as np
 
 # ===================== 在这里改配置（无需命令行参数） =====================
 CONFIG: dict[str, Any] = {
-    "file": "/home/dingrui/fmri_analysis/zz_analysis/roi_results/by_stimulus/Passive_Emo/roi_beta_matrix_200.npz",
+    "file": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/by_stimulus/Passive_Emo/roi_beta_matrix_200.npz",
     "key": None,
     "expect_size": 200,
     "symmetry_atol": 1e-6,
     "preview_rows": 5,
     "preview_cols": 5,
     "max_slice_brief": 10,
-    "save_report": "brain_research/emo_new/data_check/roi_beta_matrix_200_report.md",
-    "save_json": "brain_research/emo_new/data_check/roi_beta_matrix_200_report.json",
+    "save_report": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/roi_beta_matrix_200_report.md",
+    "save_json": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results/roi_beta_matrix_200_report.json",
 }
 # ======================================================================
 
