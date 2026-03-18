@@ -22,7 +22,9 @@ def main() -> None:
         rois = pd.read_csv(d / "roi_isc_spearman_by_age_rois.csv")
         diag_mean = float(np.mean(np.diagonal(isc, axis1=1, axis2=2)))
         rows.append({"stimulus_type": d.name, "shape": str(tuple(isc.shape)), "n_subjects": int(subs.shape[0]), "n_rois": int(rois.shape[0]), "diag_mean": diag_mean})
-    out = pd.DataFrame(rows).sort_values("stimulus_type")
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("stimulus_type")
     out.to_csv(args.matrix_dir / "data_check_stage2.csv", index=False)
     print(out)
 

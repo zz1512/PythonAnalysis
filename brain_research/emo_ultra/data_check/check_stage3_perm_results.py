@@ -23,7 +23,9 @@ def main() -> None:
         df = pd.read_csv(p)
         sig = df[(df["r_obs"] > 0) & (df["p_fwer_model_wise"] <= float(args.alpha))]
         rows.append({"stimulus_type": d.name, "n_tests": int(df.shape[0]), "n_sig_pos_fwer": int(sig.shape[0])})
-    out = pd.DataFrame(rows).sort_values("stimulus_type")
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("stimulus_type")
     out.to_csv(args.matrix_dir / "data_check_stage3.csv", index=False)
     print(out)
 
