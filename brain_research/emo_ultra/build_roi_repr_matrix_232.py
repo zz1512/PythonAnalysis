@@ -29,9 +29,9 @@ from scipy.stats import rankdata
 DEFAULT_LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
 DEFAULT_OUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_ultra")
 
-ATLAS_SURF_L = Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_100Parcels_7Networks_order_lh.annot")
-ATLAS_SURF_R = Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_100Parcels_7Networks_order_rh.annot")
-ATLAS_VOL = Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_32Parcels_7Networks_order_FSLMNI152_2mm.nii.gz")
+ATLAS_SURF_L = Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii")
+ATLAS_SURF_R =  Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii")
+ATLAS_VOL = Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3T_2009cAsym.nii.gz")
 
 
 def parse_args() -> argparse.Namespace:
