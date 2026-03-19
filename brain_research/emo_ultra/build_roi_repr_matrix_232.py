@@ -63,9 +63,36 @@ def load_lss_index(lss_root: Path, stim_type_col: str, stim_id_col: str) -> pd.D
         raise ValueError("没有可用的 aligned 索引文件（缺必要列）")
 
     out = pd.concat(dfs, axis=0, ignore_index=True)
+
+    # 条件分类与过滤：对齐 emo_new/calc_mean_beta_by_stimulus_type.py 的实现
+    audit_file = lss_root / "lss_audit_surface_L.csv"
+    if not audit_file.exists():
+        raise FileNotFoundError(f"未找到条件文件: {audit_file}")
+    audit_df = pd.read_csv(audit_file)
+    condition_col = "trial_type"
+    if condition_col not in audit_df.columns:
+        raise ValueError(f"条件文件缺少列: {condition_col} ({audit_file})")
+    condition_series = audit_df[condition_col].astype("string").str.strip()
+    valid_conditions = sorted({c for c in condition_series.dropna().tolist() if c})
+    if not valid_conditions:
+        raise ValueError(f"条件文件无有效条件: {audit_file}")
+
+    if "label" in out.columns:
+        label_series = out["label"].astype("string").str.strip()
+        matched_condition = pd.Series(pd.NA, index=out.index, dtype="string")
+        for cond in sorted(valid_conditions, key=len, reverse=True):
+            starts_with_cond = label_series.str.startswith(cond, na=False)
+            matched_condition = matched_condition.mask(matched_condition.isna() & starts_with_cond, cond)
+        out = out.assign(_matched_condition=matched_condition)
+        out = out[out["_matched_condition"].notna()].copy()
+        out["stimulus_type"] = out["_matched_condition"].astype(str).str.strip()
+    else:
+        stim_values = out[stim_type_col].astype("string").str.strip()
+        out = out[stim_values.isin(valid_conditions)].copy()
+        out["stimulus_type"] = out[stim_type_col].astype(str).str.strip()
+
     out["subject"] = out["subject"].astype(str).str.strip()
     out["task"] = out["task"].astype(str).str.upper().str.strip()
-    out["stimulus_type"] = out[stim_type_col].astype(str).str.strip()
     out["stimulus_id"] = out[stim_id_col].astype(str).str.strip()
     out = out[(out["subject"].str.len() > 0) & (out["stimulus_type"].str.len() > 0) & (out["stimulus_id"].str.len() > 0)].copy()
 
