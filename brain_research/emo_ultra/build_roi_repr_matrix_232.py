@@ -85,16 +85,28 @@ def load_lss_index(lss_root: Path, stim_type_col: str, stim_id_col: str) -> pd.D
             matched_condition = matched_condition.mask(matched_condition.isna() & starts_with_cond, cond)
         out = out.assign(_matched_condition=matched_condition)
         out = out[out["_matched_condition"].notna()].copy()
-        out["stimulus_type"] = out["_matched_condition"].astype(str).str.strip()
+        out["stimulus_type"] = out["_matched_condition"].astype("string").str.strip()
     else:
         stim_values = out[stim_type_col].astype("string").str.strip()
         out = out[stim_values.isin(valid_conditions)].copy()
-        out["stimulus_type"] = out[stim_type_col].astype(str).str.strip()
+        out["stimulus_type"] = out[stim_type_col].astype("string").str.strip()
 
-    out["subject"] = out["subject"].astype(str).str.strip()
-    out["task"] = out["task"].astype(str).str.upper().str.strip()
-    out["stimulus_id"] = out[stim_id_col].astype(str).str.strip()
-    out = out[(out["subject"].str.len() > 0) & (out["stimulus_type"].str.len() > 0) & (out["stimulus_id"].str.len() > 0)].copy()
+    out["subject"] = out["subject"].astype("string").str.strip()
+    out["task"] = out["task"].astype("string").str.upper().str.strip()
+    out["stimulus_id"] = out[stim_id_col].astype("string").str.strip()
+    out = out[
+        out["subject"].notna()
+        & out["stimulus_type"].notna()
+        & out["stimulus_id"].notna()
+        & (out["subject"].str.len() > 0)
+        & (out["stimulus_type"].str.len() > 0)
+        & (out["stimulus_id"].str.len() > 0)
+    ].copy()
+    out = out[
+        (out["subject"].str.lower() != "nan")
+        & (out["stimulus_type"].str.lower() != "nan")
+        & (out["stimulus_id"].str.lower() != "nan")
+    ].copy()
 
     task_sets = out.groupby("subject")["task"].agg(lambda x: set(x.dropna().tolist()))
     eligible = task_sets[task_sets.apply(lambda s: {"EMO", "SOC"}.issubset(s))].index
@@ -120,7 +132,7 @@ def resolve_beta_path(lss_root: Path, row: pd.Series) -> Path:
     return lss_root / task / sub / f"run-{run}" / f
 
 
-def load_surface_atlas(path: Path) -> Tuple[List[int], List[np.ndarray]]:
+def load_surface_atlas(path: Path) -> Tuple[List[int], List[np.ndarray], int]:
     ext = "".join(path.suffixes).lower()
     if ext.endswith(".label.gii") or path.suffix.lower() == ".gii":
         gii = nib.load(str(path))
@@ -133,7 +145,7 @@ def load_surface_atlas(path: Path) -> Tuple[List[int], List[np.ndarray]]:
 
     roi_ids = sorted(np.unique(labels[labels > 0]).astype(int).tolist())
     roi_indices = [np.where(labels == rid)[0] for rid in roi_ids]
-    return roi_ids, roi_indices
+    return roi_ids, roi_indices, int(labels.shape[0])
 
 
 def load_volume_atlas(path: Path) -> Tuple[object, List[int], List[np.ndarray]]:
@@ -148,7 +160,7 @@ def spearman_rsm(X: np.ndarray) -> np.ndarray:
     # X: [n_stim, n_feat]
     ranks = np.apply_along_axis(rankdata, 1, X)
     mean = ranks.mean(axis=1, keepdims=True)
-    std = ranks.std(axis=1, keepdims=True)
+    std = ranks.std(axis=1, keepdims=True, ddof=1)
     std[std == 0] = np.nan
     Z = (ranks - mean) / std
     p = ranks.shape[1]
@@ -206,8 +218,8 @@ def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, thr
     all_subjects, stim2ids = pick_subjects_stimuli(df, threshold_ratio=float(threshold_ratio))
     lookup = build_lookup(df, lss_root)
 
-    roi_ids_l, roi_idx_l = load_surface_atlas(ATLAS_SURF_L)
-    roi_ids_r, roi_idx_r = load_surface_atlas(ATLAS_SURF_R)
+    roi_ids_l, roi_idx_l, n_vert_l = load_surface_atlas(ATLAS_SURF_L)
+    roi_ids_r, roi_idx_r, n_vert_r = load_surface_atlas(ATLAS_SURF_R)
     vol_img, roi_ids_v, roi_idx_v = load_volume_atlas(ATLAS_VOL)
     rois = [f"L_{x}" for x in roi_ids_l] + [f"R_{x}" for x in roi_ids_r] + [f"V_{x}" for x in roi_ids_v]
 
@@ -241,9 +253,13 @@ def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, thr
 
                 vec_l = nib.load(str(p_l)).darrays[0].data.astype(np.float32).reshape(-1)
                 vec_r = nib.load(str(p_r)).darrays[0].data.astype(np.float32).reshape(-1)
+                if int(vec_l.shape[0]) != int(n_vert_l):
+                    raise ValueError(f"surface_L 顶点数不匹配：{sub} {stim_type} {stim_id} beta={int(vec_l.shape[0])} atlas={int(n_vert_l)}")
+                if int(vec_r.shape[0]) != int(n_vert_r):
+                    raise ValueError(f"surface_R 顶点数不匹配：{sub} {stim_type} {stim_id} beta={int(vec_r.shape[0])} atlas={int(n_vert_r)}")
                 img_v = image.load_img(str(p_v))
                 if img_v.shape != vol_img.shape or not np.allclose(img_v.affine, vol_img.affine):
-                    img_v = image.resample_to_img(img_v, vol_img, interpolation="nearest")
+                    img_v = image.resample_to_img(img_v, vol_img, interpolation="continuous")
                 vec_v = img_v.get_fdata().reshape(-1).astype(np.float32)
 
                 for ri, idx in enumerate(roi_idx_l):

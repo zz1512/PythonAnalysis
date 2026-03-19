@@ -79,6 +79,8 @@ def load_subject_ages_map(subject_info_path: Path) -> Dict[str, float]:
     age_map: Dict[str, float] = {}
     for _, row in info_df.iterrows():
         raw_id = str(row[sub_col]).strip()
+        if raw_id.endswith(".0"):
+            raw_id = raw_id[:-2]
         sub_id = f"sub-{raw_id}" if not raw_id.startswith("sub-") else raw_id
         age_map[sub_id] = parse_chinese_age(row[age_col])
     return age_map

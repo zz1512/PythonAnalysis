@@ -60,11 +60,17 @@ def build_models(ages: np.ndarray, iu: np.ndarray, ju: np.ndarray, normalize: bo
 
 def assoc(S_z: np.ndarray, m: np.ndarray) -> np.ndarray:
     mv = np.asarray(m, dtype=np.float32).reshape(-1)
-    mask = np.isfinite(mv)
-    n = int(mask.sum())
-    if n <= 1:
+    mask_m = np.isfinite(mv)
+    if int(mask_m.sum()) <= 1:
         return np.full((S_z.shape[0],), np.nan, dtype=np.float32)
-    return (S_z[:, mask] @ mv[mask]) / float(n)
+    Sz = np.asarray(S_z, dtype=np.float32)
+    joint = mask_m.reshape(1, -1) & np.isfinite(Sz)
+    denom = joint.sum(axis=1).astype(np.float32, copy=False)
+    prod = Sz * mv.reshape(1, -1)
+    prod[~joint] = 0.0
+    out = prod.sum(axis=1) / denom
+    out[denom <= 1] = np.nan
+    return out.astype(np.float32, copy=False)
 
 
 def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> pd.DataFrame:
@@ -150,7 +156,10 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> p
         })
 
     out_df = pd.DataFrame(rows).sort_values(["model", "roi"])
-    out_df.to_csv(stim_dir / "roi_isc_dev_models_perm_fwer.csv", index=False)
+    out_prefix = "roi_isc_dev_models_perm_fwer"
+    out_df.to_csv(stim_dir / f"{out_prefix}.csv", index=False)
+    sub_df[["subject", "age"]].to_csv(stim_dir / f"{out_prefix}_subjects_sorted.csv", index=False)
+    pd.DataFrame({"roi": rois}).to_csv(stim_dir / f"{out_prefix}_rois.csv", index=False)
     return out_df
 
 

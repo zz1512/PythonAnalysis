@@ -92,7 +92,7 @@ def sort_subjects_by_age(subjects: List[str], age_map: Dict[str, float]) -> Tupl
 def spearman_corr_matrix_rows(X: np.ndarray) -> np.ndarray:
     ranks = np.apply_along_axis(rankdata, 1, X)
     mean = ranks.mean(axis=1, keepdims=True)
-    std = ranks.std(axis=1, keepdims=True)
+    std = ranks.std(axis=1, keepdims=True, ddof=1)
     std[std == 0] = np.nan
     Z = (ranks - mean) / std
     p = X.shape[1]
