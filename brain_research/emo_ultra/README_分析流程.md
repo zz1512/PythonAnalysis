@@ -58,6 +58,7 @@ python calc_roi_isc_by_age.py \
 
 说明：
 - `--subject-info` 支持 `.csv/.tsv/.xlsx`，列名兼容 `sub_id/age` 或 `被试编号/采集年龄`
+- `--repr-prefix 参数`支持配置选择roi_repr_matrix_200、roi_repr_matrix_232，默认roi_repr_matrix_232
 - 缺失年龄会被排到末尾（年龄=999）
 
 ## Step 3：joint_analysis_roi_isc_dev_models_perm_fwer.py
