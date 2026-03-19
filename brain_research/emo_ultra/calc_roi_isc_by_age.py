@@ -24,9 +24,10 @@ DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_re
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="从 roi_repr_matrix_232 计算按龄 ROI ISC")
+    p = argparse.ArgumentParser(description="从 ROI 表征矩阵计算按龄 ROI ISC")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--subject-info", type=Path, default=Path(os.environ.get("SUBJECT_AGE_TABLE", "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")))
+    p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_232")
     return p.parse_args()
 
 
@@ -105,8 +106,7 @@ def flatten_upper(rsm: np.ndarray) -> np.ndarray:
     return rsm[iu].astype(np.float32)
 
 
-def run_one_stimulus(stim_dir: Path, subject_info: Path) -> Dict[str, int]:
-    repr_prefix = "roi_repr_matrix_232"
+def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str) -> Dict[str, int]:
     npz_path = stim_dir / f"{repr_prefix}.npz"
     subjects_path = stim_dir / f"{repr_prefix}_subjects.csv"
     rois_path = stim_dir / f"{repr_prefix}_rois.csv"
@@ -135,14 +135,14 @@ def run_one_stimulus(stim_dir: Path, subject_info: Path) -> Dict[str, int]:
     return {"stimulus_type": stim_dir.name, "n_subjects": n_sub, "n_rois": len(rois)}
 
 
-def run(matrix_dir: Path, subject_info: Path) -> None:
+def run(matrix_dir: Path, subject_info: Path, repr_prefix: str) -> None:
     by_stim = matrix_dir / "by_stimulus"
     if not by_stim.exists():
         raise FileNotFoundError(f"未找到目录: {by_stim}")
 
     rows = []
     for stim_dir in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
-        rows.append(run_one_stimulus(stim_dir, subject_info))
+        rows.append(run_one_stimulus(stim_dir, subject_info, repr_prefix))
     out = pd.DataFrame(rows)
     if not out.empty:
         out = out.sort_values("stimulus_type")
@@ -151,7 +151,7 @@ def run(matrix_dir: Path, subject_info: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    run(args.matrix_dir, args.subject_info)
+    run(args.matrix_dir, args.subject_info, args.repr_prefix)
 
 
 if __name__ == "__main__":
