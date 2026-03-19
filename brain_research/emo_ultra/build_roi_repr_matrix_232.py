@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stim-type-col", type=str, default="raw_emotion")
     p.add_argument("--stim-id-col", type=str, default="stimulus_content")
     p.add_argument("--threshold-ratio", type=float, default=0.80)
+    p.add_argument("--no-cocktail-blank", action="store_false", dest="cocktail_blank", default=True)
     return p.parse_args()
 
 
@@ -156,8 +157,11 @@ def load_volume_atlas(path: Path) -> Tuple[object, List[int], List[np.ndarray]]:
     return img, roi_ids, roi_indices
 
 
-def spearman_rsm(X: np.ndarray) -> np.ndarray:
+def spearman_rsm(X: np.ndarray, cocktail_blank: bool) -> np.ndarray:
     # X: [n_stim, n_feat]
+    X = np.asarray(X, dtype=np.float32)
+    if bool(cocktail_blank):
+        X = X - X.mean(axis=0, keepdims=True)
     ranks = np.apply_along_axis(rankdata, 1, X)
     mean = ranks.mean(axis=1, keepdims=True)
     std = ranks.std(axis=1, keepdims=True, ddof=1)
@@ -212,7 +216,14 @@ def _lookup_beta(
     return None
 
 
-def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, threshold_ratio: float) -> None:
+def run(
+    lss_root: Path,
+    out_dir: Path,
+    stim_type_col: str,
+    stim_id_col: str,
+    threshold_ratio: float,
+    cocktail_blank: bool,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     df = load_lss_index(lss_root, stim_type_col=stim_type_col, stim_id_col=stim_id_col)
     all_subjects, stim2ids = pick_subjects_stimuli(df, threshold_ratio=float(threshold_ratio))
@@ -270,11 +281,11 @@ def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, thr
                     feats_v[ri][ki, :] = vec_v[idx]
 
             for ri, rid in enumerate(roi_ids_l):
-                out_roi[f"L_{rid}"][si] = spearman_rsm(feats_l[ri])
+                out_roi[f"L_{rid}"][si] = spearman_rsm(feats_l[ri], cocktail_blank=bool(cocktail_blank))
             for ri, rid in enumerate(roi_ids_r):
-                out_roi[f"R_{rid}"][si] = spearman_rsm(feats_r[ri])
+                out_roi[f"R_{rid}"][si] = spearman_rsm(feats_r[ri], cocktail_blank=bool(cocktail_blank))
             for ri, rid in enumerate(roi_ids_v):
-                out_roi[f"V_{rid}"][si] = spearman_rsm(feats_v[ri])
+                out_roi[f"V_{rid}"][si] = spearman_rsm(feats_v[ri], cocktail_blank=bool(cocktail_blank))
 
         stim_dir = by_stim_dir / stim_type
         stim_dir.mkdir(parents=True, exist_ok=True)
@@ -300,7 +311,14 @@ def run(lss_root: Path, out_dir: Path, stim_type_col: str, stim_id_col: str, thr
 
 def main() -> None:
     args = parse_args()
-    run(args.lss_root, args.out_dir, args.stim_type_col, args.stim_id_col, float(args.threshold_ratio))
+    run(
+        args.lss_root,
+        args.out_dir,
+        args.stim_type_col,
+        args.stim_id_col,
+        float(args.threshold_ratio),
+        bool(args.cocktail_blank),
+    )
 
 
 if __name__ == "__main__":

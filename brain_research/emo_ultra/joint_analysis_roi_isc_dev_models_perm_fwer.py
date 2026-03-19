@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no-normalize-models", action="store_false", dest="normalize_models", default=True)
+    p.add_argument("--no-fisher-z", action="store_false", dest="fisher_z", default=True)
     return p.parse_args()
 
 
@@ -41,6 +42,17 @@ def zscore_1d(x: np.ndarray) -> np.ndarray:
     out = (x - mu) / sd
     out[~m] = np.nan
     return out.astype(np.float32)
+
+
+def fisher_z(r: np.ndarray) -> np.ndarray:
+    x = np.asarray(r, dtype=np.float32)
+    m = np.isfinite(x)
+    out = np.full_like(x, np.nan, dtype=np.float32)
+    if not bool(m.any()):
+        return out
+    xc = np.clip(x[m], -0.999999, 0.999999)
+    out[m] = np.arctanh(xc).astype(np.float32, copy=False)
+    return out
 
 
 def build_models(ages: np.ndarray, iu: np.ndarray, ju: np.ndarray, normalize: bool) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -68,12 +80,14 @@ def assoc(S_z: np.ndarray, m: np.ndarray) -> np.ndarray:
     denom = joint.sum(axis=1).astype(np.float32, copy=False)
     prod = Sz * mv.reshape(1, -1)
     prod[~joint] = 0.0
-    out = prod.sum(axis=1) / denom
+    denom_safe = denom.copy()
+    denom_safe[denom_safe == 0] = 1.0
+    out = prod.sum(axis=1) / denom_safe
     out[denom <= 1] = np.nan
     return out.astype(np.float32, copy=False)
 
 
-def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> pd.DataFrame:
+def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fisher_z_enabled: bool) -> pd.DataFrame:
     isc = np.load(stim_dir / "roi_isc_spearman_by_age.npy")
     sub_df = pd.read_csv(stim_dir / "roi_isc_spearman_by_age_subjects_sorted.csv")
     roi_df = pd.read_csv(stim_dir / "roi_isc_spearman_by_age_rois.csv")
@@ -88,6 +102,8 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> p
     S_z = []
     for i in range(len(rois)):
         v = isc[i][iu, ju]
+        if bool(fisher_z_enabled):
+            v = fisher_z(v)
         S_z.append(zscore_1d(v))
     S_z = np.stack(S_z, axis=0).astype(np.float32)
 
@@ -163,7 +179,7 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> p
     return out_df
 
 
-def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> None:
+def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool, fisher_z_enabled: bool) -> None:
     by_stim = matrix_dir / "by_stimulus"
     stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()])
     if not stim_dirs:
@@ -171,7 +187,13 @@ def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> Non
 
     summary = []
     for d in stim_dirs:
-        out = run_one(d, n_perm=int(n_perm), seed=int(seed), normalize_models=bool(normalize_models))
+        out = run_one(
+            d,
+            n_perm=int(n_perm),
+            seed=int(seed),
+            normalize_models=bool(normalize_models),
+            fisher_z_enabled=bool(fisher_z_enabled),
+        )
         sig = out[(out["r_obs"] > 0) & (out["p_fwer_model_wise"] <= 0.05)]
         summary.append({"stimulus_type": d.name, "n_rows": int(out.shape[0]), "n_sig_pos_fwer": int(sig.shape[0])})
 
@@ -180,7 +202,7 @@ def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool) -> Non
 
 def main() -> None:
     args = parse_args()
-    run(args.matrix_dir, int(args.n_perm), int(args.seed), bool(args.normalize_models))
+    run(args.matrix_dir, int(args.n_perm), int(args.seed), bool(args.normalize_models), bool(args.fisher_z))
 
 
 if __name__ == "__main__":
