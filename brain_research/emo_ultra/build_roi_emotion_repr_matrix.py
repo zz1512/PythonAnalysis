@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="将 ROI 刺激矩阵聚合为刺激情绪矩阵")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
-    p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_232")
+    p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_200")
     p.add_argument("--out-prefix", type=str, default=None)
     p.add_argument("--emotions", nargs="+", default=list(DEFAULT_EMOTIONS), help="按该顺序输出情绪维度")
     return p.parse_args()

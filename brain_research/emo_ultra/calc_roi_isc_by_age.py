@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--subject-info", type=Path, default=Path(os.environ.get("SUBJECT_AGE_TABLE", "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")))
-    p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_232")
+    p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_200")
     p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson"))
     p.add_argument("--isc-prefix", type=str, default=None)
     return p.parse_args()
