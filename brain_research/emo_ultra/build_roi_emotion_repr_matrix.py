@@ -55,7 +55,7 @@ def aggregate_roi(arr: np.ndarray, emo_idx: Dict[str, np.ndarray], emotions: Lis
     return out
 
 
-def run_one(stim_dir: Path, repr_prefix: str, out_prefix: str, emotions: List[str]) -> Dict[str, object]:
+def run_one(stim_dir: Path, repr_prefix: str, out_prefix: str, emotions: List[str]) -> Dict[str, object] | None:
     npz_path = stim_dir / f"{repr_prefix}.npz"
     rois_path = stim_dir / f"{repr_prefix}_rois.csv"
     subs_path = stim_dir / f"{repr_prefix}_subjects.csv"
@@ -73,7 +73,8 @@ def run_one(stim_dir: Path, repr_prefix: str, out_prefix: str, emotions: List[st
     emo_labels = [detect_emotion(s, emotions) for s in stim_order]
     keep_idx = [i for i, e in enumerate(emo_labels) if e != ""]
     if not keep_idx:
-        raise ValueError(f"{stim_dir} 中没有命中情绪关键词的刺激")
+        print(f"[SKIP] {stim_dir.name}: 没有命中情绪关键词的刺激，跳过该 stimulus_type。")
+        return None
 
     stim_order_kept = [stim_order[i] for i in keep_idx]
     emo_labels_kept = [emo_labels[i] for i in keep_idx]
@@ -133,7 +134,9 @@ def run(matrix_dir: Path, stimulus_dir_name: str, repr_prefix: str, out_prefix: 
 
     rows = []
     for stim_dir in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
-        rows.append(run_one(stim_dir, repr_prefix=repr_prefix, out_prefix=out_prefix, emotions=emotions))
+        row = run_one(stim_dir, repr_prefix=repr_prefix, out_prefix=out_prefix, emotions=emotions)
+        if row is not None:
+            rows.append(row)
 
     out = pd.DataFrame(rows)
     if not out.empty:
