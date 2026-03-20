@@ -21,6 +21,7 @@ DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_re
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="绘制 emo_ultra ROI ISC 发育模型显著结果热图（FWER/FDR）")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
+    p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--sig-method", type=str, default=None, choices=["fwer", "fdr_model_wise", "fdr_global"])
@@ -40,8 +41,8 @@ def resolve_sig_method(sig_method: Optional[str], fdr_mode: str) -> str:
     raise ValueError(f"不支持 fdr mode: {fdr_mode}")
 
 
-def collect_results(matrix_dir: Path, alpha: float, sig_method: str, positive_only: bool) -> pd.DataFrame:
-    by_stim = matrix_dir / "by_stimulus"
+def collect_results(matrix_dir: Path, stimulus_dir_name: str, alpha: float, sig_method: str, positive_only: bool) -> pd.DataFrame:
+    by_stim = matrix_dir / str(stimulus_dir_name)
     rows: List[pd.DataFrame] = []
     for d in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
         p = d / "roi_isc_dev_models_perm_fwer.csv"
@@ -149,10 +150,9 @@ def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, sig_method: st
 def main() -> None:
     args = parse_args()
     sig_method = resolve_sig_method(args.sig_method, str(args.fdr_mode))
-    df = collect_results(Path(args.matrix_dir), float(args.alpha), str(sig_method), bool(args.positive_only))
+    df = collect_results(Path(args.matrix_dir), str(args.stimulus_dir_name), float(args.alpha), str(sig_method), bool(args.positive_only))
     draw(df, Path(args.matrix_dir) / "figures", float(args.alpha), int(args.dpi), str(sig_method), bool(args.positive_only))
 
 
 if __name__ == "__main__":
     main()
-

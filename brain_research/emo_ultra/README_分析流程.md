@@ -24,11 +24,13 @@
 ## 运行顺序（推荐）
 
 1. Step 1：构建 ROI 表征矩阵（RSM）`build_roi_repr_matrix.py`
-2. Step 2：RSM → ROI-ISC（按年龄排序）`calc_roi_isc_by_age.py`
-3. Step 3：ROI-ISC × 发育模型置换检验 `joint_analysis_roi_isc_dev_models.py`
-4. Step 4：显著结果可视化热图（FWER 或 FDR）`plot_roi_isc_dev_models_perm_sig.py`
-5. Step 5：显著结果映射到脑图（Surface + Volume）`plot_brain_surface_vol.py`
-6. Step 6：显著 ROI 的 pair-wise 年龄轨迹图（可选）`plot_roi_isc_age_trajectory.py`
+2. Step 1.5（可选）：刺激矩阵 → 刺激情绪矩阵（4×4）`build_roi_emotion_repr_matrix.py`
+3. Step 2：RSM → ROI-ISC（按年龄排序）`calc_roi_isc_by_age.py`
+4. Step 3：ROI-ISC × 发育模型置换检验 `joint_analysis_roi_isc_dev_models.py`
+5. Step 4：显著结果可视化热图（FWER 或 FDR）`plot_roi_isc_dev_models_perm_sig.py`
+6. Step 5：显著结果映射到脑图（Surface + Volume）`plot_brain_surface_vol.py`
+7. Step 6：显著 ROI 的 pair-wise 年龄轨迹图（可选）`plot_roi_isc_age_trajectory.py`
+
 
 ## 关键约定与输入要求
 
@@ -88,6 +90,28 @@ python build_roi_repr_matrix.py \
 - `--roi-set`：选择 ROI 集合（`232`=surface+volume；`200`=仅 surface；默认 `200`）
 - `--rsm-method`：RSM 相关方法（`pearson`/`spearman`；默认 `pearson`）
 
+
+## Step 1.5（可选）：build_roi_emotion_repr_matrix.py
+
+用途：读取 Step1 的 `subject×stimulus×stimulus` ROI 矩阵，并按刺激文件名中的关键词聚合为 `subject×emotion×emotion`。
+
+默认情绪顺序：`Anger, Disgust, Fear, Sad`，输出 4×4 矩阵。
+
+运行示例：
+
+```bash
+python build_roi_emotion_repr_matrix.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_ultra \
+  --repr-prefix roi_repr_matrix_232 \
+  --out-prefix roi_repr_matrix_232_emotion4
+```
+
+输出（每个 `by_stimulus/<stimulus_type>/`）：
+
+- `roi_repr_matrix_232_emotion4.npz`（ROI: `n_sub×4×4`）
+- `roi_repr_matrix_232_emotion4_{subjects,rois,meta}.csv`
+- `emotion_order.csv`、`stimulus_to_emotion.csv`、`emotion_stimulus_counts.csv`
+
 ## Step 2：calc\_roi\_isc\_by\_age.py
 
 用途：读取 Step 1 的 RSM（subject×stim×stim），对每个 ROI：
@@ -108,6 +132,8 @@ python calc_roi_isc_by_age.py \
 - 缺失年龄会被排到末尾（年龄=999；默认假定不会发生缺失）
 - 默认输出前缀为 `roi_isc_{isc_method}_by_age`，可用 `--isc-prefix` 自定义
 - `--isc-method ` （`pearson`/`spearman`；默认 `spearman`）只影响 Step2 被试×被试 ISC 的计算方式；不会改变 Step1 的 `--rsm-method`，也不会改变 Step3 的 `--assoc-method`
+- `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`），便于兼容其他分组目录
+- 若使用 Step1.5 产物，请将 `--repr-prefix` 设为对应情绪矩阵前缀（如 `roi_repr_matrix_232_emotion4`）
 
 ## Step 3：joint\_analysis\_roi\_isc\_dev\_models.py
 
@@ -131,6 +157,7 @@ python joint_analysis_roi_isc_dev_models.py \
 可选参数：
 
 - `--isc-method` / `--isc-prefix`：指定读取 Step2 的哪一种 ISC 产物；不指定时会在每个 stimulus\_type 目录下自动识别 `roi_isc_*_by_age`（若存在多套会要求显式指定）
+- `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
 - `--assoc-method`：ROI-ISC 与发育模型的关联方式（默认 pearson；可选 spearman）
 - 性能说明：当 `--assoc-method spearman` 时，会对 ROI-ISC 与模型向量做预排秩并使用矩阵运算计算关联，避免在置换循环中对每个 ROI 反复排序，适合大 `--n-perm` 场景。
 - `--no-normalize-models`：关闭对模型向量的 zscore（默认开启）
@@ -172,6 +199,7 @@ python plot_roi_isc_dev_models_perm_sig.py \
 
 - `--fdr-mode`：`model_wise`（默认，每个模型内做 BH）或 `global`（该 stimulus\_type 下全检验一起做 BH）
 - `--positive-only`：仅保留 `r_obs > 0`
+- `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
 
 ## Step 5：脑图映射（Surface + Volume）
 
@@ -211,6 +239,7 @@ python plot_brain_surface_vol.py \
 - `--sig-method`：`fwer` / `fdr_model_wise` / `fdr_global` / `raw_p`
 - `--sig-col`：当 `--sig-method raw_p` 时使用（`p_perm_one_tailed`）
 - `--no-preview`：仅导出影像文件，跳过 Nilearn 在线预览（推荐在服务器/离线环境使用）
+- `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
 
 输出目录：
 
@@ -238,6 +267,7 @@ python plot_roi_isc_age_trajectory.py \
 
 - `--plot-mode`：`hexbin`（默认，解决过度绘制）或 `scatter`
 - `--fit`：`linear`/`poly2`/`poly3`/`lowess`（LOWESS 会自动对拟合数据点降采样）
+- `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
 - `--max-points`：绘图最大点数（默认 40000）
 - `--fit-max-points`：LOWESS 拟合最大点数（默认 5000）
 
