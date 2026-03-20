@@ -34,6 +34,15 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def has_repr_files(stim_dir: Path, repr_prefix: str) -> bool:
+    required = (
+        stim_dir / f"{repr_prefix}.npz",
+        stim_dir / f"{repr_prefix}_subjects.csv",
+        stim_dir / f"{repr_prefix}_rois.csv",
+    )
+    return all(p.exists() for p in required)
+
+
 def parse_chinese_age(age_str: object) -> float:
     if pd.isna(age_str) or str(age_str).strip() == "":
         return 999.0
@@ -169,6 +178,9 @@ def run(matrix_dir: Path, stimulus_dir_name: str, subject_info: Path, repr_prefi
 
     rows = []
     for stim_dir in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
+        if not has_repr_files(stim_dir, repr_prefix=str(repr_prefix)):
+            print(f"[SKIP] {stim_dir.name}: 缺少 {repr_prefix} 对应输入文件，跳过。")
+            continue
         rows.append(run_one_stimulus(stim_dir, subject_info, repr_prefix, isc_method=str(isc_method), isc_prefix=str(isc_prefix)))
     out = pd.DataFrame(rows)
     if not out.empty:

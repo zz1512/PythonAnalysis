@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="emo_ultra: Pair mean age vs ROI ISC trajectory plot")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
+    p.add_argument("--repr-prefix", type=str, default=None)
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
     p.add_argument("--isc-method", type=str, default=None, choices=["spearman", "pearson"])
@@ -42,6 +43,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--dpi", type=int, default=300)
     return p.parse_args()
+
+
+def has_repr_files(stim_dir: Path, repr_prefix: str) -> bool:
+    required = (
+        stim_dir / f"{repr_prefix}.npz",
+        stim_dir / f"{repr_prefix}_subjects.csv",
+        stim_dir / f"{repr_prefix}_rois.csv",
+    )
+    return all(p.exists() for p in required)
 
 
 def detect_isc_prefix(stim_dir: Path) -> List[str]:
@@ -217,6 +227,9 @@ def main() -> None:
     stim_dir = Path(args.matrix_dir) / str(args.stimulus_dir_name) / str(args.stimulus_type)
     if not stim_dir.exists():
         raise FileNotFoundError(f"未找到条件目录: {stim_dir}")
+    if args.repr_prefix is not None and not has_repr_files(stim_dir, repr_prefix=str(args.repr_prefix)):
+        print(f"[SKIP] {stim_dir.name}: 缺少 {args.repr_prefix} 对应输入文件，跳过。")
+        return
 
     result_csv = stim_dir / "roi_isc_dev_models_perm_fwer.csv"
     isc_prefix = resolve_isc_prefix(stim_dir, isc_prefix=args.isc_prefix, isc_method=args.isc_method)

@@ -134,6 +134,7 @@ python calc_roi_isc_by_age.py \
 - `--isc-method ` （`pearson`/`spearman`；默认 `spearman`）只影响 Step2 被试×被试 ISC 的计算方式；不会改变 Step1 的 `--rsm-method`，也不会改变 Step3 的 `--assoc-method`
 - `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`），便于兼容其他分组目录
 - 若使用 Step1.5 产物，请将 `--repr-prefix` 设为对应情绪矩阵前缀（如 `roi_repr_matrix_232_emotion4`）
+- 若某个 `stimulus_type` 目录缺少 `--repr-prefix` 对应的 `{repr_prefix}.npz / {repr_prefix}_subjects.csv / {repr_prefix}_rois.csv`，Step2 会自动打印 `[SKIP]` 并跳过该目录。
 
 ## Step 3：joint\_analysis\_roi\_isc\_dev\_models.py
 
@@ -157,6 +158,7 @@ python joint_analysis_roi_isc_dev_models.py \
 可选参数：
 
 - `--isc-method` / `--isc-prefix`：指定读取 Step2 的哪一种 ISC 产物；不指定时会在每个 stimulus\_type 目录下自动识别 `roi_isc_*_by_age`（若存在多套会要求显式指定）
+- `--repr-prefix`：可选；用于按 Step1/1.5 的矩阵前缀筛选可分析的 `stimulus_type`。若目录缺少该前缀对应三件套文件，则自动 `[SKIP]`。
 - `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
 - `--assoc-method`：ROI-ISC 与发育模型的关联方式（默认 pearson；可选 spearman）
 - 性能说明：当 `--assoc-method spearman` 时，会对 ROI-ISC 与模型向量做预排秩并使用矩阵运算计算关联，避免在置换循环中对每个 ROI 反复排序，适合大 `--n-perm` 场景。
@@ -200,6 +202,7 @@ python plot_roi_isc_dev_models_perm_sig.py \
 - `--fdr-mode`：`model_wise`（默认，每个模型内做 BH）或 `global`（该 stimulus\_type 下全检验一起做 BH）
 - `--positive-only`：仅保留 `r_obs > 0`
 - `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
+- `--repr-prefix`：可选；若提供，仅汇总存在该前缀矩阵三件套的 `stimulus_type`，其余目录自动 `[SKIP]`。
 
 ## Step 5：脑图映射（Surface + Volume）
 
@@ -240,6 +243,7 @@ python plot_brain_surface_vol.py \
 - `--sig-col`：当 `--sig-method raw_p` 时使用（`p_perm_one_tailed`）
 - `--no-preview`：仅导出影像文件，跳过 Nilearn 在线预览（推荐在服务器/离线环境使用）
 - `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
+- `--repr-prefix`：可选；若指定且当前 `--stimulus-type` 目录缺少对应矩阵三件套，则直接 `[SKIP]` 返回。
 
 输出目录：
 
@@ -268,6 +272,7 @@ python plot_roi_isc_age_trajectory.py \
 - `--plot-mode`：`hexbin`（默认，解决过度绘制）或 `scatter`
 - `--fit`：`linear`/`poly2`/`poly3`/`lowess`（LOWESS 会自动对拟合数据点降采样）
 - `--stimulus-dir-name`：指定条件目录名（默认 `by_stimulus`）
+- `--repr-prefix`：可选；若指定且当前 `--stimulus-type` 目录缺少对应矩阵三件套，则直接 `[SKIP]` 返回。
 - `--max-points`：绘图最大点数（默认 40000）
 - `--fit-max-points`：LOWESS 拟合最大点数（默认 5000）
 
