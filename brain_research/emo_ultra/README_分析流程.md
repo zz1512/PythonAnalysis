@@ -132,6 +132,7 @@ python joint_analysis_roi_isc_dev_models.py \
 
 - `--isc-method` / `--isc-prefix`：指定读取 Step2 的哪一种 ISC 产物；不指定时会在每个 stimulus\_type 目录下自动识别 `roi_isc_*_by_age`（若存在多套会要求显式指定）
 - `--assoc-method`：ROI-ISC 与发育模型的关联方式（默认 pearson；可选 spearman）
+- 性能说明：当 `--assoc-method spearman` 时，会对 ROI-ISC 与模型向量做预排秩并使用矩阵运算计算关联，避免在置换循环中对每个 ROI 反复排序，适合大 `--n-perm` 场景。
 - `--no-normalize-models`：关闭对模型向量的 zscore（默认开启）
 - `--no-fisher-z`：关闭 Fisher Z（atanh）变换（默认开启；开启时会先对 ISC r 值做 Fisher Z 再进入 zscore 与置换统计）
 
@@ -247,4 +248,3 @@ python plot_roi_isc_age_trajectory.py \
 - `data_check/check_stage3_perm_results.py`
 
 > 建议每一步后都运行对应 `data_check` 脚本，确认维度、被试排序与显著性统计数量。
-

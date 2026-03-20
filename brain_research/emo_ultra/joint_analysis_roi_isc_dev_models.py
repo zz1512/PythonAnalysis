@@ -139,19 +139,39 @@ def assoc(S_z: np.ndarray, m: np.ndarray, method: str) -> np.ndarray:
 
     if mth == "spearman":
         out = np.full((Sz.shape[0],), np.nan, dtype=np.float32)
-        for i in range(Sz.shape[0]):
-            x = Sz[i].reshape(-1)
-            joint = mask_m & np.isfinite(x)
-            if int(joint.sum()) < 3:
-                continue
-            xr = rankdata(x[joint]).astype(np.float32, copy=False)
-            mr = rankdata(mv[joint]).astype(np.float32, copy=False)
-            xz = zscore_1d(xr)
-            mz = zscore_1d(mr)
-            ok = np.isfinite(xz) & np.isfinite(mz)
-            if int(ok.sum()) < 3:
-                continue
-            out[i] = float((xz[ok] * mz[ok]).mean())
+        valid_rows = np.isfinite(Sz).all(axis=1)
+
+        if bool(valid_rows.any()):
+            mr = np.full_like(mv, np.nan, dtype=np.float32)
+            mr[mask_m] = zscore_1d(rankdata(mv[mask_m]).astype(np.float32, copy=False))
+            Sz_fast = Sz[valid_rows]
+            joint = mask_m.reshape(1, -1) & np.isfinite(Sz_fast)
+            denom = joint.sum(axis=1).astype(np.float32, copy=False)
+            prod = Sz_fast * mr.reshape(1, -1)
+            prod[~joint] = 0.0
+            denom_safe = denom.copy()
+            denom_safe[denom_safe == 0] = 1.0
+            out_fast = prod.sum(axis=1) / denom_safe
+            out_fast[denom <= 1] = np.nan
+            out[valid_rows] = out_fast.astype(np.float32, copy=False)
+
+        invalid_rows = ~valid_rows
+        if bool(invalid_rows.any()):
+            idx_invalid = np.where(invalid_rows)[0]
+            for i in idx_invalid.tolist():
+                x = Sz[i].reshape(-1)
+                joint_1d = mask_m & np.isfinite(x)
+                if int(joint_1d.sum()) < 3:
+                    continue
+                xr = rankdata(x[joint_1d]).astype(np.float32, copy=False)
+                mr = rankdata(mv[joint_1d]).astype(np.float32, copy=False)
+                xz = zscore_1d(xr)
+                mz = zscore_1d(mr)
+                ok = np.isfinite(xz) & np.isfinite(mz)
+                if int(ok.sum()) < 3:
+                    continue
+                out[i] = float((xz[ok] * mz[ok]).mean())
+
         return out
 
     raise ValueError(f"未知 assoc-method: {method}")
@@ -178,11 +198,18 @@ def run_one(
     n_pairs = int(iu.size)
 
     S_z = []
+    assoc_m = str(assoc_method).strip().lower()
     for i in range(len(rois)):
         v = isc[i][iu, ju]
         if bool(fisher_z_enabled):
             v = fisher_z(v)
-        S_z.append(zscore_1d(v))
+        if assoc_m == "spearman":
+            mask_v = np.isfinite(v)
+            vr = np.full_like(v, np.nan, dtype=np.float32)
+            vr[mask_v] = rankdata(v[mask_v]).astype(np.float32, copy=False)
+            S_z.append(zscore_1d(vr))
+        else:
+            S_z.append(zscore_1d(v))
     S_z = np.stack(S_z, axis=0).astype(np.float32)
 
     model_names = ("M_nn", "M_conv", "M_div")
