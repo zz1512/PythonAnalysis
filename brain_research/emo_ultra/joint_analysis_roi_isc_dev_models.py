@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ROI ISC vs 发育模型：置换检验 + model-wise FWER")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
+    p.add_argument("--repr-prefix", type=str, default=None)
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson"))
@@ -33,6 +34,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-normalize-models", action="store_false", dest="normalize_models", default=True)
     p.add_argument("--no-fisher-z", action="store_false", dest="fisher_z", default=True)
     return p.parse_args()
+
+
+def has_repr_files(stim_dir: Path, repr_prefix: str) -> bool:
+    required = (
+        stim_dir / f"{repr_prefix}.npz",
+        stim_dir / f"{repr_prefix}_subjects.csv",
+        stim_dir / f"{repr_prefix}_rois.csv",
+    )
+    return all(p.exists() for p in required)
 
 
 def detect_isc_prefix(stim_dir: Path) -> List[str]:
@@ -302,6 +312,7 @@ def run(
     normalize_models: bool,
     fisher_z_enabled: bool,
     assoc_method: str,
+    repr_prefix: Optional[str],
 ) -> None:
     by_stim = matrix_dir / str(stimulus_dir_name)
     stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()])
@@ -310,6 +321,9 @@ def run(
 
     summary = []
     for d in stim_dirs:
+        if repr_prefix is not None and not has_repr_files(d, repr_prefix=str(repr_prefix)):
+            print(f"[SKIP] {d.name}: 缺少 {repr_prefix} 对应输入文件，跳过。")
+            continue
         prefix = resolve_isc_prefix(d, isc_prefix=isc_prefix, isc_method=isc_method)
         out = run_one(
             d,
@@ -343,6 +357,7 @@ def main() -> None:
         normalize_models=bool(args.normalize_models),
         fisher_z_enabled=bool(args.fisher_z),
         assoc_method=str(args.assoc_method),
+        repr_prefix=args.repr_prefix,
     )
 
 

@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="将显著 ROI r 值映射回大脑")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
+    p.add_argument("--repr-prefix", type=str, default=None)
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
     p.add_argument("--sig-method", type=str, default="fwer", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
@@ -37,6 +38,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--no-preview", action="store_true")
     return p.parse_args()
+
+
+def has_repr_files(stim_dir: Path, repr_prefix: str) -> bool:
+    required = (
+        stim_dir / f"{repr_prefix}.npz",
+        stim_dir / f"{repr_prefix}_subjects.csv",
+        stim_dir / f"{repr_prefix}_rois.csv",
+    )
+    return all(p.exists() for p in required)
 
 
 def load_atlas() -> Tuple[np.ndarray, np.ndarray, nib.Nifti1Image, np.ndarray]:
@@ -205,6 +215,9 @@ def save_and_plot_maps(
 def main():
     args = parse_args()
     stim_dir = Path(args.matrix_dir) / str(args.stimulus_dir_name) / args.stimulus_type
+    if args.repr_prefix is not None and not has_repr_files(stim_dir, repr_prefix=str(args.repr_prefix)):
+        print(f"[SKIP] {stim_dir.name}: 缺少 {args.repr_prefix} 对应输入文件，跳过。")
+        return
     result_csv = stim_dir / "roi_isc_dev_models_perm_fwer.csv"
     
     if not result_csv.exists():

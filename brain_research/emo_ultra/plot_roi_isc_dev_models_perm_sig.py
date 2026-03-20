@@ -22,12 +22,22 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="绘制 emo_ultra ROI ISC 发育模型显著结果热图（FWER/FDR）")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
+    p.add_argument("--repr-prefix", type=str, default=None)
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--sig-method", type=str, default=None, choices=["fwer", "fdr_model_wise", "fdr_global"])
     p.add_argument("--fdr-mode", type=str, default="model_wise", choices=["model_wise", "global"])
     p.add_argument("--positive-only", action="store_true")
     return p.parse_args()
+
+
+def has_repr_files(stim_dir: Path, repr_prefix: str) -> bool:
+    required = (
+        stim_dir / f"{repr_prefix}.npz",
+        stim_dir / f"{repr_prefix}_subjects.csv",
+        stim_dir / f"{repr_prefix}_rois.csv",
+    )
+    return all(p.exists() for p in required)
 
 
 def resolve_sig_method(sig_method: Optional[str], fdr_mode: str) -> str:
@@ -41,10 +51,20 @@ def resolve_sig_method(sig_method: Optional[str], fdr_mode: str) -> str:
     raise ValueError(f"不支持 fdr mode: {fdr_mode}")
 
 
-def collect_results(matrix_dir: Path, stimulus_dir_name: str, alpha: float, sig_method: str, positive_only: bool) -> pd.DataFrame:
+def collect_results(
+    matrix_dir: Path,
+    stimulus_dir_name: str,
+    alpha: float,
+    sig_method: str,
+    positive_only: bool,
+    repr_prefix: Optional[str],
+) -> pd.DataFrame:
     by_stim = matrix_dir / str(stimulus_dir_name)
     rows: List[pd.DataFrame] = []
     for d in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
+        if repr_prefix is not None and not has_repr_files(d, repr_prefix=str(repr_prefix)):
+            print(f"[SKIP] {d.name}: 缺少 {repr_prefix} 对应输入文件，跳过。")
+            continue
         p = d / "roi_isc_dev_models_perm_fwer.csv"
         if not p.exists():
             continue
@@ -150,7 +170,14 @@ def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, sig_method: st
 def main() -> None:
     args = parse_args()
     sig_method = resolve_sig_method(args.sig_method, str(args.fdr_mode))
-    df = collect_results(Path(args.matrix_dir), str(args.stimulus_dir_name), float(args.alpha), str(sig_method), bool(args.positive_only))
+    df = collect_results(
+        Path(args.matrix_dir),
+        str(args.stimulus_dir_name),
+        float(args.alpha),
+        str(sig_method),
+        bool(args.positive_only),
+        repr_prefix=args.repr_prefix,
+    )
     draw(df, Path(args.matrix_dir) / "figures", float(args.alpha), int(args.dpi), str(sig_method), bool(args.positive_only))
 
 
