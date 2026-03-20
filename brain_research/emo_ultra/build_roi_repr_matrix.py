@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stim-type-col", type=str, default="raw_emotion")
     p.add_argument("--stim-id-col", type=str, default="stimulus_content")
     p.add_argument("--threshold-ratio", type=float, default=0.80)
-    p.add_argument("--rsm-method", type=str, default="pearson", choices=("spearman", "pearson"))
+    p.add_argument("--rsm-method", type=str, default="spearman", choices=("spearman", "pearson"))
     p.add_argument("--no-cocktail-blank", action="store_false", dest="cocktail_blank", default=True)
     return p.parse_args()
 
