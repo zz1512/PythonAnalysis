@@ -5,7 +5,7 @@ calc_roi_isc_by_age.py
 
 Step 2:
 基于 Step 1 的 ROI 表征矩阵（subject x stim x stim），
-计算每个 ROI 的被试×被试 Spearman 相似性矩阵，并按年龄排序被试。
+计算每个 ROI 的被试×被试相似性矩阵，并按年龄排序被试。
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--subject-info", type=Path, default=Path(os.environ.get("SUBJECT_AGE_TABLE", "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")))
     p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_232")
+    p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson"))
+    p.add_argument("--isc-prefix", type=str, default=None)
     return p.parse_args()
 
 
@@ -101,12 +103,32 @@ def spearman_corr_matrix_rows(X: np.ndarray) -> np.ndarray:
     return np.clip(corr, -1.0, 1.0).astype(np.float32)
 
 
+def pearson_corr_matrix_rows(X: np.ndarray) -> np.ndarray:
+    X = np.asarray(X, dtype=np.float32)
+    mean = X.mean(axis=1, keepdims=True)
+    std = X.std(axis=1, keepdims=True, ddof=1)
+    std[std == 0] = np.nan
+    Z = (X - mean) / std
+    p = X.shape[1]
+    corr = (Z @ Z.T) / float(max(1, p - 1))
+    return np.clip(corr, -1.0, 1.0).astype(np.float32)
+
+
+def compute_isc(X: np.ndarray, method: str) -> np.ndarray:
+    m = str(method).strip().lower()
+    if m == "spearman":
+        return spearman_corr_matrix_rows(X)
+    if m == "pearson":
+        return pearson_corr_matrix_rows(X)
+    raise ValueError(f"未知 isc-method: {method}")
+
+
 def flatten_upper(rsm: np.ndarray) -> np.ndarray:
     iu = np.triu_indices(rsm.shape[0], k=1)
     return rsm[iu].astype(np.float32)
 
 
-def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str) -> Dict[str, int]:
+def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str, isc_method: str, isc_prefix: str) -> Dict[str, object]:
     npz_path = stim_dir / f"{repr_prefix}.npz"
     subjects_path = stim_dir / f"{repr_prefix}_subjects.csv"
     rois_path = stim_dir / f"{repr_prefix}_rois.csv"
@@ -126,32 +148,37 @@ def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str) -> Di
         arr = np.asarray(npz[roi], dtype=np.float32)
         arr = arr[order, :, :]
         vecs = np.stack([flatten_upper(arr[i]) for i in range(n_sub)], axis=0)
-        isc[ri] = spearman_corr_matrix_rows(vecs)
+        isc[ri] = compute_isc(vecs, method=str(isc_method))
 
-    out_prefix = "roi_isc_spearman_by_age"
+    out_prefix = str(isc_prefix)
     np.save(stim_dir / f"{out_prefix}.npy", isc)
     pd.DataFrame({"subject": subjects_sorted, "age": ages_sorted}).to_csv(stim_dir / f"{out_prefix}_subjects_sorted.csv", index=False)
     pd.DataFrame({"roi": rois}).to_csv(stim_dir / f"{out_prefix}_rois.csv", index=False)
-    return {"stimulus_type": stim_dir.name, "n_subjects": n_sub, "n_rois": len(rois)}
+    pd.DataFrame({"isc_method": [str(isc_method)], "repr_prefix": [str(repr_prefix)], "isc_prefix": [str(out_prefix)]}).to_csv(
+        stim_dir / f"{out_prefix}_meta.csv",
+        index=False,
+    )
+    return {"stimulus_type": stim_dir.name, "n_subjects": n_sub, "n_rois": len(rois), "isc_method": str(isc_method), "isc_prefix": str(out_prefix)}
 
 
-def run(matrix_dir: Path, subject_info: Path, repr_prefix: str) -> None:
+def run(matrix_dir: Path, subject_info: Path, repr_prefix: str, isc_method: str, isc_prefix: str) -> None:
     by_stim = matrix_dir / "by_stimulus"
     if not by_stim.exists():
         raise FileNotFoundError(f"未找到目录: {by_stim}")
 
     rows = []
     for stim_dir in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
-        rows.append(run_one_stimulus(stim_dir, subject_info, repr_prefix))
+        rows.append(run_one_stimulus(stim_dir, subject_info, repr_prefix, isc_method=str(isc_method), isc_prefix=str(isc_prefix)))
     out = pd.DataFrame(rows)
     if not out.empty:
         out = out.sort_values("stimulus_type")
-    out.to_csv(matrix_dir / "roi_isc_spearman_by_age_summary.csv", index=False)
+    out.to_csv(matrix_dir / f"{isc_prefix}_summary.csv", index=False)
 
 
 def main() -> None:
     args = parse_args()
-    run(args.matrix_dir, args.subject_info, args.repr_prefix)
+    isc_prefix = str(args.isc_prefix) if args.isc_prefix is not None else f"roi_isc_{str(args.isc_method)}_by_age"
+    run(args.matrix_dir, args.subject_info, args.repr_prefix, isc_method=str(args.isc_method), isc_prefix=str(isc_prefix))
 
 
 if __name__ == "__main__":

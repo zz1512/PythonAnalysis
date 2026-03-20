@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Tuple
 
 import nibabel as nib
 import numpy as np
@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
     p.add_argument("--sig-method", type=str, default="fwer", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
-    p.add_argument("--sig-col", type=str, default="p_fwer_model_wise", choices=["p_fwer_model_wise", "p_perm_one_tailed"])
+    p.add_argument("--sig-col", type=str, default="p_perm_one_tailed", choices=["p_perm_one_tailed"])
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--no-preview", action="store_true")
     return p.parse_args()
@@ -71,25 +71,6 @@ def map_values_to_brain(df: pd.DataFrame, surf_l_data: np.ndarray, surf_r_data: 
     return out_surf_l, out_surf_r, out_vol
 
 
-def bh_fdr(pvals: np.ndarray) -> np.ndarray:
-    p = np.asarray(pvals, dtype=float).reshape(-1)
-    q = np.full(p.shape, np.nan, dtype=float)
-    mask = np.isfinite(p)
-    if int(mask.sum()) == 0:
-        return q
-    pv = p[mask]
-    m = int(pv.size)
-    order = np.argsort(pv)
-    ranked = pv[order]
-    q_ranked = ranked * float(m) / np.arange(1, m + 1, dtype=float)
-    q_ranked = np.minimum.accumulate(q_ranked[::-1])[::-1]
-    q_ranked = np.clip(q_ranked, 0.0, 1.0)
-    q_valid = np.empty_like(pv)
-    q_valid[order] = q_ranked
-    q[mask] = q_valid
-    return q
-
-
 def apply_significance(df: pd.DataFrame, model: str, method: str, sig_col: str, alpha: float) -> pd.DataFrame:
     out = df.copy()
     if out.empty:
@@ -114,22 +95,24 @@ def apply_significance(df: pd.DataFrame, model: str, method: str, sig_col: str, 
         out["sig_method"] = f"raw_{sig_col}"
         out["p_sig"] = out[str(sig_col)].astype(float)
     elif str(method) in ("fdr_model_wise", "fdr_global"):
-        if "p_perm_one_tailed" not in out.columns:
-            raise ValueError("结果文件缺少 p_perm_one_tailed，无法按 FDR 映射")
         if str(method) == "fdr_model_wise":
             out = out[out["model"].astype(str) == str(model)].copy()
             if out.empty:
                 raise ValueError(f"结果中未找到 model={model} 的记录")
-            out["p_fdr_bh"] = bh_fdr(out["p_perm_one_tailed"].astype(float).to_numpy())
+            if "p_fdr_bh_model_wise" not in out.columns:
+                raise ValueError("结果文件缺少 p_fdr_bh_model_wise，无法按 FDR 映射")
+            sig = out["p_fdr_bh_model_wise"].astype(float) <= float(alpha)
+            out["sig_method"] = "fdr_model_wise"
+            out["p_sig"] = out["p_fdr_bh_model_wise"].astype(float)
         else:
-            tmp = df.copy()
-            tmp["p_fdr_bh"] = bh_fdr(tmp["p_perm_one_tailed"].astype(float).to_numpy())
-            out = tmp[tmp["model"].astype(str) == str(model)].copy()
+            out = out[out["model"].astype(str) == str(model)].copy()
             if out.empty:
                 raise ValueError(f"结果中未找到 model={model} 的记录")
-        sig = out["p_fdr_bh"].astype(float) <= float(alpha)
-        out["sig_method"] = str(method)
-        out["p_sig"] = out["p_fdr_bh"].astype(float)
+            if "p_fdr_bh_global" not in out.columns:
+                raise ValueError("结果文件缺少 p_fdr_bh_global，无法按 FDR 映射")
+            sig = out["p_fdr_bh_global"].astype(float) <= float(alpha)
+            out["sig_method"] = "fdr_global"
+            out["p_sig"] = out["p_fdr_bh_global"].astype(float)
     else:
         raise ValueError(f"未知 sig-method: {method}")
 

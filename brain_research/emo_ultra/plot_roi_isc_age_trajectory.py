@@ -3,7 +3,7 @@
 """
 plot_roi_isc_age_trajectory.py
 
-基于 Step2 的 roi_isc_spearman_by_age.npy，为指定 stimulus_type 与模型筛选 Top ROI，
+基于 Step2 的 ROI-ISC（被试×被试），为指定 stimulus_type 与模型筛选 Top ROI，
 绘制被试对平均年龄 vs ISC 的散点图，并拟合回归/lowess 曲线。
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
+    p.add_argument("--isc-method", type=str, default=None, choices=["spearman", "pearson"])
+    p.add_argument("--isc-prefix", type=str, default=None)
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--method", type=str, default="fdr_model_wise", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
     p.add_argument("--top-k", type=int, default=5)
@@ -41,28 +43,34 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def bh_fdr(pvals: np.ndarray) -> np.ndarray:
-    p = np.asarray(pvals, dtype=float).reshape(-1)
-    q = np.full(p.shape, np.nan, dtype=float)
-    mask = np.isfinite(p)
-    if int(mask.sum()) == 0:
-        return q
-    pv = p[mask]
-    m = int(pv.size)
-    order = np.argsort(pv)
-    ranked = pv[order]
-    q_ranked = ranked * float(m) / np.arange(1, m + 1, dtype=float)
-    q_ranked = np.minimum.accumulate(q_ranked[::-1])[::-1]
-    q_ranked = np.clip(q_ranked, 0.0, 1.0)
-    q_valid = np.empty_like(pv)
-    q_valid[order] = q_ranked
-    q[mask] = q_valid
-    return q
+def detect_isc_prefix(stim_dir: Path) -> List[str]:
+    prefixes = []
+    for npy in sorted(stim_dir.glob("roi_isc_*_by_age.npy")):
+        prefix = npy.stem
+        if (stim_dir / f"{prefix}_subjects_sorted.csv").exists() and (stim_dir / f"{prefix}_rois.csv").exists():
+            prefixes.append(prefix)
+    return prefixes
+
+
+def resolve_isc_prefix(stim_dir: Path, isc_prefix: Optional[str], isc_method: Optional[str]) -> str:
+    if isc_prefix is not None:
+        return str(isc_prefix)
+    found = detect_isc_prefix(stim_dir)
+    if isc_method is not None:
+        expected = f"roi_isc_{str(isc_method)}_by_age"
+        if expected in found:
+            return expected
+        raise FileNotFoundError(f"未找到指定 isc-method 对应产物: {expected}（可用: {found}）")
+    if len(found) == 1:
+        return found[0]
+    if len(found) == 0:
+        raise FileNotFoundError(f"{stim_dir} 下未找到 roi_isc_*_by_age.npy")
+    raise ValueError(f"{stim_dir} 下存在多个 ISC 产物前缀: {found}，请指定 --isc-prefix 或 --isc-method")
 
 
 def select_top_rois(result_csv: Path, model: str, method: str, alpha: float, top_k: int, positive_only: bool) -> pd.DataFrame:
     df = pd.read_csv(result_csv)
-    need = {"roi", "model", "r_obs", "p_perm_one_tailed", "p_fwer_model_wise"}
+    need = {"roi", "model", "r_obs", "p_perm_one_tailed", "p_fwer_model_wise", "p_fdr_bh_model_wise", "p_fdr_bh_global"}
     miss = need - set(df.columns)
     if miss:
         raise ValueError(f"{result_csv} 缺少列: {sorted(miss)}")
@@ -84,18 +92,14 @@ def select_top_rois(result_csv: Path, model: str, method: str, alpha: float, top
     elif method == "raw_p":
         sub = sub[sub["p_perm_one_tailed"] <= float(alpha)]
         sub = sub.sort_values(["p_perm_one_tailed", "r_obs"], ascending=[True, False])
-    elif method in ("fdr_model_wise", "fdr_global"):
-        if method == "fdr_model_wise":
-            sub["p_fdr_bh"] = bh_fdr(sub["p_perm_one_tailed"].to_numpy(dtype=float))
-        else:
-            work = df.copy()
-            work["p_fdr_bh"] = bh_fdr(work["p_perm_one_tailed"].to_numpy(dtype=float))
-            sub = work[work["model"].astype(str) == str(model)].copy()
-            if bool(positive_only):
-                sub = sub[sub["r_obs"] > 0].copy()
-        sub = sub[np.isfinite(sub["p_fdr_bh"].to_numpy(dtype=float))].copy()
-        sub = sub[sub["p_fdr_bh"] <= float(alpha)]
-        sub = sub.sort_values(["p_fdr_bh", "r_obs"], ascending=[True, False])
+    elif method == "fdr_model_wise":
+        sub = sub[np.isfinite(sub["p_fdr_bh_model_wise"].to_numpy(dtype=float))].copy()
+        sub = sub[sub["p_fdr_bh_model_wise"] <= float(alpha)]
+        sub = sub.sort_values(["p_fdr_bh_model_wise", "r_obs"], ascending=[True, False])
+    elif method == "fdr_global":
+        sub = sub[np.isfinite(sub["p_fdr_bh_global"].to_numpy(dtype=float))].copy()
+        sub = sub[sub["p_fdr_bh_global"] <= float(alpha)]
+        sub = sub.sort_values(["p_fdr_bh_global", "r_obs"], ascending=[True, False])
     else:
         raise ValueError(f"未知 method: {method}")
 
@@ -104,10 +108,10 @@ def select_top_rois(result_csv: Path, model: str, method: str, alpha: float, top
     return sub.head(int(top_k)).reset_index(drop=True)
 
 
-def load_pair_data(stim_dir: Path, roi: str) -> Tuple[np.ndarray, np.ndarray]:
-    isc = np.load(stim_dir / "roi_isc_spearman_by_age.npy")
-    subs = pd.read_csv(stim_dir / "roi_isc_spearman_by_age_subjects_sorted.csv")
-    rois = pd.read_csv(stim_dir / "roi_isc_spearman_by_age_rois.csv")["roi"].astype(str).tolist()
+def load_pair_data(stim_dir: Path, roi: str, isc_prefix: str) -> Tuple[np.ndarray, np.ndarray]:
+    isc = np.load(stim_dir / f"{isc_prefix}.npy")
+    subs = pd.read_csv(stim_dir / f"{isc_prefix}_subjects_sorted.csv")
+    rois = pd.read_csv(stim_dir / f"{isc_prefix}_rois.csv")["roi"].astype(str).tolist()
     if roi not in rois:
         raise ValueError(f"ROI 不存在于该 stimulus_type: {roi}")
     ri = int(rois.index(roi))
@@ -125,6 +129,7 @@ def plot_one(
     x: np.ndarray,
     y: np.ndarray,
     title: str,
+    y_label: str,
     fit: str,
     plot_mode: str,
     max_points: int,
@@ -199,7 +204,7 @@ def plot_one(
         )
     ax.set_title(title)
     ax.set_xlabel("Pair mean age")
-    ax.set_ylabel("ISC (Spearman)")
+    ax.set_ylabel(str(y_label))
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=int(dpi), bbox_inches="tight")
@@ -213,6 +218,7 @@ def main() -> None:
         raise FileNotFoundError(f"未找到条件目录: {stim_dir}")
 
     result_csv = stim_dir / "roi_isc_dev_models_perm_fwer.csv"
+    isc_prefix = resolve_isc_prefix(stim_dir, isc_prefix=args.isc_prefix, isc_method=args.isc_method)
     top = select_top_rois(
         result_csv=result_csv,
         model=str(args.model),
@@ -224,9 +230,14 @@ def main() -> None:
 
     fig_dir = Path(args.matrix_dir) / "figures"
     fit = "lowess" if bool(args.lowess) else str(args.fit)
+    y_label = "ISC"
+    if "pearson" in str(isc_prefix).lower():
+        y_label = "ISC (Pearson)"
+    elif "spearman" in str(isc_prefix).lower():
+        y_label = "ISC (Spearman)"
     for _, row in top.iterrows():
         roi = str(row["roi"])
-        x, y = load_pair_data(stim_dir, roi)
+        x, y = load_pair_data(stim_dir, roi, isc_prefix=str(isc_prefix))
         if x.size <= 10:
             continue
         method_tag = str(args.method)
@@ -239,6 +250,7 @@ def main() -> None:
             x,
             y,
             title=title,
+            y_label=str(y_label),
             fit=fit,
             plot_mode=str(args.plot_mode),
             max_points=int(args.max_points),
