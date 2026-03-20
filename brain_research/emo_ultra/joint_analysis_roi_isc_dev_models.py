@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-joint_analysis_roi_isc_dev_models_perm_fwer.py
+joint_analysis_roi_isc_dev_models.py
 
 Step 3:
 对每个刺激类型，基于 ROI 级被试×被试相似性矩阵进行发育模型置换检验。
@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
 
 DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_ultra")
 
@@ -25,9 +26,56 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--isc-method", type=str, default=None, choices=("spearman", "pearson"))
+    p.add_argument("--isc-prefix", type=str, default=None)
+    p.add_argument("--assoc-method", type=str, default="pearson", choices=("pearson", "spearman"))
     p.add_argument("--no-normalize-models", action="store_false", dest="normalize_models", default=True)
     p.add_argument("--no-fisher-z", action="store_false", dest="fisher_z", default=True)
     return p.parse_args()
+
+
+def detect_isc_prefix(stim_dir: Path) -> List[str]:
+    prefixes = []
+    for npy in sorted(stim_dir.glob("roi_isc_*_by_age.npy")):
+        prefix = npy.stem
+        if (stim_dir / f"{prefix}_subjects_sorted.csv").exists() and (stim_dir / f"{prefix}_rois.csv").exists():
+            prefixes.append(prefix)
+    return prefixes
+
+
+def resolve_isc_prefix(stim_dir: Path, isc_prefix: Optional[str], isc_method: Optional[str]) -> str:
+    if isc_prefix is not None:
+        return str(isc_prefix)
+    found = detect_isc_prefix(stim_dir)
+    if isc_method is not None:
+        expected = f"roi_isc_{str(isc_method)}_by_age"
+        if expected in found:
+            return expected
+        raise FileNotFoundError(f"未找到指定 isc-method 对应产物: {expected}（可用: {found}）")
+    if len(found) == 1:
+        return found[0]
+    if len(found) == 0:
+        raise FileNotFoundError(f"{stim_dir} 下未找到 roi_isc_*_by_age.npy")
+    raise ValueError(f"{stim_dir} 下存在多个 ISC 产物前缀: {found}，请指定 --isc-prefix 或 --isc-method")
+
+
+def bh_fdr(pvals: np.ndarray) -> np.ndarray:
+    p = np.asarray(pvals, dtype=np.float64).reshape(-1)
+    q = np.full(p.shape, np.nan, dtype=np.float64)
+    m = np.isfinite(p)
+    if int(m.sum()) == 0:
+        return q
+    pv = p[m]
+    n = int(pv.size)
+    order = np.argsort(pv)
+    ranked = pv[order]
+    q_ranked = ranked * float(n) / np.arange(1, n + 1, dtype=np.float64)
+    q_ranked = np.minimum.accumulate(q_ranked[::-1])[::-1]
+    q_ranked = np.clip(q_ranked, 0.0, 1.0)
+    q_valid = np.empty_like(pv)
+    q_valid[order] = q_ranked
+    q[m] = q_valid
+    return q
 
 
 def zscore_1d(x: np.ndarray) -> np.ndarray:
@@ -70,27 +118,77 @@ def build_models(ages: np.ndarray, iu: np.ndarray, ju: np.ndarray, normalize: bo
     return nn, conv, div
 
 
-def assoc(S_z: np.ndarray, m: np.ndarray) -> np.ndarray:
+def assoc(S_z: np.ndarray, m: np.ndarray, method: str) -> np.ndarray:
     mv = np.asarray(m, dtype=np.float32).reshape(-1)
     mask_m = np.isfinite(mv)
     if int(mask_m.sum()) <= 1:
         return np.full((S_z.shape[0],), np.nan, dtype=np.float32)
+
     Sz = np.asarray(S_z, dtype=np.float32)
-    joint = mask_m.reshape(1, -1) & np.isfinite(Sz)
-    denom = joint.sum(axis=1).astype(np.float32, copy=False)
-    prod = Sz * mv.reshape(1, -1)
-    prod[~joint] = 0.0
-    denom_safe = denom.copy()
-    denom_safe[denom_safe == 0] = 1.0
-    out = prod.sum(axis=1) / denom_safe
-    out[denom <= 1] = np.nan
-    return out.astype(np.float32, copy=False)
+    mth = str(method).strip().lower()
+    if mth == "pearson":
+        joint = mask_m.reshape(1, -1) & np.isfinite(Sz)
+        denom = joint.sum(axis=1).astype(np.float32, copy=False)
+        prod = Sz * mv.reshape(1, -1)
+        prod[~joint] = 0.0
+        denom_safe = denom.copy()
+        denom_safe[denom_safe == 0] = 1.0
+        out = prod.sum(axis=1) / denom_safe
+        out[denom <= 1] = np.nan
+        return out.astype(np.float32, copy=False)
+
+    if mth == "spearman":
+        out = np.full((Sz.shape[0],), np.nan, dtype=np.float32)
+        valid_rows = np.isfinite(Sz).all(axis=1)
+
+        if bool(valid_rows.any()):
+            mr = np.full_like(mv, np.nan, dtype=np.float32)
+            mr[mask_m] = zscore_1d(rankdata(mv[mask_m]).astype(np.float32, copy=False))
+            Sz_fast = Sz[valid_rows]
+            joint = mask_m.reshape(1, -1) & np.isfinite(Sz_fast)
+            denom = joint.sum(axis=1).astype(np.float32, copy=False)
+            prod = Sz_fast * mr.reshape(1, -1)
+            prod[~joint] = 0.0
+            denom_safe = denom.copy()
+            denom_safe[denom_safe == 0] = 1.0
+            out_fast = prod.sum(axis=1) / denom_safe
+            out_fast[denom <= 1] = np.nan
+            out[valid_rows] = out_fast.astype(np.float32, copy=False)
+
+        invalid_rows = ~valid_rows
+        if bool(invalid_rows.any()):
+            idx_invalid = np.where(invalid_rows)[0]
+            for i in idx_invalid.tolist():
+                x = Sz[i].reshape(-1)
+                joint_1d = mask_m & np.isfinite(x)
+                if int(joint_1d.sum()) < 3:
+                    continue
+                xr = rankdata(x[joint_1d]).astype(np.float32, copy=False)
+                mr = rankdata(mv[joint_1d]).astype(np.float32, copy=False)
+                xz = zscore_1d(xr)
+                mz = zscore_1d(mr)
+                ok = np.isfinite(xz) & np.isfinite(mz)
+                if int(ok.sum()) < 3:
+                    continue
+                out[i] = float((xz[ok] * mz[ok]).mean())
+
+        return out
+
+    raise ValueError(f"未知 assoc-method: {method}")
 
 
-def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fisher_z_enabled: bool) -> pd.DataFrame:
-    isc = np.load(stim_dir / "roi_isc_spearman_by_age.npy")
-    sub_df = pd.read_csv(stim_dir / "roi_isc_spearman_by_age_subjects_sorted.csv")
-    roi_df = pd.read_csv(stim_dir / "roi_isc_spearman_by_age_rois.csv")
+def run_one(
+    stim_dir: Path,
+    n_perm: int,
+    seed: int,
+    isc_prefix: str,
+    normalize_models: bool,
+    fisher_z_enabled: bool,
+    assoc_method: str,
+) -> pd.DataFrame:
+    isc = np.load(stim_dir / f"{isc_prefix}.npy")
+    sub_df = pd.read_csv(stim_dir / f"{isc_prefix}_subjects_sorted.csv")
+    roi_df = pd.read_csv(stim_dir / f"{isc_prefix}_rois.csv")
     ages = sub_df["age"].astype(float).to_numpy()
     subjects = sub_df["subject"].astype(str).tolist()
     rois = roi_df["roi"].astype(str).tolist()
@@ -100,11 +198,18 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fish
     n_pairs = int(iu.size)
 
     S_z = []
+    assoc_m = str(assoc_method).strip().lower()
     for i in range(len(rois)):
         v = isc[i][iu, ju]
         if bool(fisher_z_enabled):
             v = fisher_z(v)
-        S_z.append(zscore_1d(v))
+        if assoc_m == "spearman":
+            mask_v = np.isfinite(v)
+            vr = np.full_like(v, np.nan, dtype=np.float32)
+            vr[mask_v] = rankdata(v[mask_v]).astype(np.float32, copy=False)
+            S_z.append(zscore_1d(vr))
+        else:
+            S_z.append(zscore_1d(v))
     S_z = np.stack(S_z, axis=0).astype(np.float32)
 
     model_names = ("M_nn", "M_conv", "M_div")
@@ -113,7 +218,7 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fish
     obs = []
     tests = []
     for mi, mname in enumerate(model_names):
-        rr = assoc(S_z, m_obs[mi])
+        rr = assoc(S_z, m_obs[mi], method=str(assoc_method))
         for ri, roi in enumerate(rois):
             tests.append((roi, mname))
             obs.append(float(rr[ri]))
@@ -131,7 +236,7 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fish
         r_all = np.empty(n_tests, dtype=np.float32)
         off = 0
         for mv in m_perm:
-            rr = assoc(S_z, mv)
+            rr = assoc(S_z, mv, method=str(assoc_method))
             r_all[off:off + n_rois] = rr
             off += n_rois
 
@@ -169,9 +274,16 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fish
             "n_perm": int(n_perm),
             "seed": int(seed),
             "normalize_models": bool(normalize_models),
+            "isc_prefix": str(isc_prefix),
+            "assoc_method": str(assoc_method),
+            "fisher_z": bool(fisher_z_enabled),
         })
 
     out_df = pd.DataFrame(rows).sort_values(["model", "roi"])
+    out_df["p_fdr_bh_model_wise"] = np.nan
+    for _, idx in out_df.groupby("model").groups.items():
+        out_df.loc[idx, "p_fdr_bh_model_wise"] = bh_fdr(out_df.loc[idx, "p_perm_one_tailed"].to_numpy(dtype=float))
+    out_df["p_fdr_bh_global"] = bh_fdr(out_df["p_perm_one_tailed"].to_numpy(dtype=float))
     out_prefix = "roi_isc_dev_models_perm_fwer"
     out_df.to_csv(stim_dir / f"{out_prefix}.csv", index=False)
     sub_df[["subject", "age"]].to_csv(stim_dir / f"{out_prefix}_subjects_sorted.csv", index=False)
@@ -179,7 +291,16 @@ def run_one(stim_dir: Path, n_perm: int, seed: int, normalize_models: bool, fish
     return out_df
 
 
-def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool, fisher_z_enabled: bool) -> None:
+def run(
+    matrix_dir: Path,
+    n_perm: int,
+    seed: int,
+    isc_prefix: Optional[str],
+    isc_method: Optional[str],
+    normalize_models: bool,
+    fisher_z_enabled: bool,
+    assoc_method: str,
+) -> None:
     by_stim = matrix_dir / "by_stimulus"
     stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()])
     if not stim_dirs:
@@ -187,12 +308,15 @@ def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool, fisher
 
     summary = []
     for d in stim_dirs:
+        prefix = resolve_isc_prefix(d, isc_prefix=isc_prefix, isc_method=isc_method)
         out = run_one(
             d,
             n_perm=int(n_perm),
             seed=int(seed),
+            isc_prefix=str(prefix),
             normalize_models=bool(normalize_models),
             fisher_z_enabled=bool(fisher_z_enabled),
+            assoc_method=str(assoc_method),
         )
         sig = out[(out["r_obs"] > 0) & (out["p_fwer_model_wise"] <= 0.05)]
         summary.append({"stimulus_type": d.name, "n_rows": int(out.shape[0]), "n_sig_pos_fwer": int(sig.shape[0])})
@@ -202,7 +326,21 @@ def run(matrix_dir: Path, n_perm: int, seed: int, normalize_models: bool, fisher
 
 def main() -> None:
     args = parse_args()
-    run(args.matrix_dir, int(args.n_perm), int(args.seed), bool(args.normalize_models), bool(args.fisher_z))
+    matrix_dir = Path(args.matrix_dir)
+    by_stim = matrix_dir / "by_stimulus"
+    stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()]) if by_stim.exists() else []
+    if not stim_dirs:
+        raise FileNotFoundError(f"{by_stim} 下无条件目录")
+    run(
+        matrix_dir,
+        int(args.n_perm),
+        int(args.seed),
+        isc_prefix=args.isc_prefix,
+        isc_method=args.isc_method,
+        normalize_models=bool(args.normalize_models),
+        fisher_z_enabled=bool(args.fisher_z),
+        assoc_method=str(args.assoc_method),
+    )
 
 
 if __name__ == "__main__":

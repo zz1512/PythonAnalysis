@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-plot_roi_isc_dev_models_perm_fdr_sig.py
-
-Step 4 (FDR version):
-对每个刺激类型，基于 Step3 的置换原始 p 值计算 BH-FDR，并绘制显著结果热图与导出汇总表。
+plot_roi_isc_dev_models_perm_sig.py
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,50 +19,28 @@ DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_re
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="绘制 emo_ultra ROI ISC 发育模型显著结果热图（BH-FDR）")
+    p = argparse.ArgumentParser(description="绘制 emo_ultra ROI ISC 发育模型显著结果热图（FWER/FDR）")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--dpi", type=int, default=300)
+    p.add_argument("--sig-method", type=str, default=None, choices=["fwer", "fdr_model_wise", "fdr_global"])
     p.add_argument("--fdr-mode", type=str, default="model_wise", choices=["model_wise", "global"])
     p.add_argument("--positive-only", action="store_true")
     return p.parse_args()
 
 
-def bh_fdr(pvals: np.ndarray) -> np.ndarray:
-    p = np.asarray(pvals, dtype=float).reshape(-1)
-    q = np.full(p.shape, np.nan, dtype=float)
-    m = np.isfinite(p)
-    if int(m.sum()) == 0:
-        return q
-    pv = p[m]
-    n = int(pv.size)
-    order = np.argsort(pv)
-    ranked = pv[order]
-    q_ranked = ranked * float(n) / np.arange(1, n + 1, dtype=float)
-    q_ranked = np.minimum.accumulate(q_ranked[::-1])[::-1]
-    q_ranked = np.clip(q_ranked, 0.0, 1.0)
-    q_valid = np.empty_like(pv)
-    q_valid[order] = q_ranked
-    q[m] = q_valid
-    return q
+def resolve_sig_method(sig_method: Optional[str], fdr_mode: str) -> str:
+    if sig_method is not None:
+        return str(sig_method)
+    fm = str(fdr_mode).strip().lower()
+    if fm == "model_wise":
+        return "fdr_model_wise"
+    if fm == "global":
+        return "fdr_global"
+    raise ValueError(f"不支持 fdr mode: {fdr_mode}")
 
 
-def calc_fdr(df: pd.DataFrame, mode: str) -> pd.DataFrame:
-    out = df.copy()
-    out["p_fdr_bh"] = np.nan
-    if "p_perm_one_tailed" not in out.columns:
-        raise ValueError("结果文件缺少列: p_perm_one_tailed")
-    if mode == "model_wise":
-        for _, idx in out.groupby("model").groups.items():
-            out.loc[idx, "p_fdr_bh"] = bh_fdr(out.loc[idx, "p_perm_one_tailed"].to_numpy(dtype=float))
-    elif mode == "global":
-        out["p_fdr_bh"] = bh_fdr(out["p_perm_one_tailed"].to_numpy(dtype=float))
-    else:
-        raise ValueError(f"不支持 fdr mode: {mode}")
-    return out
-
-
-def collect_results(matrix_dir: Path, alpha: float, fdr_mode: str, positive_only: bool) -> pd.DataFrame:
+def collect_results(matrix_dir: Path, alpha: float, sig_method: str, positive_only: bool) -> pd.DataFrame:
     by_stim = matrix_dir / "by_stimulus"
     rows: List[pd.DataFrame] = []
     for d in sorted([p for p in by_stim.iterdir() if p.is_dir()]):
@@ -73,15 +48,39 @@ def collect_results(matrix_dir: Path, alpha: float, fdr_mode: str, positive_only
         if not p.exists():
             continue
         df = pd.read_csv(p)
-        need = {"roi", "model", "r_obs", "p_perm_one_tailed"}
+        need = {"roi", "model", "r_obs"}
         miss = need - set(df.columns)
         if miss:
             raise ValueError(f"{p} 缺少列: {sorted(miss)}")
-        work = calc_fdr(df, mode=str(fdr_mode))
-        sub = work[np.isfinite(work["r_obs"]) & np.isfinite(work["p_fdr_bh"])].copy()
-        if bool(positive_only):
+        sm = str(sig_method)
+        if sm == "fwer":
+            pcol = "p_fwer_model_wise"
+            if pcol not in df.columns:
+                raise ValueError(f"{p} 缺少列: {pcol}")
+            sub = df[np.isfinite(df["r_obs"]) & np.isfinite(df[pcol])].copy()
             sub = sub[sub["r_obs"] > 0]
-        sub = sub[sub["p_fdr_bh"] <= float(alpha)]
+            sub = sub[sub[pcol] <= float(alpha)]
+            sub = sub.rename(columns={pcol: "p_sig"}).copy()
+        elif sm == "fdr_model_wise":
+            pcol = "p_fdr_bh_model_wise"
+            if pcol not in df.columns:
+                raise ValueError(f"{p} 缺少列: {pcol}")
+            sub = df[np.isfinite(df["r_obs"]) & np.isfinite(df[pcol])].copy()
+            if bool(positive_only):
+                sub = sub[sub["r_obs"] > 0]
+            sub = sub[sub[pcol] <= float(alpha)]
+            sub = sub.rename(columns={pcol: "p_sig"}).copy()
+        elif sm == "fdr_global":
+            pcol = "p_fdr_bh_global"
+            if pcol not in df.columns:
+                raise ValueError(f"{p} 缺少列: {pcol}")
+            sub = df[np.isfinite(df["r_obs"]) & np.isfinite(df[pcol])].copy()
+            if bool(positive_only):
+                sub = sub[sub["r_obs"] > 0]
+            sub = sub[sub[pcol] <= float(alpha)]
+            sub = sub.rename(columns={pcol: "p_sig"}).copy()
+        else:
+            raise ValueError(f"不支持 sig-method: {sig_method}")
         if sub.empty:
             continue
         sub["stimulus_type"] = d.name
@@ -91,19 +90,17 @@ def collect_results(matrix_dir: Path, alpha: float, fdr_mode: str, positive_only
     return pd.concat(rows, axis=0, ignore_index=True)
 
 
-def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, fdr_mode: str, positive_only: bool) -> Dict[str, Path]:
+def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, sig_method: str, positive_only: bool) -> Dict[str, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    tag = f"fdr_{fdr_mode}"
+    tag = str(sig_method)
     if bool(positive_only):
         tag += "_pos"
     sig_csv = out_dir / f"emo_ultra_sig_results_{tag}_a{alpha:g}.csv"
-    df.sort_values(["stimulus_type", "model", "p_fdr_bh", "roi"]).to_csv(sig_csv, index=False)
+    df.sort_values(["stimulus_type", "model", "p_sig", "roi"]).to_csv(sig_csv, index=False)
 
     models = ["M_nn", "M_conv", "M_div"]
     stim_types = sorted(df["stimulus_type"].unique().tolist())
-    roi_order = (
-        df.groupby("roi", as_index=False)["p_fdr_bh"].min().sort_values("p_fdr_bh")["roi"].astype(str).tolist()
-    )
+    roi_order = df.groupby("roi", as_index=False)["p_sig"].min().sort_values("p_sig")["roi"].astype(str).tolist()
 
     fig_h = max(4.5, 0.25 * len(roi_order) + 2.0)
     fig_w = max(6.0, 4.0 * len(stim_types))
@@ -127,7 +124,7 @@ def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, fdr_mode: str,
             linewidths=0.5,
             linecolor="white",
             cbar=(i == len(stim_types) - 1),
-            cbar_kws={"label": "r (FDR significant)"} if i == len(stim_types) - 1 else None,
+            cbar_kws={"label": "r (significant)"} if i == len(stim_types) - 1 else None,
         )
         ax.set_title(stim)
         ax.set_xticklabels(ax.get_xticklabels(), rotation=0)
@@ -137,7 +134,7 @@ def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, fdr_mode: str,
         else:
             ax.tick_params(axis="y", left=False, labelleft=False)
 
-    title = f"emo_ultra significant ROI ISC effects (BH-FDR {fdr_mode}, q<= {alpha:g})"
+    title = f"emo_ultra significant ROI ISC effects ({sig_method}, <= {alpha:g})"
     if bool(positive_only):
         title += " (positive only)"
     fig.suptitle(title, y=0.995)
@@ -151,8 +148,9 @@ def draw(df: pd.DataFrame, out_dir: Path, alpha: float, dpi: int, fdr_mode: str,
 
 def main() -> None:
     args = parse_args()
-    df = collect_results(Path(args.matrix_dir), float(args.alpha), str(args.fdr_mode), bool(args.positive_only))
-    draw(df, Path(args.matrix_dir) / "figures", float(args.alpha), int(args.dpi), str(args.fdr_mode), bool(args.positive_only))
+    sig_method = resolve_sig_method(args.sig_method, str(args.fdr_mode))
+    df = collect_results(Path(args.matrix_dir), float(args.alpha), str(sig_method), bool(args.positive_only))
+    draw(df, Path(args.matrix_dir) / "figures", float(args.alpha), int(args.dpi), str(sig_method), bool(args.positive_only))
 
 
 if __name__ == "__main__":
