@@ -24,6 +24,7 @@ DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_re
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ROI ISC vs 发育模型：置换检验 + model-wise FWER")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
+    p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson"))
@@ -293,6 +294,7 @@ def run_one(
 
 def run(
     matrix_dir: Path,
+    stimulus_dir_name: str,
     n_perm: int,
     seed: int,
     isc_prefix: Optional[str],
@@ -301,7 +303,7 @@ def run(
     fisher_z_enabled: bool,
     assoc_method: str,
 ) -> None:
-    by_stim = matrix_dir / "by_stimulus"
+    by_stim = matrix_dir / str(stimulus_dir_name)
     stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()])
     if not stim_dirs:
         raise FileNotFoundError(f"{by_stim} 下无条件目录")
@@ -327,12 +329,13 @@ def run(
 def main() -> None:
     args = parse_args()
     matrix_dir = Path(args.matrix_dir)
-    by_stim = matrix_dir / "by_stimulus"
+    by_stim = matrix_dir / str(args.stimulus_dir_name)
     stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()]) if by_stim.exists() else []
     if not stim_dirs:
         raise FileNotFoundError(f"{by_stim} 下无条件目录")
     run(
         matrix_dir,
+        str(args.stimulus_dir_name),
         int(args.n_perm),
         int(args.seed),
         isc_prefix=args.isc_prefix,

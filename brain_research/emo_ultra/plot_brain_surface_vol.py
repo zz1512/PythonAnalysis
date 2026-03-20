@@ -29,6 +29,7 @@ ATLAS_VOL = Path("/public/home/dingrui/tools/masks_atlas/Tian_Subcortex_S2_3T_20
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="将显著 ROI r 值映射回大脑")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
+    p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
     p.add_argument("--sig-method", type=str, default="fwer", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
@@ -203,7 +204,7 @@ def save_and_plot_maps(
 
 def main():
     args = parse_args()
-    stim_dir = Path(args.matrix_dir) / "by_stimulus" / args.stimulus_type
+    stim_dir = Path(args.matrix_dir) / str(args.stimulus_dir_name) / args.stimulus_type
     result_csv = stim_dir / "roi_isc_dev_models_perm_fwer.csv"
     
     if not result_csv.exists():

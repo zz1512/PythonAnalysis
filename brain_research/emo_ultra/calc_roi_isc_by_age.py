@@ -26,6 +26,7 @@ DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_re
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="从 ROI 表征矩阵计算按龄 ROI ISC")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
+    p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--subject-info", type=Path, default=Path(os.environ.get("SUBJECT_AGE_TABLE", "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")))
     p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_232")
     p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson"))
@@ -161,8 +162,8 @@ def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str, isc_m
     return {"stimulus_type": stim_dir.name, "n_subjects": n_sub, "n_rois": len(rois), "isc_method": str(isc_method), "isc_prefix": str(out_prefix)}
 
 
-def run(matrix_dir: Path, subject_info: Path, repr_prefix: str, isc_method: str, isc_prefix: str) -> None:
-    by_stim = matrix_dir / "by_stimulus"
+def run(matrix_dir: Path, stimulus_dir_name: str, subject_info: Path, repr_prefix: str, isc_method: str, isc_prefix: str) -> None:
+    by_stim = matrix_dir / str(stimulus_dir_name)
     if not by_stim.exists():
         raise FileNotFoundError(f"未找到目录: {by_stim}")
 
@@ -178,7 +179,7 @@ def run(matrix_dir: Path, subject_info: Path, repr_prefix: str, isc_method: str,
 def main() -> None:
     args = parse_args()
     isc_prefix = str(args.isc_prefix) if args.isc_prefix is not None else f"roi_isc_{str(args.isc_method)}_by_age"
-    run(args.matrix_dir, args.subject_info, args.repr_prefix, isc_method=str(args.isc_method), isc_prefix=str(isc_prefix))
+    run(args.matrix_dir, args.stimulus_dir_name, args.subject_info, args.repr_prefix, isc_method=str(args.isc_method), isc_prefix=str(isc_prefix))
 
 
 if __name__ == "__main__":

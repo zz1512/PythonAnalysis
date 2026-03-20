@@ -24,6 +24,7 @@ DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_re
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="emo_ultra: Pair mean age vs ROI ISC trajectory plot")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
+    p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
     p.add_argument("--isc-method", type=str, default=None, choices=["spearman", "pearson"])
@@ -213,7 +214,7 @@ def plot_one(
 
 def main() -> None:
     args = parse_args()
-    stim_dir = Path(args.matrix_dir) / "by_stimulus" / str(args.stimulus_type)
+    stim_dir = Path(args.matrix_dir) / str(args.stimulus_dir_name) / str(args.stimulus_type)
     if not stim_dir.exists():
         raise FileNotFoundError(f"未找到条件目录: {stim_dir}")
 
