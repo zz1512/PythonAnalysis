@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--subject-info", type=Path, default=Path(os.environ.get("SUBJECT_AGE_TABLE", "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv")))
     p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_200")
-    p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson"))
+    p.add_argument("--isc-method", type=str, default="spearman", choices=("spearman", "pearson", "euclidean", "mahalanobis"))
     p.add_argument("--isc-prefix", type=str, default=None)
     return p.parse_args()
 
@@ -124,12 +124,64 @@ def pearson_corr_matrix_rows(X: np.ndarray) -> np.ndarray:
     return np.clip(corr, -1.0, 1.0).astype(np.float32)
 
 
+def fisher_z_transform(X: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    X = np.asarray(X, dtype=np.float64)
+    X = np.clip(X, -1.0 + eps, 1.0 - eps)
+    return np.arctanh(X)
+
+
+def pairwise_euclidean_distances(X: np.ndarray) -> np.ndarray:
+    X = np.asarray(X, dtype=np.float64)
+    diff = X[:, None, :] - X[None, :, :]
+    dist2 = np.sum(diff * diff, axis=2)
+    np.maximum(dist2, 0.0, out=dist2)
+    return np.sqrt(dist2, dtype=np.float64)
+
+
+def pairwise_mahalanobis_distances(X: np.ndarray, ridge: float = 1e-6) -> np.ndarray:
+    X = np.asarray(X, dtype=np.float64)
+    n_features = X.shape[1]
+    cov = np.cov(X, rowvar=False)
+    if np.ndim(cov) == 0:
+        cov = np.array([[float(cov)]], dtype=np.float64)
+    cov = cov + ridge * np.eye(n_features, dtype=np.float64)
+    inv_cov = np.linalg.pinv(cov)
+    diff = X[:, None, :] - X[None, :, :]
+    left = np.einsum("...i,ij->...j", diff, inv_cov)
+    dist2 = np.einsum("...i,...i->...", left, diff)
+    np.maximum(dist2, 0.0, out=dist2)
+    return np.sqrt(dist2, dtype=np.float64)
+
+
+def distance_to_similarity(dist: np.ndarray) -> np.ndarray:
+    sim = -np.asarray(dist, dtype=np.float64)
+    n = sim.shape[0]
+    mask = ~np.eye(n, dtype=bool)
+    vals = sim[mask]
+    mean = vals.mean() if vals.size > 0 else 0.0
+    std = vals.std(ddof=1) if vals.size > 1 else 0.0
+    if std > 0:
+        sim = (sim - mean) / std
+    else:
+        sim = sim - mean
+    np.fill_diagonal(sim, 1.0)
+    return sim.astype(np.float32)
+
+
 def compute_isc(X: np.ndarray, method: str) -> np.ndarray:
     m = str(method).strip().lower()
     if m == "spearman":
         return spearman_corr_matrix_rows(X)
     if m == "pearson":
         return pearson_corr_matrix_rows(X)
+    if m == "euclidean":
+        Xz = fisher_z_transform(X)
+        dist = pairwise_euclidean_distances(Xz)
+        return distance_to_similarity(dist)
+    if m == "mahalanobis":
+        Xz = fisher_z_transform(X)
+        dist = pairwise_mahalanobis_distances(Xz)
+        return distance_to_similarity(dist)
     raise ValueError(f"未知 isc-method: {method}")
 
 
