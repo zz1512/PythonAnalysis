@@ -54,6 +54,15 @@ def detect_isc_prefix(stim_dir: Path) -> List[str]:
     return prefixes
 
 
+def has_isc_files(stim_dir: Path, isc_prefix: str) -> bool:
+    required = (
+        stim_dir / f"{isc_prefix}.npy",
+        stim_dir / f"{isc_prefix}_subjects_sorted.csv",
+        stim_dir / f"{isc_prefix}_rois.csv",
+    )
+    return all(p.exists() for p in required)
+
+
 def resolve_isc_prefix(stim_dir: Path, isc_prefix: Optional[str], isc_method: Optional[str]) -> str:
     if isc_prefix is not None:
         return str(isc_prefix)
@@ -324,7 +333,14 @@ def run(
         if repr_prefix is not None and not has_repr_files(d, repr_prefix=str(repr_prefix)):
             print(f"[SKIP] {d.name}: 缺少 {repr_prefix} 对应输入文件，跳过。")
             continue
-        prefix = resolve_isc_prefix(d, isc_prefix=isc_prefix, isc_method=isc_method)
+        try:
+            prefix = resolve_isc_prefix(d, isc_prefix=isc_prefix, isc_method=isc_method)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"[SKIP] {d.name}: {e}，跳过。")
+            continue
+        if not has_isc_files(d, isc_prefix=str(prefix)):
+            print(f"[SKIP] {d.name}: 缺少 {prefix} 对应输入文件，跳过。")
+            continue
         out = run_one(
             d,
             n_perm=int(n_perm),
