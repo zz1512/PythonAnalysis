@@ -140,17 +140,25 @@ def pairwise_euclidean_distances(X: np.ndarray) -> np.ndarray:
 
 def pairwise_mahalanobis_distances(X: np.ndarray, ridge: float = 1e-6) -> np.ndarray:
     X = np.asarray(X, dtype=np.float64)
-    n_features = X.shape[1]
-    cov = np.cov(X, rowvar=False)
+    n_samples, n_features = X.shape
+    dist = np.full((n_samples, n_samples), np.nan, dtype=np.float64)
+    valid_rows = np.all(np.isfinite(X), axis=1)
+    if valid_rows.sum() == 0:
+        return dist
+
+    Xv = X[valid_rows]
+    cov = np.cov(Xv, rowvar=False)
     if np.ndim(cov) == 0:
         cov = np.array([[float(cov)]], dtype=np.float64)
     cov = cov + ridge * np.eye(n_features, dtype=np.float64)
     inv_cov = np.linalg.pinv(cov)
-    diff = X[:, None, :] - X[None, :, :]
+    diff = Xv[:, None, :] - Xv[None, :, :]
     left = np.einsum("...i,ij->...j", diff, inv_cov)
     dist2 = np.einsum("...i,...i->...", left, diff)
     np.maximum(dist2, 0.0, out=dist2)
-    return np.sqrt(dist2, dtype=np.float64)
+    dist_valid = np.sqrt(dist2, dtype=np.float64)
+    dist[np.ix_(valid_rows, valid_rows)] = dist_valid
+    return dist
 
 
 def distance_to_similarity(dist: np.ndarray) -> np.ndarray:
@@ -158,8 +166,9 @@ def distance_to_similarity(dist: np.ndarray) -> np.ndarray:
     n = sim.shape[0]
     mask = ~np.eye(n, dtype=bool)
     vals = sim[mask]
-    mean = vals.mean() if vals.size > 0 else 0.0
-    std = vals.std(ddof=1) if vals.size > 1 else 0.0
+    finite_vals = vals[np.isfinite(vals)]
+    mean = finite_vals.mean() if finite_vals.size > 0 else 0.0
+    std = finite_vals.std(ddof=1) if finite_vals.size > 1 else 0.0
     if std > 0:
         sim = (sim - mean) / std
     else:
