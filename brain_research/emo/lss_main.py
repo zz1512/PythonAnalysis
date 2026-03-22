@@ -39,6 +39,38 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
+def load_subjects_from_file(subject_file):
+    """从文本文件中读取被试列表，兼容带表头/多列的空白分隔格式。"""
+    subject_file = Path(subject_file)
+    if not subject_file.exists():
+        raise FileNotFoundError(f"被试列表文件不存在: {subject_file}")
+
+    subjects = []
+    with subject_file.open("r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+
+            first_col = line.split()[0]
+
+            # 跳过常见表头，例如: sub_id mean_FD
+            if i == 0 and first_col.lower() in {"sub", "sub_id", "subject", "subject_id"}:
+                continue
+
+            # 统一为 sub- 前缀格式
+            if not first_col.startswith("sub-"):
+                first_col = f"sub-{first_col}"
+
+            subjects.append(first_col)
+
+    if not subjects:
+        raise ValueError(f"被试列表文件为空或未解析到有效被试: {subject_file}")
+
+    # 去重并排序，保证稳定执行顺序
+    return sorted(set(subjects))
+
+
 def clean_bids_val(val):
     """清理 BIDS 表格中的字符串 (去除 .png 后缀, 去除空格)"""
     s = str(val).strip()
@@ -484,6 +516,13 @@ def process_one_run(sub, run, config):
 
 
 def run_main():
+    subject_file = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
+    subjects_from_file = None
+    if subject_file is not None:
+        subjects_from_file = load_subjects_from_file(subject_file)
+        logger.info(f"检测到被试列表文件: {subject_file}")
+        logger.info(f"从文件读取被试数量: {len(subjects_from_file)}")
+
     scenarios = get_scenario_configs()
 
     for cfg in scenarios:
@@ -491,11 +530,12 @@ def run_main():
         logger.info(f"\n>>> 正在处理: {scenario_name} (并行数: {cfg.N_JOBS})")
 
         # DEBUG 逻辑：限制被试数
-        subjects = list(cfg.SUBJECTS)
+        subjects = list(subjects_from_file) if subjects_from_file is not None else list(cfg.SUBJECTS)
         if getattr(cfg, 'DEBUG', False):
             debug_n_sub = getattr(cfg, 'DEBUG_N_SUBJECTS', 30)
             subjects = subjects[:min(debug_n_sub, len(subjects))]
-            logger.info(f"[DEBUG] 限制被试数量: {len(subjects)} / {len(cfg.SUBJECTS)}")
+            total_n = len(subjects_from_file) if subjects_from_file is not None else len(cfg.SUBJECTS)
+            logger.info(f"[DEBUG] 限制被试数量: {len(subjects)} / {total_n}")
 
         tasks = [(s, r) for s in subjects for r in cfg.RUNS]
         if not tasks:
