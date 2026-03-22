@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 from nilearn import datasets
+from nilearn.surface import load_surf_mesh
 from surfplot import Plot
 
 
@@ -55,10 +56,28 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument(
+        "--surface-type",
+        choices=["auto", "fsaverage", "fslr"],
+        default="auto",
+        help="surface 模板类型；auto 会按输入顶点数自动判断",
+    )
+    p.add_argument(
         "--mesh",
-        choices=["auto", "fsaverage3", "fsaverage4", "fsaverage5", "fsaverage6"],
+        choices=["auto", "fsaverage3", "fsaverage4", "fsaverage5", "fsaverage6", "fslr32k"],
         default="auto",
         help="surface 网格分辨率；auto 会按输入顶点数自动匹配",
+    )
+    p.add_argument(
+        "--fslr-left-surf",
+        type=Path,
+        default=None,
+        help="fslr 左半球几何表面文件（如 *.surf.gii）",
+    )
+    p.add_argument(
+        "--fslr-right-surf",
+        type=Path,
+        default=None,
+        help="fslr 右半球几何表面文件（如 *.surf.gii）",
     )
     return p.parse_args()
 
@@ -68,12 +87,57 @@ def is_corrected_name(stem: str) -> bool:
     return "fdr" in low or "fwer" in low
 
 
-def get_prefix(left_file: Path) -> str:
-    suffix = "_surf_L.func.gii"
-    name = left_file.name
-    if not name.endswith(suffix):
-        raise ValueError(f"非法左半球文件命名: {name}")
-    return name[: -len(suffix)]
+HEMI_MARKERS = [
+    ("_surf_L", "left"),
+    ("_surf_R", "right"),
+    ("_hemi-L", "left"),
+    ("_hemi-R", "right"),
+    ("hemi-L", "left"),
+    ("hemi-R", "right"),
+    ("_lh", "left"),
+    ("_rh", "right"),
+    (".lh", "left"),
+    (".rh", "right"),
+    ("-lh", "left"),
+    ("-rh", "right"),
+    ("_L", "left"),
+    ("_R", "right"),
+    (".L", "left"),
+    (".R", "right"),
+    ("-L", "left"),
+    ("-R", "right"),
+]
+
+
+def discover_func_pairs(input_dir: Path) -> list[tuple[str, Path, Path]]:
+    """自动发现并配对 L/R .func.gii 文件。"""
+    pairs: dict[str, dict[str, Path]] = {}
+    files = sorted(input_dir.glob("*.func.gii"))
+
+    for f in files:
+        base = f.name[: -len(".func.gii")]
+        matched = False
+        for marker, side in HEMI_MARKERS:
+            if base.endswith(marker):
+                prefix = base[: -len(marker)]
+                if not prefix:
+                    continue
+                pairs.setdefault(prefix, {})[side] = f
+                matched = True
+                break
+        if not matched:
+            continue
+
+    out: list[tuple[str, Path, Path]] = []
+    for prefix in sorted(pairs.keys()):
+        lr = pairs[prefix]
+        if "left" in lr and "right" in lr:
+            out.append((prefix, lr["left"], lr["right"]))
+        elif "left" in lr:
+            print(f"[SKIP] 缺少右半球配对: {lr['left'].name}")
+        elif "right" in lr:
+            print(f"[SKIP] 缺少左半球配对: {lr['right'].name}")
+    return out
 
 
 def robust_vmax(lh: np.ndarray, rh: np.ndarray) -> float:
@@ -89,17 +153,43 @@ MESH_VERTICES = {
     "fsaverage4": 2562,
     "fsaverage5": 10242,
     "fsaverage6": 40962,
+    "fslr32k": 32492,
 }
 
 
-def infer_mesh_from_vertices(n_vertices: int) -> str:
+def infer_mesh_from_vertices(n_vertices: int, surface_type: str) -> str:
+    if surface_type == "fslr":
+        if n_vertices == MESH_VERTICES["fslr32k"]:
+            return "fslr32k"
+        raise ValueError(
+            f"surface-type=fslr 时仅支持每半球 {MESH_VERTICES['fslr32k']} 顶点，当前为 {n_vertices}"
+        )
+
     for mesh, n in MESH_VERTICES.items():
-        if n_vertices == n:
+        if mesh.startswith("fsaverage") and n_vertices == n:
             return mesh
+
+    if surface_type == "auto" and n_vertices == MESH_VERTICES["fslr32k"]:
+        return "fslr32k"
+
     supported = ", ".join(f"{k}={v}" for k, v in MESH_VERTICES.items())
     raise ValueError(
-        f"无法根据顶点数 {n_vertices} 匹配 fsaverage 网格。支持: {supported}"
+        f"无法根据顶点数 {n_vertices} 匹配网格。支持: {supported}"
     )
+
+
+def load_fslr_surfaces(left_surf: Path | None, right_surf: Path | None):
+    if left_surf is None or right_surf is None:
+        raise ValueError(
+            "fslr 需要显式提供 --fslr-left-surf 与 --fslr-right-surf（几何表面文件，如 midthickness/inflated）"
+        )
+    if not left_surf.exists() or not right_surf.exists():
+        raise FileNotFoundError(
+            f"fslr 表面文件不存在: left={left_surf}, right={right_surf}"
+        )
+    left_mesh = load_surf_mesh(str(left_surf))
+    right_mesh = load_surf_mesh(str(right_surf))
+    return left_mesh, right_mesh
 
 
 def main() -> None:
@@ -112,25 +202,20 @@ def main() -> None:
     output_dir = args.output_dir or (input_dir / "surfplot_png")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fsavg = None
+    surf_mesh = None
     current_mesh = None
 
-    left_files = sorted(input_dir.glob("*_surf_L.func.gii"))
-    if not left_files:
-        raise FileNotFoundError(f"在 {input_dir} 未找到 *_surf_L.func.gii")
+    func_pairs = discover_func_pairs(input_dir)
+    if not func_pairs:
+        raise FileNotFoundError(
+            f"在 {input_dir} 未找到可配对的 L/R .func.gii 文件（支持 *_surf_L/_R 等常见命名）"
+        )
 
     rendered = 0
     skipped = 0
 
-    for lf in left_files:
-        prefix = get_prefix(lf)
+    for prefix, lf, rf in func_pairs:
         if args.pattern_mode == "corrected" and not is_corrected_name(prefix):
-            skipped += 1
-            continue
-
-        rf = input_dir / f"{prefix}_surf_R.func.gii"
-        if not rf.exists():
-            print(f"[SKIP] 缺少右半球配对: {rf.name}")
             skipped += 1
             continue
 
@@ -141,10 +226,23 @@ def main() -> None:
                 f"左右半球顶点数不一致: {lf.name}={lh.shape}, {rf.name}={rh.shape}"
             )
 
-        mesh = args.mesh if args.mesh != "auto" else infer_mesh_from_vertices(lh.size)
+        mesh = args.mesh if args.mesh != "auto" else infer_mesh_from_vertices(
+            lh.size, args.surface_type
+        )
+        if args.surface_type == "fsaverage" and mesh == "fslr32k":
+            raise ValueError(
+                "surface-type=fsaverage 不能使用 fslr32k 顶点数，请改为 --surface-type fslr"
+            )
+        if args.surface_type == "fslr" and mesh != "fslr32k":
+            raise ValueError("surface-type=fslr 仅支持 fslr32k 网格")
+
         if mesh != current_mesh:
             print(f"[INFO] 使用网格: {mesh}（每半球 {lh.size} 顶点）")
-            fsavg = datasets.fetch_surf_fsaverage(mesh=mesh)
+            if mesh == "fslr32k":
+                surf_mesh = load_fslr_surfaces(args.fslr_left_surf, args.fslr_right_surf)
+            else:
+                fsavg = datasets.fetch_surf_fsaverage(mesh=mesh)
+                surf_mesh = (fsavg.infl_left, fsavg.infl_right)
             current_mesh = mesh
 
         lh[np.abs(lh) < args.min_abs] = 0.0
@@ -153,8 +251,8 @@ def main() -> None:
         vmax = float(args.vmax) if args.vmax is not None else robust_vmax(lh, rh)
 
         p = Plot(
-            fsavg.infl_left,
-            fsavg.infl_right,
+            surf_mesh[0],
+            surf_mesh[1],
             views=["lateral", "medial"],
             layout="grid",
             size=(1200, 900),
