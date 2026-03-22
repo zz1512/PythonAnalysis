@@ -178,15 +178,92 @@ def infer_mesh_from_vertices(n_vertices: int, surface_type: str) -> str:
     )
 
 
-def load_fslr_surfaces(left_surf: Path | None, right_surf: Path | None):
+def _is_left_surface_name(name: str) -> bool:
+    low = name.lower()
+    return any(x in low for x in ["hemi-l", "_l.", ".l.", "-l.", "_lh", ".lh", "-lh"])
+
+
+def _is_right_surface_name(name: str) -> bool:
+    low = name.lower()
+    return any(x in low for x in ["hemi-r", "_r.", ".r.", "-r.", "_rh", ".rh", "-rh"])
+
+
+def auto_discover_fslr_surfaces(input_dir: Path) -> tuple[Path | None, Path | None]:
+    """按输入路径自动查找 fslr 左右半球几何表面文件。"""
+    # 优先在当前目录与上级目录查找，避免全盘递归
+    candidate_dirs = [input_dir]
+    for p in input_dir.parents:
+        candidate_dirs.append(p)
+        if len(candidate_dirs) >= 6:
+            break
+
+    # 常见几何文件关键字：midthickness/inflated/very_inflated
+    geom_keywords = ("midthickness", "inflated", "very_inflated")
+    exts = (".surf.gii", ".gii")
+
+    left_candidates: list[Path] = []
+    right_candidates: list[Path] = []
+
+    for d in candidate_dirs:
+        if not d.exists() or not d.is_dir():
+            continue
+        for f in d.glob("*.gii"):
+            low = f.name.lower()
+            if ".func." in low:
+                continue
+            if not any(low.endswith(ext) for ext in exts):
+                continue
+            if not any(k in low for k in geom_keywords):
+                continue
+            if _is_left_surface_name(low):
+                left_candidates.append(f)
+            elif _is_right_surface_name(low):
+                right_candidates.append(f)
+
+    def _pick_best(cands: list[Path]) -> Path | None:
+        if not cands:
+            return None
+        # 先选 midthickness，再选 inflated，再选 very_inflated
+        def score(p: Path) -> tuple[int, int]:
+            n = p.name.lower()
+            if "midthickness" in n:
+                pri = 0
+            elif "inflated" in n and "very_inflated" not in n:
+                pri = 1
+            elif "very_inflated" in n:
+                pri = 2
+            else:
+                pri = 3
+            # 更靠近 input_dir 的路径优先
+            try:
+                dist = len(p.relative_to(input_dir).parts)
+            except ValueError:
+                dist = 99
+            return (pri, dist)
+
+        return sorted(cands, key=score)[0]
+
+    return _pick_best(left_candidates), _pick_best(right_candidates)
+
+
+def load_fslr_surfaces(
+    input_dir: Path, left_surf: Path | None, right_surf: Path | None
+):
+    if left_surf is None or right_surf is None:
+        auto_left, auto_right = auto_discover_fslr_surfaces(input_dir)
+        left_surf = left_surf or auto_left
+        right_surf = right_surf or auto_right
+
     if left_surf is None or right_surf is None:
         raise ValueError(
-            "fslr 需要显式提供 --fslr-left-surf 与 --fslr-right-surf（几何表面文件，如 midthickness/inflated）"
+            "fslr 自动查找失败：请显式提供 --fslr-left-surf 与 --fslr-right-surf，"
+            "或把 midthickness/inflated 几何 .gii 放在输入目录或其上级目录。"
         )
     if not left_surf.exists() or not right_surf.exists():
         raise FileNotFoundError(
             f"fslr 表面文件不存在: left={left_surf}, right={right_surf}"
         )
+    print(f"[INFO] fslr 几何表面: left={left_surf}, right={right_surf}")
     left_mesh = load_surf_mesh(str(left_surf))
     right_mesh = load_surf_mesh(str(right_surf))
     return left_mesh, right_mesh
@@ -239,7 +316,9 @@ def main() -> None:
         if mesh != current_mesh:
             print(f"[INFO] 使用网格: {mesh}（每半球 {lh.size} 顶点）")
             if mesh == "fslr32k":
-                surf_mesh = load_fslr_surfaces(args.fslr_left_surf, args.fslr_right_surf)
+                surf_mesh = load_fslr_surfaces(
+                    input_dir, args.fslr_left_surf, args.fslr_right_surf
+                )
             else:
                 fsavg = datasets.fetch_surf_fsaverage(mesh=mesh)
                 surf_mesh = (fsavg.infl_left, fsavg.infl_right)
