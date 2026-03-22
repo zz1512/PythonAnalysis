@@ -283,3 +283,28 @@ python plot_roi_isc_age_trajectory.py \
 - `data_check/check_stage3_perm_results.py`
 
 > 建议每一步后都运行对应 `data_check` 脚本，确认维度、被试排序与显著性统计数量。
+
+## 本次研究执行的两套流程
+流程一：高维原始路线（不聚合 Trial，保全分辨率）
+- 获取 ROI * 被试 * （trial * trial）矩阵
+`python build_roi_repr_matrix.py --rsm-method spearman --roi-set 200`
+- 最多只有18个trial属于低维空间，通过马氏距离计算 被试 * 被试的距离矩阵，并转换为被试 * 被试的相似性矩阵
+`python calc_roi_isc_by_age.py --isc-method mahalanobis --repr-prefix roi_repr_matrix_200`
+- 使用 Spearman 计算和年龄模型的相似性，抵抗马氏距离可能存在的极值干扰
+`python joint_analysis_roi_isc_dev_models.py --isc-prefix roi_isc_mahalanobis_by_age --assoc-method spearman --no-fisher-z`
+- 使用 fwer 看结果
+`python plot_roi_isc_dev_models_perm_sig.py --sig-method fwer --repr-prefix roi_repr_matrix_200`
+
+流程二：低维降噪路线（聚合 4x4 情绪，保全信噪比）
+- 获取 ROI * 被试 * （trial * trial）矩阵
+`python build_roi_repr_matrix.py --rsm-method spearman --roi-set 200`
+- 聚合后4x4 情绪：得到 ROI * 被试 * （情绪 * 情绪）矩阵
+`python build_roi_emotion_repr_matrix.py`
+- 通过马氏距离计算 被试 * 被试的距离矩阵，并转换为被试 * 被试的相似性矩阵
+`python calc_roi_isc_by_age.py --isc-method mahalanobis --repr-prefix roi_repr_matrix_200_emotion4`
+- 使用 Spearman 计算和年龄模型的相似性，抵抗马氏距离可能存在的极值干扰
+`python joint_analysis_roi_isc_dev_models.py --isc-prefix roi_isc_mahalanobis_by_age --assoc-method spearman --no-fisher-z`
+- 使用 fwer 看结果
+`python plot_roi_isc_dev_models_perm_sig.py --sig-method fwer --repr-prefix roi_repr_matrix_200_emotion4`
+
+
