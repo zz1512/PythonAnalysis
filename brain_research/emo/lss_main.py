@@ -79,6 +79,56 @@ def clean_bids_val(val):
     return s
 
 
+def validate_subject_task_presence(subjects, config):
+    """校验每个被试是否同时具备 EMO/SOC 的核心输入文件。"""
+    presence_rows = []
+    valid_subjects = []
+
+    for sub in subjects:
+        task_presence = {}
+        missing_msgs = []
+
+        for run in config.RUNS:
+            task_label = config.RUN_MAP[run]["task"]
+            try:
+                fmri_path_s, event_path_s, conf_path_s = config.get_paths(sub, run)
+                fmri_path, event_path, conf_path = Path(fmri_path_s), Path(event_path_s), Path(conf_path_s)
+
+                conf_ok = conf_path.exists()
+                if not conf_ok:
+                    cand = list(conf_path.parent.glob(f"*{task_label}*confounds_timeseries.tsv"))
+                    conf_ok = bool(cand)
+
+                run_ok = fmri_path.exists() and event_path.exists() and conf_ok
+                task_presence[task_label] = run_ok
+
+                if not run_ok:
+                    missing_msgs.append(
+                        f"{task_label}:fmri={fmri_path.exists()},events={event_path.exists()},confounds={conf_ok}"
+                    )
+            except Exception as e:
+                task_presence[task_label] = False
+                missing_msgs.append(f"{task_label}:get_paths_failed({e})")
+
+        emo_ok = task_presence.get("EMO", False)
+        soc_ok = task_presence.get("SOC", False)
+        both_ok = emo_ok and soc_ok
+
+        presence_rows.append(
+            {
+                "subject": sub,
+                "emo_inputs_ok": emo_ok,
+                "soc_inputs_ok": soc_ok,
+                "inputs_both_ok": both_ok,
+                "input_check_note": "; ".join(missing_msgs) if missing_msgs else "",
+            }
+        )
+        if both_ok:
+            valid_subjects.append(sub)
+
+    return valid_subjects, presence_rows
+
+
 def save_beta_as_gifti(beta_data, output_path):
     """辅助函数：将计算出的 Numpy 数组保存为 .gii 文件"""
     data_flat = beta_data.flatten().astype(np.float32)
@@ -530,15 +580,24 @@ def run_main():
         logger.info(f"\n>>> 正在处理: {scenario_name} (并行数: {cfg.N_JOBS})")
 
         # DEBUG 逻辑：限制被试数
-        subjects = list(subjects_from_file) if subjects_from_file is not None else list(cfg.SUBJECTS)
+        original_subjects = list(subjects_from_file) if subjects_from_file is not None else list(cfg.SUBJECTS)
+        subjects = list(original_subjects)
         if getattr(cfg, 'DEBUG', False):
             debug_n_sub = getattr(cfg, 'DEBUG_N_SUBJECTS', 30)
             subjects = subjects[:min(debug_n_sub, len(subjects))]
             total_n = len(subjects_from_file) if subjects_from_file is not None else len(cfg.SUBJECTS)
             logger.info(f"[DEBUG] 限制被试数量: {len(subjects)} / {total_n}")
 
-        tasks = [(s, r) for s in subjects for r in cfg.RUNS]
+        checked_subjects, presence_rows = validate_subject_task_presence(subjects, cfg)
+        logger.info(f"通过 EMO+SOC 双任务输入校验: {len(checked_subjects)} / {len(subjects)}")
+        tasks = [(s, r) for s in checked_subjects for r in cfg.RUNS]
         if not tasks:
+            status_file = cfg.OUTPUT_ROOT / f"lss_subject_status_{cfg.SCENARIO_ID}.csv"
+            pd.DataFrame(presence_rows).assign(
+                lss_status="fail",
+                lss_note="输入校验失败，未进入LSS建模",
+            ).to_csv(status_file, index=False)
+            logger.info(f"LSS 被试状态已保存: {status_file}")
             continue
 
         all_meta = []
@@ -570,6 +629,50 @@ def run_main():
                 audit_file = cfg.OUTPUT_ROOT / f"lss_audit_{cfg.SCENARIO_ID}.csv"
                 pd.DataFrame(all_audit).to_csv(audit_file, index=False)
                 logger.info(f"LSS 审计日志已保存: {audit_file}")
+
+            # 生成被试级成功/失败清单（要求同时具备 EMO 与 SOC 的有效结果）
+            audit_df = pd.DataFrame(all_audit)
+            success_like = {"success", "skipped"}
+            status_rows = []
+            for row in presence_rows:
+                sub = row["subject"]
+                sub_audit = audit_df[audit_df["subject"] == sub] if not audit_df.empty else pd.DataFrame()
+
+                emo_ok = bool(
+                    not sub_audit.empty
+                    and ((sub_audit["task"] == "EMO") & (sub_audit["status"].isin(success_like))).any()
+                )
+                soc_ok = bool(
+                    not sub_audit.empty
+                    and ((sub_audit["task"] == "SOC") & (sub_audit["status"].isin(success_like))).any()
+                )
+
+                lss_ok = bool(row["inputs_both_ok"] and emo_ok and soc_ok)
+                note = []
+                if not row["inputs_both_ok"]:
+                    note.append("输入校验未通过")
+                if row["inputs_both_ok"] and not emo_ok:
+                    note.append("EMO无成功/跳过记录")
+                if row["inputs_both_ok"] and not soc_ok:
+                    note.append("SOC无成功/跳过记录")
+
+                status_rows.append(
+                    {
+                        "subject": sub,
+                        "emo_inputs_ok": row["emo_inputs_ok"],
+                        "soc_inputs_ok": row["soc_inputs_ok"],
+                        "inputs_both_ok": row["inputs_both_ok"],
+                        "emo_lss_ok": emo_ok,
+                        "soc_lss_ok": soc_ok,
+                        "lss_status": "success" if lss_ok else "fail",
+                        "lss_note": "；".join(note) if note else "EMO/SOC均通过",
+                        "input_check_note": row["input_check_note"],
+                    }
+                )
+
+            status_file = cfg.OUTPUT_ROOT / f"lss_subject_status_{cfg.SCENARIO_ID}.csv"
+            pd.DataFrame(status_rows).to_csv(status_file, index=False)
+            logger.info(f"LSS 被试成功/失败清单已保存: {status_file}")
 
         except Exception as e:
             logger.error(f"处理失败: {e}")
