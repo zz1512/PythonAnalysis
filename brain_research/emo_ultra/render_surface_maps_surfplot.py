@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         help="固定颜色范围上界；默认按当前图的 99 分位自动估计",
     )
     p.add_argument("--dpi", type=int, default=300)
+    p.add_argument(
+        "--mesh",
+        choices=["auto", "fsaverage3", "fsaverage4", "fsaverage5", "fsaverage6"],
+        default="auto",
+        help="surface 网格分辨率；auto 会按输入顶点数自动匹配",
+    )
     return p.parse_args()
 
 
@@ -78,6 +84,24 @@ def robust_vmax(lh: np.ndarray, rh: np.ndarray) -> float:
     return max(0.05, float(np.quantile(np.abs(nz), 0.99)))
 
 
+MESH_VERTICES = {
+    "fsaverage3": 642,
+    "fsaverage4": 2562,
+    "fsaverage5": 10242,
+    "fsaverage6": 40962,
+}
+
+
+def infer_mesh_from_vertices(n_vertices: int) -> str:
+    for mesh, n in MESH_VERTICES.items():
+        if n_vertices == n:
+            return mesh
+    supported = ", ".join(f"{k}={v}" for k, v in MESH_VERTICES.items())
+    raise ValueError(
+        f"无法根据顶点数 {n_vertices} 匹配 fsaverage 网格。支持: {supported}"
+    )
+
+
 def main() -> None:
     args = parse_args()
 
@@ -88,7 +112,8 @@ def main() -> None:
     output_dir = args.output_dir or (input_dir / "surfplot_png")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fsavg = datasets.fetch_surf_fsaverage(mesh="fsaverage5")
+    fsavg = None
+    current_mesh = None
 
     left_files = sorted(input_dir.glob("*_surf_L.func.gii"))
     if not left_files:
@@ -111,6 +136,16 @@ def main() -> None:
 
         lh = np.asarray(nib.load(str(lf)).darrays[0].data, dtype=float)
         rh = np.asarray(nib.load(str(rf)).darrays[0].data, dtype=float)
+        if lh.shape != rh.shape:
+            raise ValueError(
+                f"左右半球顶点数不一致: {lf.name}={lh.shape}, {rf.name}={rh.shape}"
+            )
+
+        mesh = args.mesh if args.mesh != "auto" else infer_mesh_from_vertices(lh.size)
+        if mesh != current_mesh:
+            print(f"[INFO] 使用网格: {mesh}（每半球 {lh.size} 顶点）")
+            fsavg = datasets.fetch_surf_fsaverage(mesh=mesh)
+            current_mesh = mesh
 
         lh[np.abs(lh) < args.min_abs] = 0.0
         rh[np.abs(rh) < args.min_abs] = 0.0
