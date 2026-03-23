@@ -234,6 +234,55 @@ python joint_analysis_roi_isc_dev_models.py \
 - [check\_stage2\_isc.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/data_check/check_stage2_isc.py)
 - [check\_stage3\_perm\_results.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/data_check/check_stage3_perm_results.py)
 
+补充的检查脚本（对应当前 emo\_final 主流程）：
+
+- [check\_stage0\_lss.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/data_check/check_stage0_lss.py)：检查 LSS aligned index/audit 与 beta 文件存在性（可选）
+- [check\_end\_to\_end\_consistency.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/data_check/check_end_to_end_consistency.py)：检查 repr/pattern/isc/perm 的 subjects/rois/prefix 对齐
+- [check\_stage4\_figures.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/data_check/check_stage4_figures.py)：检查热图/脑图/轨迹图输出文件数量
+
+推荐顺序（与 pipeline stages 对齐）：
+
+1. Stage0：LSS 输出检查（如果你跑了 lss\_main）：
+
+```bash
+python data_check/check_stage0_lss.py --lss-root /public/home/dingrui/fmri_analysis/zz_analysis/lss_results --check-files
+```
+
+1. Stage1：trial/emotion repr 输出检查：
+
+```bash
+python data_check/check_stage1_repr_matrix.py --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final
+```
+
+1. Stage2：ISC 输出检查（默认 mahalanobis）：
+
+```bash
+python data_check/check_stage2_isc.py --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final
+```
+
+1. Stage3：置换检验输出检查（可选同时核验 figures）：
+
+```bash
+python data_check/check_stage3_perm_results.py --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final --check-figures
+```
+
+1. End-to-end：跨阶段一致性检查（建议在正式统计前跑一次）：
+
+```bash
+python data_check/check_end_to_end_consistency.py --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final
+```
+
+1. Stage4-6：仅绘图产物检查（当你单独重跑绘图或想快速点检时）：
+
+```bash
+python data_check/check_stage4_figures.py --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final
+```
+
+说明：
+
+- 默认同时检查 trial（`by_stimulus`）与 emotion（`by_emotion`）两条分支
+- 若你自定义了 prefix/目录名，可通过各脚本参数覆盖默认值（`--trial-dir-name/--emotion-dir-name/--*-prefix`）
+
 ***
 
 ## 推荐两套“研究流程模板”（对应 Trial / Emotion 两分支）
@@ -253,9 +302,9 @@ python plot_brain_surface_vol.py --stimulus-dir-name by_stimulus --stimulus-type
 python plot_roi_isc_age_trajectory.py --stimulus-dir-name by_stimulus --stimulus-type <stimulus_type> --model M_conv --isc-method mahalanobis --method fdr_model_wise --alpha 0.05 --top-k 5
 ```
 
-对应 run_pipeline 的一键模板（Trial-level）：
+对应 run\_pipeline 的一键模板（Trial-level）：
 
-使用已提供的 [config_trial.json](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/config_trial.json)。只需要按你的环境修改路径字段（如 `lss_root/out_dir/subject_info`），然后直接运行即可。
+使用已提供的 [config\_trial.json](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/config_trial.json)。只需要按你的环境修改路径字段（如 `lss_root/out_dir/subject_info`），然后直接运行即可。
 
 该配置会依次执行：
 
@@ -284,9 +333,9 @@ python plot_brain_surface_vol.py --stimulus-dir-name by_emotion --stimulus-type 
 python plot_roi_isc_age_trajectory.py --stimulus-dir-name by_emotion --stimulus-type <stimulus_type> --model M_conv --isc-method mahalanobis --method fdr_model_wise --alpha 0.05 --top-k 5
 ```
 
-对应 run_pipeline 的一键模板（Emotion-level）：
+对应 run\_pipeline 的一键模板（Emotion-level）：
 
-使用已提供的 [config_emotion.json](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/config_emotion.json)。只需要按你的环境修改路径字段（如 `lss_root/out_dir/matrix_dir/subject_info`），然后直接运行即可。
+使用已提供的 [config\_emotion.json](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/config_emotion.json)。只需要按你的环境修改路径字段（如 `lss_root/out_dir/matrix_dir/subject_info`），然后直接运行即可。
 
 该配置会依次执行：
 
@@ -298,3 +347,4 @@ python plot_roi_isc_age_trajectory.py --stimulus-dir-name by_emotion --stimulus-
 ```bash
 python run_pipeline.py --config config_emotion.json
 ```
+
