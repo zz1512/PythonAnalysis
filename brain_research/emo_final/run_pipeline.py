@@ -326,7 +326,7 @@ def main() -> None:
         method = _as_str(s.get("method"), default="fdr_model_wise")
         top_k = _as_int(s.get("top_k"), 5)
         positive_only = _as_bool(s.get("positive_only"), default=False)
-        fit = _as_str(s.get("fit"), default="linear")
+        fit = _as_str(s.get("fit"), default="lowess")
         lowess = _as_bool(s.get("lowess"), default=False)
         plot_mode = _as_str(s.get("plot_mode"), default="hexbin")
         max_points = _as_int(s.get("max_points"), 40000)
