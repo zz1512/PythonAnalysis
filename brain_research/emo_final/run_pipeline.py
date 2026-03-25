@@ -187,6 +187,7 @@ def main() -> None:
         isc_prefix = _as_str(s3.get("isc_prefix"), default=None)
         isc_method = _as_str(s3.get("isc_method"), default=None)
         assoc_method = _as_str(s3.get("assoc_method"), default="spearman")
+        correction_mode = _as_str(s3.get("correction_mode"), default="fdr_only")
         normalize_models = _as_bool(s3.get("normalize_models"), default=True)
         n_perm = _as_int(s3.get("n_perm"), 5000)
         seed = _as_int(s3.get("seed"), 42)
@@ -215,6 +216,7 @@ def main() -> None:
             fisher_z_enabled=bool(fisher_z_enabled),
             assoc_method=str(assoc_method),
             repr_prefix=repr_prefix,
+            correction_mode=str(correction_mode),
         )
 
     def _iter_stimulus_types(matrix_dir: Path, stimulus_dir_name: str, stimulus_types: Optional[Any]) -> List[str]:
