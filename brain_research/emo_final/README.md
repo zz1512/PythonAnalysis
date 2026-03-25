@@ -226,6 +226,136 @@ python joint_analysis_roi_isc_dev_models.py \
 
 建议：用 `--stimulus-dir-name by_stimulus` 或 `by_emotion` 显式指定你要画哪条分支的结果。
 
+### Step 4：显著热图（plot\_roi\_isc\_dev\_models\_perm\_sig.py）
+
+用途：汇总每个 `stimulus_type` 的显著 ROI×model（`M_nn/M_conv/M_div`）效应，并输出热图 + 显著结果表。
+
+Trial-level 示例（对应 `config_trial.json -> plot_sig_trial`）：
+
+```bash
+python plot_roi_isc_dev_models_perm_sig.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --repr-prefix roi_repr_matrix_232 \
+  --sig-method fwer \
+  --alpha 0.05 \
+  --dpi 300
+```
+
+Emotion-level 示例（对应 `config_emotion.json -> plot_sig_emotion`）：
+
+```bash
+python plot_roi_isc_dev_models_perm_sig.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --repr-prefix roi_repr_matrix_232_emotion4 \
+  --sig-method fwer \
+  --alpha 0.05 \
+  --dpi 300
+```
+
+补充：
+
+- 若你更偏向 FDR，可改为 `--sig-method fdr_model_wise`（与配置中的 `fdr_mode=model_wise` 对齐）
+- `--positive-only` 可仅保留 `r_obs > 0` 的显著 ROI（与 Step3 后处理逻辑一致）
+
+### Step 5：显著 ROI 脑图导出（plot\_brain\_surface\_vol.py）
+
+用途：针对“单个 stimulus\_type + 单个 model”，将显著 ROI 的 `r_obs` 回填到表面（L/R）+ 体积（V）并导出：
+
+- `*.func.gii`（左/右皮层）
+- `*.nii.gz`（皮层下体积）
+- （可选）`*_brain_map.png` 预览图
+
+Trial-level 示例（对应 `config_trial.json -> plot_brain_trial`）：
+
+```bash
+python plot_brain_surface_vol.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --repr-prefix roi_repr_matrix_232 \
+  --stimulus-type <stimulus_type> \
+  --model M_conv \
+  --sig-method fwer \
+  --sig-col p_perm_one_tailed \
+  --alpha 0.05 \
+  --no-preview
+```
+
+Emotion-level 示例（对应 `config_emotion.json -> plot_brain_emotion`）：
+
+```bash
+python plot_brain_surface_vol.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --repr-prefix roi_repr_matrix_232_emotion4 \
+  --stimulus-type <stimulus_type> \
+  --model M_conv \
+  --sig-method fwer \
+  --sig-col p_perm_one_tailed \
+  --alpha 0.05 \
+  --no-preview
+```
+
+补充：
+
+- 若在离线环境，建议保留 `--no-preview`（避免 nilearn 下载模板失败）
+- 若想看某个 model 的原始置换 p 阈值图，可用 `--sig-method raw_p --sig-col p_perm_one_tailed`
+
+### Step 6：pair-wise 年龄轨迹图（plot\_roi\_isc\_age\_trajectory.py）
+
+用途：针对“单个 stimulus\_type + 单个 model”，筛选显著 Top-K ROI，绘制被试对平均年龄 vs ISC 的散点/hexbin 及拟合曲线。
+
+Trial-level 示例（对应 `config_trial.json -> plot_traj_trial`）：
+
+```bash
+python plot_roi_isc_age_trajectory.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --repr-prefix roi_repr_matrix_232 \
+  --stimulus-type <stimulus_type> \
+  --model M_conv \
+  --isc-method mahalanobis \
+  --alpha 0.05 \
+  --method fdr_model_wise \
+  --top-k 5 \
+  --fit linear \
+  --plot-mode hexbin \
+  --max-points 40000 \
+  --fit-max-points 5000 \
+  --hexbin-gridsize 55 \
+  --seed 42 \
+  --dpi 300
+```
+
+Emotion-level 示例（对应 `config_emotion.json -> plot_traj_emotion`）：
+
+```bash
+python plot_roi_isc_age_trajectory.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --repr-prefix roi_repr_matrix_232_emotion4 \
+  --stimulus-type <stimulus_type> \
+  --model M_conv \
+  --isc-method mahalanobis \
+  --alpha 0.05 \
+  --method fdr_model_wise \
+  --top-k 5 \
+  --fit linear \
+  --plot-mode hexbin \
+  --max-points 40000 \
+  --fit-max-points 5000 \
+  --hexbin-gridsize 55 \
+  --seed 42 \
+  --dpi 300
+```
+
+补充：
+
+- 若想画更平滑趋势可改 `--fit lowess`（或加 `--lowess`）
+- 若希望只看正相关 ROI，可加 `--positive-only`
+- 该脚本会自动从 Step2 输出中匹配 `roi_isc_<isc-method>_by_age` 前缀；若同目录有多个 ISC 前缀，请显式传 `--isc-prefix`
+
 ***
 
 ## data\_check（强烈建议每步都跑）
@@ -347,4 +477,3 @@ python plot_roi_isc_age_trajectory.py --stimulus-dir-name by_emotion --stimulus-
 ```bash
 python run_pipeline.py --config config_emotion.json
 ```
-
