@@ -262,8 +262,8 @@ def run_one(
 
     n_rois = len(rois)
     n_tests = int(r_obs.size)
-    p_raw = np.full(n_tests, np.nan, dtype=np.float32)
-    p_fwer = np.full(n_tests, np.nan, dtype=np.float32)
+    p_raw = np.full(n_tests, np.nan, dtype=np.float64)
+    p_fwer = np.full(n_tests, np.nan, dtype=np.float64)
     mode = str(correction_mode).strip().lower()
     if mode == "perm_fwer_fdr":
         c_raw = np.zeros(n_tests, dtype=np.int64)
@@ -306,7 +306,10 @@ def run_one(
         dfree = float(n_pairs - 2)
         r = np.clip(r_obs[ok].astype(np.float64), -0.999999, 0.999999)
         t_stat = r * np.sqrt(dfree / np.maximum(1.0 - r * r, 1e-12))
-        p_raw[ok] = t.sf(t_stat, df=dfree).astype(np.float32, copy=False)
+        # Use log survival function to avoid underflow to exact 0 when n_pairs is huge.
+        log_p = t.logsf(t_stat, df=dfree)
+        min_log = float(np.log(np.finfo(np.float64).tiny))
+        p_raw[ok] = np.exp(np.maximum(log_p, min_log))
     else:
         raise ValueError(f"不支持 correction_mode: {correction_mode}")
 
