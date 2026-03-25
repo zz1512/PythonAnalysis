@@ -247,8 +247,8 @@ def main():
     vmax = max(0.05, float(df_sig["r_obs"].abs().quantile(0.99)))
 
     # 保存与绘图
-    prefix = f"brain_map_{args.stimulus_type}_{args.model}_{args.sig_method}_a{args.alpha:g}"
-    out_dir = Path(args.matrix_dir) / "figures" / "brain_maps"
+    prefix = f"brain_map_{args.stimulus_dir_name}_{args.stimulus_type}_{args.model}_{args.sig_method}_a{args.alpha:g}"
+    out_dir = Path(args.matrix_dir) / "figures" / f"{str(args.stimulus_dir_name)}_brain_maps"
     
     save_and_plot_maps(out_dir, prefix, l_arr, r_arr, vol_img, vol_arr, vmax, preview=not bool(args.no_preview))
 

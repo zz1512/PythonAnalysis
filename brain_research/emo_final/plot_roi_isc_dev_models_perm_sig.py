@@ -182,7 +182,8 @@ def main() -> None:
         bool(args.positive_only),
         repr_prefix=args.repr_prefix,
     )
-    draw(df, Path(args.matrix_dir) / "figures", float(args.alpha), int(args.dpi), str(sig_method), bool(args.positive_only))
+    out_dir = Path(args.matrix_dir) / "figures" / str(args.stimulus_dir_name)
+    draw(df, out_dir, float(args.alpha), int(args.dpi), str(sig_method), bool(args.positive_only))
 
 
 if __name__ == "__main__":

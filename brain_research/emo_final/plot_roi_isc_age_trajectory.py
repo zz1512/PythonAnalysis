@@ -245,7 +245,7 @@ def main() -> None:
         positive_only=bool(args.positive_only),
     )
 
-    fig_dir = Path(args.matrix_dir) / "figures"
+    fig_dir = Path(args.matrix_dir) / "figures" / f"{str(args.stimulus_dir_name)}_pair_age_traj"
     fit = "lowess" if bool(args.lowess) else str(args.fit)
     y_label = "ISC"
     if "pearson" in str(isc_prefix).lower():
@@ -260,7 +260,10 @@ def main() -> None:
         method_tag = str(args.method)
         if bool(args.positive_only):
             method_tag += "_pos"
-        out_path = fig_dir / f"emo_ultra_pair_age_traj__{args.stimulus_type}__{args.model}__{roi}__{method_tag}_a{args.alpha:g}.png"
+        out_path = fig_dir / (
+            f"emo_ultra_pair_age_traj__{args.stimulus_dir_name}__{args.stimulus_type}__"
+            f"{args.model}__{roi}__{method_tag}_a{args.alpha:g}.png"
+        )
         title = f"{args.stimulus_type} | {args.model} | {roi}"
         plot_one(
             out_path,
