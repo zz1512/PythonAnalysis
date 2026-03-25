@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--method", type=str, default="fdr_model_wise", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
     p.add_argument("--top-k", type=int, default=5)
     p.add_argument("--positive-only", action="store_true")
-    p.add_argument("--fit", type=str, default="linear", choices=["linear", "poly2", "poly3", "lowess"])
+    p.add_argument("--fit", type=str, default="lowess", choices=["linear", "poly2", "poly3", "lowess"])
     p.add_argument("--lowess", action="store_true")
     p.add_argument("--plot-mode", type=str, default="hexbin", choices=["hexbin", "scatter"])
     p.add_argument("--max-points", type=int, default=40000)
