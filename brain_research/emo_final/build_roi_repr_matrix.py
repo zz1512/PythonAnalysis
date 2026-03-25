@@ -27,6 +27,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from scipy.stats import rankdata
+from tqdm import tqdm
 
 DEFAULT_LSS_ROOT = Path("/public/home/dingrui/fmri_analysis/zz_analysis/lss_results")
 DEFAULT_OUT_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final")
@@ -305,7 +306,7 @@ def run(
     max_feat = int(max(roi_feat_sizes)) if roi_feat_sizes else 0
     summary_rows = []
     by_stim_dir = out_dir / "by_stimulus"
-
+    plans: List[Tuple[str, List[str], List[str]]] = []
     for stim_type in sorted(stim2ids.keys()):
         stim_ids = sorted(stim2ids[stim_type])
         pairs = df[df["stimulus_type"] == stim_type][["subject", "stimulus_id"]].drop_duplicates()
@@ -313,8 +314,14 @@ def run(
         subjects = sorted(sub_counts[sub_counts == len(stim_ids)].index.tolist())
         if len(subjects) < 3:
             continue
+        plans.append((stim_type, stim_ids, subjects))
 
+    total_subject_steps = int(sum(len(x[2]) for x in plans))
+    overall_bar = tqdm(total=total_subject_steps, desc="ROI 矩阵总进度", unit="sub")
+
+    for stim_type, stim_ids, subjects in plans:
         n_sub, n_stim = len(subjects), len(stim_ids)
+        type_bar = tqdm(total=n_sub, desc=f"{stim_type}", unit="sub", leave=False)
         out_roi: Dict[str, np.ndarray] = {r: np.zeros((n_sub, n_stim, n_stim), dtype=np.float32) for r in rois}
         out_pat_by_sub: Dict[str, np.ndarray] = {}
 
@@ -347,7 +354,6 @@ def run(
 
                 if bool(include_volume):
                     from nilearn import image
-
                     img_v = image.load_img(str(p_v))
                     if img_v.shape != vol_img.shape or not np.allclose(img_v.affine, vol_img.affine):
                         # Resample beta into atlas space to ensure consistent voxel indexing.
@@ -379,6 +385,9 @@ def run(
                         nf = int(feats_v[ri].shape[1])
                         pat[off_v + ri, :, :nf] = feats_v[ri]
                 out_pat_by_sub[str(sub)] = pat
+            type_bar.update(1)
+            overall_bar.update(1)
+            overall_bar.set_postfix_str(f"type={stim_type}, stim={n_stim}, save_pattern={bool(save_pattern)}")
 
         stim_dir = by_stim_dir / stim_type
         stim_dir.mkdir(parents=True, exist_ok=True)
@@ -417,12 +426,14 @@ def run(
         )
 
         summary_rows.append({"stimulus_type": stim_type, "n_subjects": n_sub, "n_stimuli": n_stim, "n_rois": len(rois)})
+        type_bar.close()
 
     if not summary_rows:
         raise ValueError("没有写出任何刺激类型结果")
 
     pd.DataFrame(summary_rows).sort_values("stimulus_type").to_csv(out_dir / f"{out_prefix}_summary.csv", index=False)
     pd.DataFrame({"subject": all_subjects}).to_csv(out_dir / "eligible_subjects_emo_soc.csv", index=False)
+    overall_bar.close()
 
 
 def main() -> None:
