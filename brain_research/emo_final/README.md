@@ -186,7 +186,12 @@ python calc_roi_isc_by_age.py \
 
 脚本：[joint\_analysis\_roi\_isc\_dev\_models.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/joint_analysis_roi_isc_dev_models.py)
 
-用途：对每个 `stimulus_type`，把 ROI-ISC 的上三角向量与 3 个发育模型向量做关联，并做置换检验（正向单尾），输出：
+用途：对每个 `stimulus_type`，把 ROI-ISC 的上三角向量与 3 个发育模型向量做关联。支持两种统计模式（`--correction-mode`）：
+
+- `fdr_only`（默认）：仅做参数法单尾 p（基于相关系数近似）+ BH-FDR（不做置换，不输出可用的 FWER）
+- `perm_fwer_fdr`：置换检验（正向单尾）+ model-wise maxT FWER + 预计算 BH-FDR
+
+输出：
 
 - raw permutation p：`p_perm_one_tailed`
 - model-wise maxT FWER：`p_fwer_model_wise`
@@ -200,6 +205,7 @@ python joint_analysis_roi_isc_dev_models.py \
   --stimulus-dir-name by_stimulus \
   --isc-method mahalanobis \
   --assoc-method spearman \
+  --correction-mode fdr_only \
   --n-perm 5000 \
   --seed 42
 ```
@@ -212,6 +218,20 @@ python joint_analysis_roi_isc_dev_models.py \
   --stimulus-dir-name by_emotion \
   --isc-method mahalanobis \
   --assoc-method spearman \
+  --correction-mode fdr_only \
+  --n-perm 5000 \
+  --seed 42
+```
+
+置换检验示例（启用 FWER + FDR）：
+
+```bash
+python joint_analysis_roi_isc_dev_models.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --isc-method mahalanobis \
+  --assoc-method spearman \
+  --correction-mode perm_fwer_fdr \
   --n-perm 5000 \
   --seed 42
 ```

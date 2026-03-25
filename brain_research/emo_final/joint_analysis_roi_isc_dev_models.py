@@ -16,13 +16,13 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy.stats import rankdata
+from scipy.stats import rankdata, t
 
 DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ROI ISC vs 发育模型：置换检验 + model-wise FWER")
+    p = argparse.ArgumentParser(description="ROI ISC vs 发育模型：支持 FDR-only 或 置换检验(FWER+FDR)")
     p.add_argument("--matrix-dir", type=Path, default=DEFAULT_MATRIX_DIR)
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--repr-prefix", type=str, default=None)
@@ -31,6 +31,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--isc-method", type=str, default="mahalanobis", choices=("spearman", "pearson", "euclidean", "mahalanobis"))
     p.add_argument("--isc-prefix", type=str, default=None)
     p.add_argument("--assoc-method", type=str, default="spearman", choices=("pearson", "spearman"))
+    p.add_argument(
+        "--correction-mode",
+        type=str,
+        default="fdr_only",
+        choices=("fdr_only", "perm_fwer_fdr"),
+        help="fdr_only(默认): 仅参数法 p + BH-FDR；perm_fwer_fdr: 置换 raw p + model-wise maxT FWER + BH-FDR",
+    )
     p.add_argument("--no-normalize-models", action="store_false", dest="normalize_models", default=True)
     p.add_argument("--no-fisher-z", action="store_false", dest="fisher_z", default=True)
     return p.parse_args()
@@ -212,6 +219,7 @@ def run_one(
     normalize_models: bool,
     fisher_z_enabled: bool,
     assoc_method: str,
+    correction_mode: str,
 ) -> pd.DataFrame:
     isc = np.load(stim_dir / f"{isc_prefix}.npy")
     sub_df = pd.read_csv(stim_dir / f"{isc_prefix}_subjects_sorted.csv")
@@ -254,42 +262,53 @@ def run_one(
 
     n_rois = len(rois)
     n_tests = int(r_obs.size)
-    c_raw = np.zeros(n_tests, dtype=np.int64)
-    c_fwer = np.zeros(n_tests, dtype=np.int64)
-    rng = np.random.default_rng(int(seed))
-
-    for _ in range(int(n_perm)):
-        # Permute ages (not ISC) to generate a null distribution under exchangeability.
-        ages_p = ages[rng.permutation(n_sub)]
-        m_perm = build_models(ages_p, iu, ju, normalize=bool(normalize_models))
-        r_all = np.empty(n_tests, dtype=np.float32)
-        off = 0
-        for mv in m_perm:
-            rr = assoc(S_z, mv, method=str(assoc_method))
-            r_all[off:off + n_rois] = rr
-            off += n_rois
-
-        valid = np.isfinite(r_all) & np.isfinite(r_obs)
-        c_raw[valid] += (r_all[valid] >= r_obs[valid])
-
-        off = 0
-        for _m in model_names:
-            s, e = off, off + n_rois
-            perm_sub = r_all[s:e]
-            obs_sub = r_obs[s:e]
-            valid_sub = np.isfinite(perm_sub) & np.isfinite(obs_sub)
-            if np.any(valid_sub):
-                # Model-wise maxT: compare each ROI's observed stat to the permutation maximum.
-                max_stat = float(np.max(perm_sub[valid_sub]))
-                idx = np.where(np.isfinite(obs_sub))[0] + s
-                c_fwer[idx] += (max_stat >= r_obs[idx])
-            off += n_rois
-
     p_raw = np.full(n_tests, np.nan, dtype=np.float32)
     p_fwer = np.full(n_tests, np.nan, dtype=np.float32)
-    ok = np.isfinite(r_obs)
-    p_raw[ok] = (c_raw[ok] + 1.0) / (float(n_perm) + 1.0)
-    p_fwer[ok] = (c_fwer[ok] + 1.0) / (float(n_perm) + 1.0)
+    mode = str(correction_mode).strip().lower()
+    if mode == "perm_fwer_fdr":
+        c_raw = np.zeros(n_tests, dtype=np.int64)
+        c_fwer = np.zeros(n_tests, dtype=np.int64)
+        rng = np.random.default_rng(int(seed))
+        for _ in range(int(n_perm)):
+            # Permute ages (not ISC) to generate a null distribution under exchangeability.
+            ages_p = ages[rng.permutation(n_sub)]
+            m_perm = build_models(ages_p, iu, ju, normalize=bool(normalize_models))
+            r_all = np.empty(n_tests, dtype=np.float32)
+            off = 0
+            for mv in m_perm:
+                rr = assoc(S_z, mv, method=str(assoc_method))
+                r_all[off:off + n_rois] = rr
+                off += n_rois
+
+            valid = np.isfinite(r_all) & np.isfinite(r_obs)
+            c_raw[valid] += (r_all[valid] >= r_obs[valid])
+
+            off = 0
+            for _m in model_names:
+                s, e = off, off + n_rois
+                perm_sub = r_all[s:e]
+                obs_sub = r_obs[s:e]
+                valid_sub = np.isfinite(perm_sub) & np.isfinite(obs_sub)
+                if np.any(valid_sub):
+                    # Model-wise maxT: compare each ROI's observed stat to the permutation maximum.
+                    max_stat = float(np.max(perm_sub[valid_sub]))
+                    idx = np.where(np.isfinite(obs_sub))[0] + s
+                    c_fwer[idx] += (max_stat >= r_obs[idx])
+                off += n_rois
+        ok = np.isfinite(r_obs)
+        p_raw[ok] = (c_raw[ok] + 1.0) / (float(n_perm) + 1.0)
+        p_fwer[ok] = (c_fwer[ok] + 1.0) / (float(n_perm) + 1.0)
+    elif mode == "fdr_only":
+        # Fast path: treat r_obs as correlation coefficient and use one-tailed parametric p-values.
+        ok = np.isfinite(r_obs)
+        if n_pairs <= 2:
+            raise ValueError("被试对数过少（n_pairs<=2），无法执行 fdr_only 参数法检验")
+        dfree = float(n_pairs - 2)
+        r = np.clip(r_obs[ok].astype(np.float64), -0.999999, 0.999999)
+        t_stat = r * np.sqrt(dfree / np.maximum(1.0 - r * r, 1e-12))
+        p_raw[ok] = t.sf(t_stat, df=dfree).astype(np.float32, copy=False)
+    else:
+        raise ValueError(f"不支持 correction_mode: {correction_mode}")
 
     rows = []
     for i, (roi, model) in enumerate(tests):
@@ -303,6 +322,7 @@ def run_one(
             "n_pairs": int(n_pairs),
             "n_perm": int(n_perm),
             "seed": int(seed),
+            "correction_mode": str(mode),
             "normalize_models": bool(normalize_models),
             "isc_prefix": str(isc_prefix),
             "assoc_method": str(assoc_method),
@@ -332,6 +352,7 @@ def run(
     fisher_z_enabled: bool,
     assoc_method: str,
     repr_prefix: Optional[str],
+    correction_mode: str,
 ) -> None:
     by_stim = matrix_dir / str(stimulus_dir_name)
     stim_dirs = sorted([p for p in by_stim.iterdir() if p.is_dir()])
@@ -364,9 +385,19 @@ def run(
             normalize_models=bool(normalize_models),
             fisher_z_enabled=bool(fisher_z_eff),
             assoc_method=str(assoc_method),
+            correction_mode=str(correction_mode),
         )
         sig = out[(out["r_obs"] > 0) & (out["p_fwer_model_wise"] <= 0.05)]
-        summary.append({"stimulus_type": d.name, "n_rows": int(out.shape[0]), "n_sig_pos_fwer": int(sig.shape[0])})
+        sig_fdr = out[(out["r_obs"] > 0) & (out["p_fdr_bh_model_wise"] <= 0.05)]
+        summary.append(
+            {
+                "stimulus_type": d.name,
+                "n_rows": int(out.shape[0]),
+                "correction_mode": str(correction_mode),
+                "n_sig_pos_fwer": int(sig.shape[0]),
+                "n_sig_pos_fdr_model_wise": int(sig_fdr.shape[0]),
+            }
+        )
 
     pd.DataFrame(summary).sort_values("stimulus_type").to_csv(matrix_dir / "roi_isc_dev_models_perm_fwer_summary.csv", index=False)
 
@@ -389,6 +420,7 @@ def main() -> None:
         fisher_z_enabled=bool(args.fisher_z),
         assoc_method=str(args.assoc_method),
         repr_prefix=args.repr_prefix,
+        correction_mode=str(args.correction_mode),
     )
 
 

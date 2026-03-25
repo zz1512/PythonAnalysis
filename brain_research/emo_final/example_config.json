@@ -73,7 +73,8 @@
     "isc_method": "mahalanobis",
     "assoc_method": "spearman",
     "normalize_models": true,
-    "fisher_z": null
+    "fisher_z": null,
+    "correction_mode": "fdr_only"
   },
   "perm_emotion": {
     "run": false,
@@ -86,6 +87,7 @@
     "isc_method": "mahalanobis",
     "assoc_method": "spearman",
     "normalize_models": true,
-    "fisher_z": null
+    "fisher_z": null,
+    "correction_mode": "fdr_only"
   }
 }
