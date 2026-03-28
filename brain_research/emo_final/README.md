@@ -339,7 +339,7 @@ python plot_roi_isc_age_trajectory.py \
   --alpha 0.05 \
   --method fdr_model_wise \
   --top-k 5 \
-  --fit linear \
+  --fit lowess \
   --plot-mode hexbin \
   --max-points 40000 \
   --fit-max-points 5000 \
@@ -361,7 +361,7 @@ python plot_roi_isc_age_trajectory.py \
   --alpha 0.05 \
   --method fdr_model_wise \
   --top-k 5 \
-  --fit linear \
+  --fit poly2  \
   --plot-mode hexbin \
   --max-points 40000 \
   --fit-max-points 5000 \

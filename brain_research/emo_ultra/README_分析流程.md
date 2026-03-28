@@ -307,4 +307,30 @@ python plot_roi_isc_age_trajectory.py \
 - 使用 fwer 看结果
 `python plot_roi_isc_dev_models_perm_sig.py --sig-method fwer --repr-prefix roi_repr_matrix_200_emotion4`
 
+最终绘图：
+- 映射图: stimulus-type:Reappraisal、Passive_Emo；model：M_conv、M_nn
+```bash
+python plot_brain_surface_vol.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_ultra \
+  --stimulus-type  Reappraisal\
+  --model M_conv \
+  --sig-method fdr_model_wise \
+  --alpha 0.05 \
+  --no-preview \
+  --repr-prefix roi_repr_matrix_200_emotion4
+```
 
+- 轨迹图：stimulus-type:Reappraisal、Passive_Emo；model：M_conv、M_nn
+```bash
+python plot_roi_isc_age_trajectory.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_ultra \
+  --stimulus-type Reappraisal \
+  --model M_conv \
+  --method fdr_model_wise \
+  --alpha 0.05 \
+  --top-k 5 \
+  --plot-mode hexbin \
+  --fit poly2 \
+  --repr-prefix roi_repr_matrix_200_emotion4 \
+  --isc-prefix roi_isc_mahalanobis_by_age
+```

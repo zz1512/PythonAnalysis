@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--repr-prefix", type=str, default=None)
     p.add_argument("--stimulus-type", type=str, required=True)
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
-    p.add_argument("--sig-method", type=str, default="fwer", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
+    p.add_argument("--sig-method", type=str, default="fdr_model_wise", choices=["fwer", "fdr_model_wise", "fdr_global", "raw_p"])
     p.add_argument("--sig-col", type=str, default="p_perm_one_tailed", choices=["p_perm_one_tailed"])
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--no-preview", action="store_true")
