@@ -66,10 +66,16 @@ def resolve_steps(cfg: Dict[str, Any], steps_arg: Optional[str]) -> List[str]:
         "lss",
         "repr_trial",
         "repr_emotion",
+        "beh_repr_trial",
+        "beh_repr_emotion",
         "isc_trial",
         "isc_emotion",
+        "beh_isc_trial",
+        "beh_isc_emotion",
         "perm_trial",
         "perm_emotion",
+        "brain_beh_trial",
+        "brain_beh_emotion",
         "plot_sig_trial",
         "plot_sig_emotion",
         "plot_brain_trial",
@@ -94,7 +100,8 @@ def fisher_z_policy(isc_method: str, fisher_z_cfg: Optional[Any]) -> bool:
 
 
 def main() -> None:
-    # Make local modules importable when running as a script.
+    # Make project modules importable when running as a script.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     args = parse_args()
     cfg = read_json(Path(args.config))
@@ -152,6 +159,56 @@ def main() -> None:
             save_pattern=_as_bool(em.get("save_pattern"), default=True),
         )
 
+    def run_beh_repr(block_name: str) -> None:
+        s = cfg.get(block_name, {})
+        if not _as_bool(s.get("run"), default=False):
+            return
+
+        if block_name == "beh_repr_trial":
+            from behavior.build_behavior_trial_repr_matrix import run as run_beh_repr_trial
+
+            feature_cols = s.get("feature_cols", None)
+            if not isinstance(feature_cols, list) or len(feature_cols) == 0:
+                feature_cols = ["emot_rating"]
+            run_beh_repr_trial(
+                matrix_dir=_as_path(s.get("matrix_dir")),
+                stimulus_dir_name=_as_str(s.get("stimulus_dir_name"), default="by_stimulus"),
+                brain_repr_prefix=_as_str(s.get("brain_repr_prefix"), default="roi_repr_matrix_232"),
+                beh_data_dir=_as_path(s.get("beh_data_dir"), default=Path("/public/home/dingrui/fmri_analysis/data/beh")),
+                fmri_data_dir=_as_path(s.get("fmri_data_dir"), default=Path("/public/home/dingrui/BIDS_DATA")),
+                participants_file=_as_path(s.get("participants_file"), default=None),
+                valid_er_file=_as_path(s.get("valid_er_file"), default=None),
+                valid_tg_file=_as_path(s.get("valid_tg_file"), default=None),
+                feature_cols=[str(x) for x in feature_cols],
+                agg_func=_as_str(s.get("agg_func"), default="mean"),
+                diff_method=_as_str(s.get("diff_method"), default="euclidean"),
+                score_file_name=_as_str(s.get("score_file_name"), default="behavior_subject_stimulus_scores.csv"),
+                pattern_prefix=_as_str(s.get("pattern_prefix"), default="behavior_patterns_trial"),
+                diff_prefix=_as_str(s.get("diff_prefix"), default="behavior_diff_matrix_trial"),
+                repr_prefix=_as_str(s.get("repr_prefix"), default="behavior_repr_matrix_trial"),
+            )
+            return
+
+        if block_name == "beh_repr_emotion":
+            from behavior.build_behavior_emotion_repr_matrix import run as run_beh_repr_emotion
+
+            emotions = s.get("emotions", None)
+            if not isinstance(emotions, list) or len(emotions) == 0:
+                emotions = ["Anger", "Disgust", "Fear", "Sad"]
+            run_beh_repr_emotion(
+                matrix_dir=_as_path(s.get("matrix_dir")),
+                stimulus_dir_name=_as_str(s.get("stimulus_dir_name"), default="by_stimulus"),
+                pattern_prefix=_as_str(s.get("pattern_prefix"), default="behavior_patterns_trial"),
+                emotions=[str(x) for x in emotions],
+                diff_method=_as_str(s.get("diff_method"), default="euclidean"),
+                out_stimulus_dir_name=_as_str(s.get("out_stimulus_dir_name"), default="by_emotion"),
+                score_file_name=_as_str(s.get("score_file_name"), default="behavior_subject_emotion_scores.csv"),
+                out_pattern_prefix=_as_str(s.get("out_pattern_prefix"), default="behavior_patterns_emotion4"),
+                out_diff_prefix=_as_str(s.get("out_diff_prefix"), default="behavior_diff_matrix_emotion4"),
+                out_repr_prefix=_as_str(s.get("out_repr_prefix"), default="behavior_repr_matrix_emotion4"),
+            )
+            return
+
     def run_isc(block_name: str) -> None:
         from calc_roi_isc_by_age import run as run_isc_inner
 
@@ -168,6 +225,29 @@ def main() -> None:
             # Convention: roi_isc_<method>_by_age is the canonical output prefix.
             isc_prefix = f"roi_isc_{isc_method}_by_age"
         run_isc_inner(
+            matrix_dir=matrix_dir,
+            stimulus_dir_name=stimulus_dir_name,
+            subject_info=subject_info,
+            repr_prefix=repr_prefix,
+            isc_method=isc_method,
+            isc_prefix=isc_prefix,
+        )
+
+    def run_beh_isc(block_name: str) -> None:
+        from behavior.calc_behavior_isc_by_age import run as run_beh_isc_inner
+
+        s = cfg.get(block_name, {})
+        if not _as_bool(s.get("run"), default=False):
+            return
+        matrix_dir = _as_path(s.get("matrix_dir"))
+        stimulus_dir_name = _as_str(s.get("stimulus_dir_name"), default="by_stimulus")
+        subject_info = _as_path(s.get("subject_info"))
+        repr_prefix = _as_str(s.get("repr_prefix"), default="behavior_repr_matrix_trial")
+        isc_method = _as_str(s.get("isc_method"), default="mahalanobis")
+        isc_prefix = _as_str(s.get("isc_prefix"), default=None)
+        if isc_prefix is None:
+            isc_prefix = f"behavior_isc_{isc_method}_by_age"
+        run_beh_isc_inner(
             matrix_dir=matrix_dir,
             stimulus_dir_name=stimulus_dir_name,
             subject_info=subject_info,
@@ -217,6 +297,29 @@ def main() -> None:
             assoc_method=str(assoc_method),
             repr_prefix=repr_prefix,
             correction_mode=str(correction_mode),
+        )
+
+    def run_brain_beh(block_name: str) -> None:
+        from behavior.joint_analysis_roi_isc_behavior import run as run_brain_beh_inner
+
+        s = cfg.get(block_name, {})
+        if not _as_bool(s.get("run"), default=False):
+            return
+        run_brain_beh_inner(
+            matrix_dir=_as_path(s.get("matrix_dir")),
+            stimulus_dir_name=_as_str(s.get("stimulus_dir_name"), default="by_stimulus"),
+            brain_repr_prefix=_as_str(s.get("brain_repr_prefix"), default=None),
+            brain_isc_method=_as_str(s.get("brain_isc_method"), default="mahalanobis"),
+            brain_isc_prefix=_as_str(s.get("brain_isc_prefix"), default=None),
+            behavior_repr_prefix=_as_str(s.get("behavior_repr_prefix"), default=None),
+            behavior_isc_method=_as_str(s.get("behavior_isc_method"), default="mahalanobis"),
+            behavior_isc_prefix=_as_str(s.get("behavior_isc_prefix"), default=None),
+            assoc_method=_as_str(s.get("assoc_method"), default="spearman"),
+            correction_mode=_as_str(s.get("correction_mode"), default="perm_fwer_fdr"),
+            n_perm=_as_int(s.get("n_perm"), 5000),
+            seed=_as_int(s.get("seed"), 42),
+            fisher_z_brain=_as_str(s.get("fisher_z_brain"), default=None),
+            fisher_z_behavior=_as_str(s.get("fisher_z_behavior"), default=None),
         )
 
     def _iter_stimulus_types(matrix_dir: Path, stimulus_dir_name: str, stimulus_types: Optional[Any]) -> List[str]:
@@ -387,14 +490,26 @@ def main() -> None:
                         dpi=int(dpi),
                     )
 
+    if "beh_repr_trial" in steps:
+        run_beh_repr("beh_repr_trial")
+    if "beh_repr_emotion" in steps:
+        run_beh_repr("beh_repr_emotion")
     if "isc_trial" in steps:
         run_isc("isc_trial")
     if "isc_emotion" in steps:
         run_isc("isc_emotion")
+    if "beh_isc_trial" in steps:
+        run_beh_isc("beh_isc_trial")
+    if "beh_isc_emotion" in steps:
+        run_beh_isc("beh_isc_emotion")
     if "perm_trial" in steps:
         run_perm("perm_trial")
     if "perm_emotion" in steps:
         run_perm("perm_emotion")
+    if "brain_beh_trial" in steps:
+        run_brain_beh("brain_beh_trial")
+    if "brain_beh_emotion" in steps:
+        run_brain_beh("brain_beh_emotion")
     if "plot_sig_trial" in steps:
         run_plot_sig("plot_sig_trial")
     if "plot_sig_emotion" in steps:

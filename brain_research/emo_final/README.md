@@ -497,3 +497,139 @@ python plot_roi_isc_age_trajectory.py --stimulus-dir-name by_emotion --stimulus-
 ```bash
 python run_pipeline.py --config config_emotion.json
 ```
+
+***
+
+## 行为分支补充说明（trial / emotion）
+
+行为相关脚本统一收纳到 `behavior/` 子目录中：
+
+- `behavior/behavior_data.py`：行为数据读取、清洗、对齐的公共逻辑
+- `behavior/build_behavior_trial_repr_matrix.py`：构造 trial 级行为 `stimulus x stimulus` 表征矩阵
+- `behavior/build_behavior_emotion_repr_matrix.py`：从 trial 级行为 pattern 聚合到 emotion 级行为矩阵
+- `behavior/calc_behavior_isc_by_age.py`：计算行为分支的被试 x 被试相似性矩阵
+- `behavior/joint_analysis_roi_isc_behavior.py`：计算脑 ISC 与行为 ISC 的关联，并做置换检验
+
+行为结果导出现在统一由 [behavior/behavior_data.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/brain_research/emo_final/behavior/behavior_data.py) 负责，默认输出到与脑结果同一总根目录下的：
+
+- `/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final/behavior/data_4_hddm_ER.csv`
+
+### 行为 trial 分支手动命令
+
+先导出 ER 行为表：
+
+```bash
+python behavior/behavior_data.py \
+  --out-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final/behavior
+```
+
+再构造 trial 级行为矩阵、行为 ISC、以及脑-行为检验：
+
+```bash
+python behavior/build_behavior_trial_repr_matrix.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --brain-repr-prefix roi_repr_matrix_232 \
+  --feature-cols emot_rating \
+  --agg-func mean \
+  --diff-method euclidean
+```
+
+```bash
+python behavior/calc_behavior_isc_by_age.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --subject-info /public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv \
+  --repr-prefix behavior_repr_matrix_trial \
+  --isc-method mahalanobis
+```
+
+```bash
+python behavior/joint_analysis_roi_isc_behavior.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --brain-repr-prefix roi_repr_matrix_232 \
+  --brain-isc-method mahalanobis \
+  --behavior-repr-prefix behavior_repr_matrix_trial \
+  --behavior-isc-method mahalanobis \
+  --assoc-method spearman \
+  --correction-mode perm_fwer_fdr \
+  --n-perm 5000 \
+  --seed 42
+```
+
+Trial 分支的新增产物包括：
+
+- `by_stimulus/<stimulus_type>/behavior_subject_stimulus_scores.csv`
+- `by_stimulus/<stimulus_type>/behavior_patterns_trial.npz`
+- `by_stimulus/<stimulus_type>/behavior_diff_matrix_trial.npz`
+- `by_stimulus/<stimulus_type>/behavior_repr_matrix_trial.npz`
+- `by_stimulus/<stimulus_type>/behavior_isc_<method>_by_age.npy`
+- `by_stimulus/<stimulus_type>/roi_isc_behavior_perm_fwer.csv`
+
+### 行为 emotion 分支手动命令
+
+在完成 trial 行为 pattern 后，继续聚合到 emotion 级：
+
+```bash
+python behavior/build_behavior_emotion_repr_matrix.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --pattern-prefix behavior_patterns_trial \
+  --out-stimulus-dir-name by_emotion \
+  --diff-method euclidean
+```
+
+```bash
+python behavior/calc_behavior_isc_by_age.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --subject-info /public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv \
+  --repr-prefix behavior_repr_matrix_emotion4 \
+  --isc-method mahalanobis
+```
+
+```bash
+python behavior/joint_analysis_roi_isc_behavior.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --brain-repr-prefix roi_repr_matrix_232_emotion4 \
+  --brain-isc-method mahalanobis \
+  --behavior-repr-prefix behavior_repr_matrix_emotion4 \
+  --behavior-isc-method mahalanobis \
+  --assoc-method spearman \
+  --correction-mode perm_fwer_fdr \
+  --n-perm 5000 \
+  --seed 42
+```
+
+Emotion 分支的新增产物包括：
+
+- `by_emotion/<stimulus_type>/behavior_subject_emotion_scores.csv`
+- `by_emotion/<stimulus_type>/behavior_patterns_emotion4.npz`
+- `by_emotion/<stimulus_type>/behavior_diff_matrix_emotion4.npz`
+- `by_emotion/<stimulus_type>/behavior_repr_matrix_emotion4.npz`
+- `by_emotion/<stimulus_type>/behavior_isc_<method>_by_age.npy`
+- `by_emotion/<stimulus_type>/roi_isc_behavior_perm_fwer.csv`
+
+### 一键配置运行
+
+如果你希望从脑分支与行为分支一起顺序跑完，可以直接使用新配置：
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_trial.json
+```
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_emotion.json
+```
+
+如果脑分支结果已经准备好，也可以只跑行为与脑-行为步骤：
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_trial.json --steps beh_repr_trial,beh_isc_trial,brain_beh_trial
+```
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_emotion.json --steps beh_repr_trial,beh_repr_emotion,beh_isc_emotion,brain_beh_emotion
+```

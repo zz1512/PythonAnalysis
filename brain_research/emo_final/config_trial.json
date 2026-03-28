@@ -61,6 +61,62 @@
     "isc_method": "mahalanobis",
     "isc_prefix": null
   },
+  "beh_repr_trial": {
+    "run": false,
+    "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
+    "stimulus_dir_name": "by_stimulus",
+    "brain_repr_prefix": "roi_repr_matrix_232",
+    "beh_data_dir": "/public/home/dingrui/fmri_analysis/data/beh",
+    "fmri_data_dir": "/public/home/dingrui/BIDS_DATA",
+    "participants_file": null,
+    "valid_er_file": null,
+    "valid_tg_file": null,
+    "feature_cols": [
+      "emot_rating"
+    ],
+    "agg_func": "mean",
+    "diff_method": "euclidean",
+    "score_file_name": "behavior_subject_stimulus_scores.csv",
+    "pattern_prefix": "behavior_patterns_trial",
+    "diff_prefix": "behavior_diff_matrix_trial",
+    "repr_prefix": "behavior_repr_matrix_trial"
+  },
+  "beh_repr_emotion": {
+    "run": false,
+    "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
+    "stimulus_dir_name": "by_stimulus",
+    "pattern_prefix": "behavior_patterns_trial",
+    "emotions": [
+      "Anger",
+      "Disgust",
+      "Fear",
+      "Sad"
+    ],
+    "diff_method": "euclidean",
+    "out_stimulus_dir_name": "by_emotion",
+    "score_file_name": "behavior_subject_emotion_scores.csv",
+    "out_pattern_prefix": "behavior_patterns_emotion4",
+    "out_diff_prefix": "behavior_diff_matrix_emotion4",
+    "out_repr_prefix": "behavior_repr_matrix_emotion4"
+  },
+  "beh_isc_trial": {
+    "run": false,
+    "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
+    "stimulus_dir_name": "by_stimulus",
+    "subject_info": "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
+    "repr_prefix": "behavior_repr_matrix_trial",
+    "isc_method": "mahalanobis",
+    "isc_prefix": null
+  },
+  "beh_isc_emotion": {
+    "run": false,
+    "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
+    "stimulus_dir_name": "by_emotion",
+    "subject_info": "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
+    "repr_prefix": "behavior_repr_matrix_emotion4",
+    "isc_method": "mahalanobis",
+    "isc_prefix": null
+  },
   "perm_trial": {
     "run": true,
     "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
@@ -74,6 +130,40 @@
     "normalize_models": true,
     "fisher_z": null,
     "correction_mode": "fdr_only"
+  },
+  "brain_beh_trial": {
+    "run": false,
+    "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
+    "stimulus_dir_name": "by_stimulus",
+    "brain_repr_prefix": "roi_repr_matrix_232",
+    "brain_isc_method": "mahalanobis",
+    "brain_isc_prefix": null,
+    "behavior_repr_prefix": "behavior_repr_matrix_trial",
+    "behavior_isc_method": "mahalanobis",
+    "behavior_isc_prefix": null,
+    "assoc_method": "spearman",
+    "correction_mode": "perm_fwer_fdr",
+    "n_perm": 5000,
+    "seed": 42,
+    "fisher_z_brain": null,
+    "fisher_z_behavior": null
+  },
+  "brain_beh_emotion": {
+    "run": false,
+    "matrix_dir": "/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final",
+    "stimulus_dir_name": "by_emotion",
+    "brain_repr_prefix": "roi_repr_matrix_232_emotion4",
+    "brain_isc_method": "mahalanobis",
+    "brain_isc_prefix": null,
+    "behavior_repr_prefix": "behavior_repr_matrix_emotion4",
+    "behavior_isc_method": "mahalanobis",
+    "behavior_isc_prefix": null,
+    "assoc_method": "spearman",
+    "correction_mode": "perm_fwer_fdr",
+    "n_perm": 5000,
+    "seed": 42,
+    "fisher_z_brain": null,
+    "fisher_z_behavior": null
   },
   "perm_emotion": {
     "run": false,
