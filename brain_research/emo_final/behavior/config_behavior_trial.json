@@ -55,7 +55,8 @@
     "subject_info": "/public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv",
     "repr_prefix": "behavior_repr_matrix_trial",
     "isc_method": "mahalanobis",
-    "isc_prefix": null
+    "isc_prefix": null,
+    "max_missing_fraction": 0.2
   },
   "brain_beh_trial": {
     "run": true,
@@ -68,6 +69,7 @@
     "behavior_isc_method": "mahalanobis",
     "behavior_isc_prefix": null,
     "assoc_method": "spearman",
+    "tail": "two_sided",
     "correction_mode": "perm_fwer_fdr",
     "n_perm": 5000,
     "seed": 42,

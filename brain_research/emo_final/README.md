@@ -633,3 +633,98 @@ python run_pipeline.py --config behavior/config_behavior_trial.json --steps beh_
 ```bash
 python run_pipeline.py --config behavior/config_behavior_emotion.json --steps beh_repr_trial,beh_repr_emotion,beh_isc_emotion,brain_beh_emotion
 ```
+
+***
+
+## 行为分支更新说明（2026-03）
+
+### 1. 行为数据导出
+
+行为结果现在统一由 `behavior/behavior_data.py` 导出，常用命令：
+
+```bash
+python behavior/behavior_data.py \
+  --out-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final/behavior \
+  --save-feature-table
+```
+
+默认输出包括：
+
+- `behavior/data_4_hddm_ER.csv`
+- `behavior/data_4_hddm_ER_subject_audit.csv`
+- `behavior/data_4_behavior_feature_table.csv`（启用 `--save-feature-table` 时）
+
+说明：
+
+- `data_4_hddm_ER.csv` 已不再按 `sub_list_valid_4_ER.txt` 过滤被试
+- 只要被试存在可用的 `valid_emot` trial，就会进入 ER 导出结果
+
+### 2. 行为 ISC 缺失过滤
+
+`behavior/calc_behavior_isc_by_age.py` 现在支持：
+
+```bash
+--max-missing-fraction
+```
+
+这个参数用于过滤行为表征矩阵缺失比例过高的被试。
+
+例如：
+
+```bash
+python behavior/calc_behavior_isc_by_age.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --subject-info /public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv \
+  --repr-prefix behavior_repr_matrix_trial \
+  --isc-method mahalanobis \
+  --max-missing-fraction 0.2
+```
+
+含义：
+
+- `0.2` 表示只保留 `missing_fraction_repr < 0.2` 的被试
+- 过滤发生在行为 ISC 计算阶段
+- 后续脑-行为 joint 会自动取脑和行为的共同被试
+
+新增输出：
+
+- `behavior_isc_<method>_by_age_subject_filter.csv`
+  记录每个被试的
+  - `missing_fraction_repr`
+  - `keep_for_behavior_isc`
+- `behavior_isc_<method>_by_age_meta.csv`
+  现在还会记录
+  - `max_missing_fraction`
+  - `n_subjects_before_filter`
+  - `n_subjects_after_filter`
+  - `n_subjects_excluded_missing`
+
+### 3. pipeline 默认配置
+
+两份行为配置已经默认加入缺失过滤阈值：
+
+- `behavior/config_behavior_trial.json`
+  - `beh_isc_trial.max_missing_fraction = 0.2`
+- `behavior/config_behavior_emotion.json`
+  - `beh_isc_emotion.max_missing_fraction = 0.2`
+
+直接运行即可生效：
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_trial.json
+```
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_emotion.json
+```
+
+如果脑分支已经跑完，只重跑行为与脑-行为关联：
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_trial.json --steps beh_repr_trial,beh_isc_trial,brain_beh_trial
+```
+
+```bash
+python run_pipeline.py --config behavior/config_behavior_emotion.json --steps beh_repr_trial,beh_repr_emotion,beh_isc_emotion,brain_beh_emotion
+```

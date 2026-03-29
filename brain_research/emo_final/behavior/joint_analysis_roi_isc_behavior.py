@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--behavior-isc-method", type=str, default="mahalanobis", choices=("spearman", "pearson", "euclidean", "mahalanobis"))
     p.add_argument("--behavior-isc-prefix", type=str, default=None)
     p.add_argument("--assoc-method", type=str, default="spearman", choices=("pearson", "spearman"))
+    p.add_argument("--tail", type=str, default="two_sided", choices=("positive", "two_sided"))
     p.add_argument("--correction-mode", type=str, default="perm_fwer_fdr", choices=("fdr_only", "perm_fwer_fdr"))
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
@@ -101,6 +102,7 @@ def run_one(
     brain_isc_prefix: str,
     behavior_isc_prefix: str,
     assoc_method: str,
+    tail: str,
     correction_mode: str,
     n_perm: int,
     seed: int,
@@ -142,6 +144,7 @@ def run_one(
     p_raw = np.full(len(rois), np.nan, dtype=np.float64)
     p_fwer = np.full(len(rois), np.nan, dtype=np.float64)
     mode = str(correction_mode).strip().lower()
+    tail_mode = str(tail).strip().lower()
 
     if mode == "perm_fwer_fdr":
         rng = np.random.default_rng(int(seed))
@@ -156,12 +159,19 @@ def run_one(
                 vec_perm = fisher_z(vec_perm)
             r_perm = assoc(S_z, vec_perm, method=str(assoc_method)).astype(np.float32)
             valid = np.isfinite(r_obs) & np.isfinite(r_perm)
-            c_raw[valid] += (r_perm[valid] >= r_obs[valid])
+            if tail_mode == "two_sided":
+                c_raw[valid] += (np.abs(r_perm[valid]) >= np.abs(r_obs[valid]))
+            else:
+                c_raw[valid] += (r_perm[valid] >= r_obs[valid])
             if finite_obs_idx.size > 0:
                 valid_perm = np.isfinite(r_perm[finite_obs_idx])
                 if np.any(valid_perm):
-                    max_stat = float(np.max(r_perm[finite_obs_idx][valid_perm]))
-                    c_fwer[finite_obs_idx] += (max_stat >= r_obs[finite_obs_idx])
+                    if tail_mode == "two_sided":
+                        max_stat = float(np.max(np.abs(r_perm[finite_obs_idx][valid_perm])))
+                        c_fwer[finite_obs_idx] += (max_stat >= np.abs(r_obs[finite_obs_idx]))
+                    else:
+                        max_stat = float(np.max(r_perm[finite_obs_idx][valid_perm]))
+                        c_fwer[finite_obs_idx] += (max_stat >= r_obs[finite_obs_idx])
         ok = np.isfinite(r_obs)
         p_raw[ok] = (c_raw[ok] + 1.0) / (float(n_perm) + 1.0)
         p_fwer[ok] = (c_fwer[ok] + 1.0) / (float(n_perm) + 1.0)
@@ -172,9 +182,12 @@ def run_one(
         dfree = float(n_pairs - 2)
         r = np.clip(r_obs[ok].astype(np.float64), -0.999999, 0.999999)
         t_stat = r * np.sqrt(dfree / np.maximum(1.0 - r * r, 1e-12))
-        log_p = t.logsf(t_stat, df=dfree)
-        min_log = float(np.log(np.finfo(np.float64).tiny))
-        p_raw[ok] = np.exp(np.maximum(log_p, min_log))
+        if tail_mode == "two_sided":
+            p_raw[ok] = np.minimum(1.0, 2.0 * t.sf(np.abs(t_stat), df=dfree))
+        else:
+            log_p = t.logsf(t_stat, df=dfree)
+            min_log = float(np.log(np.finfo(np.float64).tiny))
+            p_raw[ok] = np.exp(np.maximum(log_p, min_log))
     else:
         raise ValueError(f"Unsupported correction mode: {correction_mode}")
 
@@ -192,10 +205,12 @@ def run_one(
             "brain_isc_prefix": str(brain_isc_prefix),
             "behavior_isc_prefix": str(behavior_isc_prefix),
             "assoc_method": str(assoc_method),
+            "tail": str(tail_mode),
             "fisher_z_brain": bool(fisher_z_brain),
             "fisher_z_behavior": bool(fisher_z_behavior),
         }
     ).sort_values("roi")
+    out_df["p_perm"] = out_df["p_perm_one_tailed"].astype(float)
     out_df["p_fdr_bh_global"] = bh_fdr(out_df["p_perm_one_tailed"].to_numpy(dtype=float))
 
     out_prefix = "roi_isc_behavior_perm_fwer"
@@ -215,6 +230,7 @@ def run(
     behavior_isc_method: str,
     behavior_isc_prefix: Optional[str],
     assoc_method: str,
+    tail: str,
     correction_mode: str,
     n_perm: int,
     seed: int,
@@ -249,20 +265,26 @@ def run(
             brain_isc_prefix=str(brain_isc_prefix),
             behavior_isc_prefix=str(behavior_isc_prefix),
             assoc_method=str(assoc_method),
+            tail=str(tail),
             correction_mode=str(correction_mode),
             n_perm=int(n_perm),
             seed=int(seed),
             fisher_z_brain=bool(fisher_z_brain_eff),
             fisher_z_behavior=bool(fisher_z_behavior_eff),
         )
-        sig_fwer = out[(out["r_obs"] > 0) & (out["p_fwer_model_wise"] <= 0.05)]
-        sig_fdr = out[(out["r_obs"] > 0) & (out["p_fdr_bh_global"] <= 0.05)]
+        sig_fwer = out[out["p_fwer_model_wise"] <= 0.05]
+        sig_fdr = out[out["p_fdr_bh_global"] <= 0.05]
         summary.append(
             {
                 "stimulus_type": stim_dir.name,
                 "n_rows": int(out.shape[0]),
-                "n_sig_pos_fwer": int(sig_fwer.shape[0]),
-                "n_sig_pos_fdr": int(sig_fdr.shape[0]),
+                "tail": str(tail),
+                "n_sig_fwer": int(sig_fwer.shape[0]),
+                "n_sig_pos_fwer": int((sig_fwer["r_obs"] > 0).sum()),
+                "n_sig_neg_fwer": int((sig_fwer["r_obs"] < 0).sum()),
+                "n_sig_fdr": int(sig_fdr.shape[0]),
+                "n_sig_pos_fdr": int((sig_fdr["r_obs"] > 0).sum()),
+                "n_sig_neg_fdr": int((sig_fdr["r_obs"] < 0).sum()),
                 "brain_isc_prefix": str(brain_isc_prefix),
                 "behavior_isc_prefix": str(behavior_isc_prefix),
             }
@@ -286,6 +308,7 @@ def main() -> None:
         behavior_isc_method=str(args.behavior_isc_method),
         behavior_isc_prefix=args.behavior_isc_prefix,
         assoc_method=str(args.assoc_method),
+        tail=str(args.tail),
         correction_mode=str(args.correction_mode),
         n_perm=int(args.n_perm),
         seed=int(args.seed),

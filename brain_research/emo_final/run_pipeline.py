@@ -254,6 +254,7 @@ def main() -> None:
             repr_prefix=repr_prefix,
             isc_method=isc_method,
             isc_prefix=isc_prefix,
+            max_missing_fraction=_as_float(s.get("max_missing_fraction"), 0.0) if s.get("max_missing_fraction") is not None else None,
         )
 
     def run_perm(block_name: str) -> None:
@@ -284,7 +285,7 @@ def main() -> None:
             if isc_prefix is None:
                 isc_prefix = f"roi_isc_{str(isc_method_for_policy).strip().lower()}_by_age"
 
-        # Step: permutation test against developmental models (one-tailed) with model-wise maxT FWER.
+        # Step: permutation test against developmental models with configurable tail and model-wise maxT FWER.
         run_perm_inner(
             matrix_dir=matrix_dir,
             stimulus_dir_name=stimulus_dir_name,
@@ -315,6 +316,7 @@ def main() -> None:
             behavior_isc_method=_as_str(s.get("behavior_isc_method"), default="mahalanobis"),
             behavior_isc_prefix=_as_str(s.get("behavior_isc_prefix"), default=None),
             assoc_method=_as_str(s.get("assoc_method"), default="spearman"),
+            tail=_as_str(s.get("tail"), default="two_sided"),
             correction_mode=_as_str(s.get("correction_mode"), default="perm_fwer_fdr"),
             n_perm=_as_int(s.get("n_perm"), 5000),
             seed=_as_int(s.get("seed"), 42),
