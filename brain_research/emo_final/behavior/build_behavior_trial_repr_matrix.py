@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-if __package__ in {None, ""}:
+if __package__ in {None, "", "behavior"}:
     THIS_DIR = Path(__file__).resolve().parent
     EMO_DIR = THIS_DIR.parent
     if str(THIS_DIR) not in sys.path:
@@ -19,8 +19,12 @@ if __package__ in {None, ""}:
     if str(EMO_DIR) not in sys.path:
         sys.path.insert(0, str(EMO_DIR))
 
-    from behavior_data import DEFAULT_BEH_DATA_DIR, DEFAULT_FMRI_DATA_DIR, collect_behavior_feature_table  # noqa: E402
+    from behavior_data import DEFAULT_BEH_DATA_DIR, DEFAULT_FMRI_DATA_DIR, audit_behavior_subjects, collect_behavior_feature_table  # noqa: E402
     from behavior_matrix_utils import compute_difference_matrix, save_npz_named  # noqa: E402
+    from calc_roi_isc_by_age import distance_to_similarity  # noqa: E402
+else:
+    from .behavior_data import DEFAULT_BEH_DATA_DIR, DEFAULT_FMRI_DATA_DIR, audit_behavior_subjects, collect_behavior_feature_table  # noqa: E402
+    from .behavior_matrix_utils import compute_difference_matrix, save_npz_named  # noqa: E402
     from ..calc_roi_isc_by_age import distance_to_similarity  # noqa: E402
 
 
@@ -100,18 +104,38 @@ def _build_one_stimulus(
     feature_cols: Sequence[str],
     agg_func: str,
     diff_method: str,
+    subject_audit_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, np.ndarray], Dict[str, np.ndarray], Dict[str, np.ndarray], List[str]]:
     feature_cols = [str(c) for c in feature_cols]
     agg = _agg_name(agg_func)
     brain_subjects = [str(s) for s in brain_subjects]
     stim_order = [str(s) for s in stim_order]
 
+    feature_df = feature_df.copy()
+    feature_df["subject"] = feature_df["subject"].astype(str)
+    feature_subject_counts = feature_df.groupby("subject").size().to_dict()
+
     df = feature_df[
         feature_df["subject"].astype(str).isin(brain_subjects)
         & feature_df["stimulus_content"].astype(str).isin(stim_order)
     ].copy()
+    matched_row_counts = df.groupby("subject").size().to_dict() if not df.empty else {}
     if df.empty:
-        empty_cov = pd.DataFrame({"subject": brain_subjects, "n_stimuli_present": 0, "n_stimuli_expected": len(stim_order), "complete_for_behavior": False})
+        empty_cov = pd.DataFrame(
+            {
+                "subject": brain_subjects,
+                "n_stimuli_present": 0,
+                "n_stimuli_expected": len(stim_order),
+                "n_rows_feature_subject": [int(feature_subject_counts.get(str(sub), 0)) for sub in brain_subjects],
+                "n_rows_matching_stim_order": 0,
+                "n_stimuli_with_any_rows": 0,
+                "complete_for_behavior": False,
+                "include_for_behavior": False,
+                "trial_exclusion_reason": "no_matching_stimuli_in_brain_order",
+            }
+        )
+        if subject_audit_df is not None and not subject_audit_df.empty and "subject" in subject_audit_df.columns:
+            empty_cov = empty_cov.merge(subject_audit_df, on="subject", how="left")
         return pd.DataFrame(), empty_cov, {}, {}, {}, []
 
     meta = (
@@ -128,25 +152,57 @@ def _build_one_stimulus(
     long_scores = meta.merge(agg_df, on=["subject", "stimulus_content"], how="outer")
     long_scores["all_features_finite"] = long_scores[feature_cols].apply(lambda row: bool(np.isfinite(row.to_numpy(dtype=float)).all()), axis=1)
 
+    audit_map = None
+    if subject_audit_df is not None and not subject_audit_df.empty and "subject" in subject_audit_df.columns:
+        audit_df = subject_audit_df.copy()
+        audit_df["subject"] = audit_df["subject"].astype(str)
+        audit_map = audit_df.set_index("subject")
+
     coverage_rows = []
-    complete_subjects: List[str] = []
+    usable_subjects: List[str] = []
     for sub in brain_subjects:
         sub_df = long_scores[long_scores["subject"].astype(str) == str(sub)].copy()
+        n_any = sub_df["stimulus_content"].astype(str).nunique()
         present = sub_df.loc[sub_df["all_features_finite"], "stimulus_content"].astype(str).nunique()
         complete = int(present) == int(len(stim_order))
-        coverage_rows.append(
-            {
-                "subject": str(sub),
-                "n_stimuli_present": int(present),
-                "n_stimuli_expected": int(len(stim_order)),
-                "complete_for_behavior": bool(complete),
-            }
-        )
-        if complete:
-            complete_subjects.append(str(sub))
+        include = int(present) > 0
+        feature_rows_total = int(feature_subject_counts.get(str(sub), 0))
+        matched_rows_total = int(matched_row_counts.get(str(sub), 0))
+        if include:
+            reason = "included_complete" if complete else "included_partial"
+        elif feature_rows_total <= 0:
+            reason = "subject_missing_from_behavior_feature_table"
+        elif matched_rows_total <= 0:
+            reason = "no_matching_stimuli_in_brain_order"
+        elif n_any > 0 and present <= 0:
+            reason = "all_matching_stimuli_missing_selected_features"
+        else:
+            reason = "excluded_unknown"
+
+        row = {
+            "subject": str(sub),
+            "n_stimuli_present": int(present),
+            "n_stimuli_expected": int(len(stim_order)),
+            "n_rows_feature_subject": feature_rows_total,
+            "n_rows_matching_stim_order": matched_rows_total,
+            "n_stimuli_with_any_rows": int(n_any),
+            "complete_for_behavior": bool(complete),
+            "include_for_behavior": bool(include),
+            "trial_exclusion_reason": str(reason),
+        }
+        if audit_map is not None and str(sub) in audit_map.index:
+            audit_row = audit_map.loc[str(sub)]
+            if isinstance(audit_row, pd.DataFrame):
+                audit_row = audit_row.iloc[0]
+            for col in ["listed_in_participants", "has_task_txt", "has_task_tsv", "paradigm_version", "n_trials_raw", "n_trials_valid_emot", "n_trials_valid_choice", "er_exclusion_reason"]:
+                if col in audit_map.columns:
+                    row[col] = audit_row[col]
+        coverage_rows.append(row)
+        if include:
+            usable_subjects.append(str(sub))
 
     coverage_df = pd.DataFrame(coverage_rows)
-    if not complete_subjects:
+    if not usable_subjects:
         return long_scores, coverage_df, {}, {}, {}, []
 
     pattern_by_sub: Dict[str, np.ndarray] = {}
@@ -154,7 +210,7 @@ def _build_one_stimulus(
     repr_by_sub: Dict[str, np.ndarray] = {}
     keep_long_rows = []
 
-    for sub in complete_subjects:
+    for sub in usable_subjects:
         sub_df = long_scores[long_scores["subject"].astype(str) == str(sub)].copy()
         sub_df = sub_df.set_index("stimulus_content").loc[stim_order].reset_index()
         keep_long_rows.append(sub_df)
@@ -166,7 +222,7 @@ def _build_one_stimulus(
         repr_by_sub[str(sub)] = S
 
     long_scores_keep = pd.concat(keep_long_rows, ignore_index=True) if keep_long_rows else pd.DataFrame()
-    return long_scores_keep, coverage_df, pattern_by_sub, diff_by_sub, repr_by_sub, complete_subjects
+    return long_scores_keep, coverage_df, pattern_by_sub, diff_by_sub, repr_by_sub, usable_subjects
 
 
 def run(
@@ -204,11 +260,21 @@ def run(
         valid_er_file=valid_er_file,
         valid_tg_file=valid_tg_file,
     )
+    subject_audit_df = audit_behavior_subjects(
+        subjects=union_subjects,
+        dir_beh_data=beh_data_dir,
+        dir_fmri_data=fmri_data_dir,
+        participants_file=participants_file,
+        valid_er_file=valid_er_file,
+        valid_tg_file=valid_tg_file,
+    )
     feature_cols = _check_feature_columns(feature_df, feature_cols)
     validity_policy = _detect_required_validity(feature_cols)
 
-    if validity_policy["need_er"]:
-        feature_df = feature_df[feature_df["valid_subject_er"].astype(bool)].copy()
+    # ER analyses no longer restrict subjects by sub_list_valid_4_ER.txt.
+    # We only require that the requested behavior features are not all missing
+    # after trial-level cleaning/alignment. TG-specific valid-subject filtering
+    # is kept for TG-derived features.
     if validity_policy["need_tg"]:
         feature_df = feature_df[feature_df["valid_subject_tg"].astype(bool)].copy()
 
@@ -221,6 +287,7 @@ def run(
             feature_cols=feature_cols,
             agg_func=agg_func,
             diff_method=diff_method,
+            subject_audit_df=subject_audit_df,
         )
 
         coverage_df.to_csv(stim_dir / "behavior_subject_coverage.csv", index=False)
@@ -258,6 +325,8 @@ def run(
                 "agg_func": [str(agg_func)],
                 "diff_method": [str(diff_method)],
                 "brain_repr_prefix": [str(brain_repr_prefix)],
+                "valid_subject_er_filter_applied": [False],
+                "valid_subject_tg_filter_applied": [bool(validity_policy["need_tg"])],
             }
         )
         meta_df.to_csv(stim_dir / f"{pattern_prefix}_meta.csv", index=False)

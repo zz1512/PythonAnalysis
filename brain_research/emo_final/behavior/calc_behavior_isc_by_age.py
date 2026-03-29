@@ -11,12 +11,14 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-if __package__ in {None, ""}:
+if __package__ in {None, "", "behavior"}:
     THIS_DIR = Path(__file__).resolve().parent
     EMO_DIR = THIS_DIR.parent
     if str(EMO_DIR) not in sys.path:
         sys.path.insert(0, str(EMO_DIR))
 
+    from calc_roi_isc_by_age import compute_isc, flatten_upper, load_subject_ages_map, sort_subjects_by_age  # noqa: E402
+else:
     from ..calc_roi_isc_by_age import compute_isc, flatten_upper, load_subject_ages_map, sort_subjects_by_age  # noqa: E402
 
 DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final")
@@ -48,10 +50,17 @@ def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str, isc_m
     subjects_sorted, ages_sorted = sort_subjects_by_age(subjects, age_map)
 
     vecs = np.stack([flatten_upper(np.asarray(npz[s], dtype=np.float32)) for s in subjects_sorted], axis=0)
-    isc = compute_isc(vecs, method=str(isc_method))
+    col_mean = np.nanmean(vecs, axis=0)
+    col_mean = np.where(np.isfinite(col_mean), col_mean, 0.0)
+    vecs_filled = np.where(np.isfinite(vecs), vecs, col_mean.reshape(1, -1))
+    missing_frac = np.mean(~np.isfinite(vecs), axis=1).astype(float)
+    isc = compute_isc(vecs_filled, method=str(isc_method))
     np.save(stim_dir / f"{isc_prefix}.npy", isc.astype(np.float32))
-    pd.DataFrame({"subject": subjects_sorted, "age": ages_sorted}).to_csv(stim_dir / f"{isc_prefix}_subjects_sorted.csv", index=False)
-    pd.DataFrame({"isc_method": [str(isc_method)], "repr_prefix": [str(repr_prefix)], "isc_prefix": [str(isc_prefix)]}).to_csv(
+    pd.DataFrame({"subject": subjects_sorted, "age": ages_sorted, "missing_fraction_repr": missing_frac}).to_csv(
+        stim_dir / f"{isc_prefix}_subjects_sorted.csv",
+        index=False,
+    )
+    pd.DataFrame({"isc_method": [str(isc_method)], "repr_prefix": [str(repr_prefix)], "isc_prefix": [str(isc_prefix)], "missing_fill": ["column_mean"]}).to_csv(
         stim_dir / f"{isc_prefix}_meta.csv",
         index=False,
     )

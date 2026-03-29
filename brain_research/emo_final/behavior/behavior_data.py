@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -239,9 +239,7 @@ def preprocess_subject_trials(df_sub_data_trials: pd.DataFrame, ver_paradigm: st
     return df
 
 
-def build_er_trial_table(sub: str, df_sub_data_trials: pd.DataFrame, valid_subjects_er: Iterable[str]) -> Optional[pd.DataFrame]:
-    if sub not in set(valid_subjects_er):
-        return None
+def build_er_trial_table(sub: str, df_sub_data_trials: pd.DataFrame) -> Optional[pd.DataFrame]:
     df_er = df_sub_data_trials.loc[df_sub_data_trials["valid_emot"]].copy()
     if df_er.empty:
         return None
@@ -266,6 +264,107 @@ def build_er_trial_table(sub: str, df_sub_data_trials: pd.DataFrame, valid_subje
             "Feeling.RESP": "emot_rating",
         }
     )
+
+
+def audit_behavior_subjects(
+    subjects: Optional[Sequence[str]] = None,
+    dir_beh_data: Path = DEFAULT_BEH_DATA_DIR,
+    dir_fmri_data: Path = DEFAULT_FMRI_DATA_DIR,
+    participants_file: Optional[Path] = None,
+    valid_er_file: Optional[Path] = None,
+    valid_tg_file: Optional[Path] = None,
+    domain_ls: Sequence[str] = DEFAULT_DOMAIN_LS,
+) -> pd.DataFrame:
+    sub_ls, sub_valid_er, sub_valid_tg, _ = load_subject_lists(
+        dir_beh_data=dir_beh_data,
+        participants_file=participants_file,
+        valid_er_file=valid_er_file,
+        valid_tg_file=valid_tg_file,
+    )
+
+    if subjects is None:
+        iter_subjects = list(sub_ls)
+    else:
+        wanted = {_normalize_subject_id(x) for x in subjects}
+        iter_subjects = [s for s in sub_ls if s in wanted]
+
+    valid_er_set = set(sub_valid_er)
+    valid_tg_set = set(sub_valid_tg)
+    rows = []
+
+    for sub in tqdm(iter_subjects, desc="auditing subject inclusion for ER export"):
+        row = {
+            "subject": f"sub-{sub}",
+            "listed_in_participants": True,
+            "valid_subject_er": bool(sub in valid_er_set),
+            "valid_subject_tg": bool(sub in valid_tg_set),
+            "has_task_txt": False,
+            "has_task_tsv": False,
+            "paradigm_version": "",
+            "n_trials_raw": 0,
+            "n_trials_emo": 0,
+            "n_trials_soc": 0,
+            "n_trials_with_feeling_resp": 0,
+            "n_trials_with_choice_resp": 0,
+            "n_trials_valid_emot": 0,
+            "n_trials_valid_choice": 0,
+            "n_trials_invalid_emot_due_missing_resp": 0,
+            "n_trials_invalid_emot_due_rt_filter": 0,
+            "n_trials_invalid_choice_due_missing_resp": 0,
+            "n_trials_invalid_choice_due_missing_feeling": 0,
+            "n_trials_invalid_choice_due_rt_filter": 0,
+            "included_in_data_4_hddm_ER": False,
+            "er_exclusion_reason": "",
+        }
+
+        try:
+            ver_paradigm = detect_paradigm_version(sub, dir_fmri_data=dir_fmri_data, domain_ls=domain_ls)
+            row["has_task_txt"] = True
+            row["paradigm_version"] = str(ver_paradigm)
+        except FileNotFoundError:
+            row["er_exclusion_reason"] = "missing_task_txt"
+            rows.append(row)
+            continue
+
+        try:
+            df_trials = load_subject_trials(sub, dir_fmri_data=dir_fmri_data, domain_ls=domain_ls)
+            row["has_task_tsv"] = True
+        except FileNotFoundError:
+            row["er_exclusion_reason"] = "missing_task_tsv"
+            rows.append(row)
+            continue
+
+        df_trials = preprocess_subject_trials(df_trials, ver_paradigm=ver_paradigm)
+        row["n_trials_raw"] = int(df_trials.shape[0])
+        if "task" in df_trials.columns:
+            row["n_trials_emo"] = int((df_trials["task"].astype(str) == "EMO").sum())
+            row["n_trials_soc"] = int((df_trials["task"].astype(str) == "SOC").sum())
+
+        feeling_resp = pd.to_numeric(df_trials["Feeling.RESP"], errors="coerce")
+        choice_resp = pd.to_numeric(df_trials["Choice.RESP"], errors="coerce")
+        valid_emot = df_trials["valid_emot"].astype(bool)
+        valid_choice = df_trials["valid_choice"].astype(bool)
+        emot_rt_keep = _rt_keep_mask(df_trials["Feeling.RT"])
+        choice_rt_keep = _rt_keep_mask(df_trials["Choice.RT"])
+
+        row["n_trials_with_feeling_resp"] = int(feeling_resp.notna().sum())
+        row["n_trials_with_choice_resp"] = int(choice_resp.notna().sum())
+        row["n_trials_valid_emot"] = int(valid_emot.sum())
+        row["n_trials_valid_choice"] = int(valid_choice.sum())
+        row["n_trials_invalid_emot_due_missing_resp"] = int((~feeling_resp.notna()).sum())
+        row["n_trials_invalid_emot_due_rt_filter"] = int((feeling_resp.notna() & ~emot_rt_keep).sum())
+        row["n_trials_invalid_choice_due_missing_resp"] = int((~choice_resp.notna()).sum())
+        row["n_trials_invalid_choice_due_missing_feeling"] = int((choice_resp.notna() & ~feeling_resp.notna()).sum())
+        row["n_trials_invalid_choice_due_rt_filter"] = int((choice_resp.notna() & feeling_resp.notna() & ~choice_rt_keep).sum())
+
+        if row["n_trials_valid_emot"] <= 0:
+            row["er_exclusion_reason"] = "no_valid_emot_trials_after_filter"
+        else:
+            row["included_in_data_4_hddm_ER"] = True
+            row["er_exclusion_reason"] = "included"
+        rows.append(row)
+
+    return pd.DataFrame(rows)
 
 
 def collect_behavior_trials(
@@ -332,7 +431,7 @@ def collect_behavior_trials(
             ].copy()
         )
 
-        df_er = build_er_trial_table(sub, df_trials, valid_subjects_er=sub_valid_er)
+        df_er = build_er_trial_table(sub, df_trials)
         if df_er is not None and not df_er.empty:
             sub_trialdat_ls_er.append(df_er)
 
@@ -382,6 +481,15 @@ def export_behavior_outputs(
         valid_tg_file=valid_tg_file,
         domain_ls=domain_ls,
     )
+    df_audit = audit_behavior_subjects(
+        subjects=subjects,
+        dir_beh_data=dir_beh_data,
+        dir_fmri_data=dir_fmri_data,
+        participants_file=participants_file,
+        valid_er_file=valid_er_file,
+        valid_tg_file=valid_tg_file,
+        domain_ls=domain_ls,
+    )
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -389,6 +497,8 @@ def export_behavior_outputs(
         df_er.to_csv(out_dir / "data_4_hddm_ER.csv", sep=",", index=False)
     if bool(save_feature_table) and not df_feature.empty:
         df_feature.to_csv(out_dir / "data_4_behavior_feature_table.csv", sep=",", index=False)
+    if not df_audit.empty:
+        df_audit.to_csv(out_dir / "data_4_hddm_ER_subject_audit.csv", sep=",", index=False)
     return df_er, df_feature
 
 

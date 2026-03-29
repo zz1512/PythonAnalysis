@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-if __package__ in {None, ""}:
+if __package__ in {None, "", "behavior"}:
     THIS_DIR = Path(__file__).resolve().parent
     EMO_DIR = THIS_DIR.parent
     if str(THIS_DIR) not in sys.path:
@@ -20,6 +20,10 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(EMO_DIR))
 
     from behavior_matrix_utils import compute_difference_matrix, save_npz_named  # noqa: E402
+    from build_roi_emotion_repr_matrix import detect_emotion  # noqa: E402
+    from calc_roi_isc_by_age import distance_to_similarity  # noqa: E402
+else:
+    from .behavior_matrix_utils import compute_difference_matrix, save_npz_named  # noqa: E402
     from ..build_roi_emotion_repr_matrix import detect_emotion  # noqa: E402
     from ..calc_roi_isc_by_age import distance_to_similarity  # noqa: E402
 
@@ -101,7 +105,11 @@ def run_one(
             row = {"subject": str(sub), "emotion": str(emo), "n_stimuli_agg": int(idx.size)}
             for fi, feat in enumerate(features):
                 row[str(feat)] = float(pat_emo[ei, fi])
+            row["all_features_missing"] = bool(np.all(~np.isfinite(pat_emo[ei, :])))
             score_rows.append(row)
+
+        if bool(np.all(~np.isfinite(pat_emo))):
+            continue
 
         D = compute_difference_matrix(pat_emo, method=str(diff_method)).astype(np.float32)
         S = distance_to_similarity(D).astype(np.float32)
@@ -109,14 +117,18 @@ def run_one(
         out_diff[str(sub)] = D
         out_repr[str(sub)] = S
 
+    kept_subjects = sorted(out_pattern.keys())
+    if not kept_subjects:
+        return None
+
     out_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(score_rows).to_csv(out_dir / str(score_file_name), index=False)
     save_npz_named(out_dir / f"{out_pattern_prefix}.npz", out_pattern)
     save_npz_named(out_dir / f"{out_diff_prefix}.npz", out_diff)
     save_npz_named(out_dir / f"{out_repr_prefix}.npz", out_repr)
-    pd.DataFrame({"subject": subjects}).to_csv(out_dir / f"{out_pattern_prefix}_subjects.csv", index=False)
-    pd.DataFrame({"subject": subjects}).to_csv(out_dir / f"{out_diff_prefix}_subjects.csv", index=False)
-    pd.DataFrame({"subject": subjects}).to_csv(out_dir / f"{out_repr_prefix}_subjects.csv", index=False)
+    pd.DataFrame({"subject": kept_subjects}).to_csv(out_dir / f"{out_pattern_prefix}_subjects.csv", index=False)
+    pd.DataFrame({"subject": kept_subjects}).to_csv(out_dir / f"{out_diff_prefix}_subjects.csv", index=False)
+    pd.DataFrame({"subject": kept_subjects}).to_csv(out_dir / f"{out_repr_prefix}_subjects.csv", index=False)
     pd.DataFrame({"feature": features}).to_csv(out_dir / f"{out_pattern_prefix}_features.csv", index=False)
     pd.DataFrame({"feature": features}).to_csv(out_dir / f"{out_diff_prefix}_features.csv", index=False)
     pd.DataFrame({"feature": features}).to_csv(out_dir / f"{out_repr_prefix}_features.csv", index=False)
@@ -127,7 +139,7 @@ def run_one(
     meta = pd.DataFrame(
         {
             "repr_level": ["emotion"],
-            "n_subjects": [int(len(subjects))],
+            "n_subjects": [int(len(kept_subjects))],
             "n_emotions": [int(len(emotions))],
             "n_features": [int(len(features))],
             "feature_cols": ["|".join(features)],
@@ -138,7 +150,7 @@ def run_one(
     meta.to_csv(out_dir / f"{out_pattern_prefix}_meta.csv", index=False)
     meta.to_csv(out_dir / f"{out_diff_prefix}_meta.csv", index=False)
     meta.to_csv(out_dir / f"{out_repr_prefix}_meta.csv", index=False)
-    return {"stimulus_type": stim_dir.name, "n_subjects": int(len(subjects)), "n_emotions": int(len(emotions)), "n_features": int(len(features))}
+    return {"stimulus_type": stim_dir.name, "n_subjects": int(len(kept_subjects)), "n_emotions": int(len(emotions)), "n_features": int(len(features))}
 
 
 def run(

@@ -12,12 +12,14 @@ import numpy as np
 import pandas as pd
 from scipy.stats import rankdata, t
 
-if __package__ in {None, ""}:
+if __package__ in {None, "", "behavior"}:
     THIS_DIR = Path(__file__).resolve().parent
     EMO_DIR = THIS_DIR.parent
     if str(EMO_DIR) not in sys.path:
         sys.path.insert(0, str(EMO_DIR))
 
+    from joint_analysis_roi_isc_dev_models import assoc, bh_fdr, fisher_z, zscore_1d  # noqa: E402
+else:
     from ..joint_analysis_roi_isc_dev_models import assoc, bh_fdr, fisher_z, zscore_1d  # noqa: E402
 
 
