@@ -612,6 +612,41 @@ Emotion 分支的新增产物包括：
 - `by_emotion/<stimulus_type>/behavior_isc_<method>_by_age.npy`
 - `by_emotion/<stimulus_type>/roi_isc_behavior_perm_fwer.csv`
 
+### 行为-脑 年龄调制分析 (Multiple Regression RSA)
+
+在计算完 `Brain_ISC` 和 `Behavior_ISC` 后，如果希望探究年龄发育阶段如何调制行为和大脑之间的对应关系，可以运行年龄调制多元回归脚本：
+
+该脚本基于 `statsmodels` 建立回归模型：`Brain_ISC = β1*Behavior_ISC + β2*Age_Model + β3*(Behavior_ISC*Age_Model) + ε`。通过检验交互项（β3）的显著性，可以判断行为和脑的相似性是否受到年龄的调制。
+
+**Trial-level 年龄调制分析：**
+
+```bash
+python behavior/joint_analysis_roi_isc_behavior_age_regression.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --brain-isc-prefix roi_isc_mahalanobis_by_age \
+  --behavior-isc-prefix behavior_isc_mahalanobis_by_age \
+  --rank-transform
+```
+
+**Emotion-level 年龄调制分析：**
+
+```bash
+python behavior/joint_analysis_roi_isc_behavior_age_regression.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --brain-isc-prefix roi_isc_mahalanobis_by_age \
+  --behavior-isc-prefix behavior_isc_mahalanobis_by_age \
+  --rank-transform
+```
+
+参数说明：
+- `--rank-transform`：对距离矩阵执行 Rank+Zscore 转换（推荐开启，这能使其与 Spearman 相关的非参数特性对齐，避免回归模型受到极端距离值影响）。
+
+输出产物：
+- 每个刺激条件目录下：`roi_isc_behavior_age_regression.csv`（包含每种模型、每个 ROI 的各项 Beta 系数和 P 值）
+- 结果根目录下：`roi_isc_behavior_age_regression_summary.csv`（汇总各条件和各模型下发现显著交互项的 ROI 数量）
+
 ### 一键配置运行
 
 如果你希望从脑分支与行为分支一起顺序跑完，可以直接使用新配置：
