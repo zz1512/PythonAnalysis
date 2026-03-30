@@ -634,6 +634,137 @@ python run_pipeline.py --config behavior/config_behavior_trial.json --steps beh_
 python run_pipeline.py --config behavior/config_behavior_emotion.json --steps beh_repr_trial,beh_repr_emotion,beh_isc_emotion,brain_beh_emotion
 ```
 
+### 4. 统计更新（2026-03-29）
+
+行为 ISC 与脑-行为 joint 目前采用以下新规则：
+
+- `behavior/calc_behavior_isc_by_age.py`
+  - 不再对行为表征向量做 `fisher_z`
+  - `euclidean / mahalanobis` 直接在行为相似向量上计算距离，再转回相似性
+- `behavior/joint_analysis_roi_isc_behavior.py`
+  - 新增 `--tail`
+  - 默认使用 `two_sided`
+  - 置换检验与 `fdr_only` 参数法现在都支持双尾
+
+当前建议命令：
+
+```bash
+python behavior/calc_behavior_isc_by_age.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --subject-info /public/home/dingrui/fmri_analysis/data/beh/beh_indices_mri_exp_ER_TG.csv \
+  --repr-prefix behavior_repr_matrix_trial \
+  --isc-method mahalanobis \
+  --max-missing-fraction 0.2
+```
+
+```bash
+python behavior/joint_analysis_roi_isc_behavior.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --brain-repr-prefix roi_repr_matrix_232 \
+  --brain-isc-method mahalanobis \
+  --behavior-repr-prefix behavior_repr_matrix_trial \
+  --behavior-isc-method mahalanobis \
+  --assoc-method spearman \
+  --tail two_sided \
+  --correction-mode perm_fwer_fdr \
+  --n-perm 5000 \
+  --seed 42
+```
+
+对应输出 `roi_isc_behavior_perm_fwer.csv` 中新增或更新的关键列：
+
+- `tail`
+- `p_perm`
+- `p_perm_one_tailed`
+- `p_fwer_model_wise`
+- `p_fdr_bh_global`
+
+说明：
+
+- 当前 `p_perm` 与 `p_perm_one_tailed` 数值相同，都是当前实际使用的检验 p 值
+- 当 `tail=two_sided` 时，应优先按 `p_perm`、`p_fwer_model_wise`、`p_fdr_bh_global` 解释结果
+
+### 5. 行为相关结果绘图建议
+
+当前仓库还没有专门针对 `roi_isc_behavior_perm_fwer.csv` 的绘图脚本。
+
+建议优先绘制三类图：
+
+- ROI 显著性表格 / Top ROI 排序图
+  - 每个 `stimulus_type` 选 `|r_obs|` 最大、且 `p_fwer_model_wise <= 0.05` 或 `p_fdr_bh_global <= 0.05` 的 ROI
+- `stimulus_type x ROI` 热图
+  - 色值用 `r_obs`
+  - 非显著 ROI 置 0 或置空
+- 脑图
+  - 将显著 ROI 的 `r_obs` 映射回 Schaefer/Tian atlas
+  - 正相关和负相关建议都保留，用双极性色图
+
+推荐出图顺序：
+
+1. 先看 `roi_isc_behavior_perm_fwer_summary.csv`
+2. 再看每个 `stimulus_type/roi_isc_behavior_perm_fwer.csv`
+3. 先做表格和热图，最后再做脑图
+
+如果你接下来要正式画图，我建议优先做：
+
+- `by_stimulus` 的显著 ROI 热图
+- 每个 `stimulus_type` 的 top-10 ROI 条形图
+- 1 到 2 个代表性 `stimulus_type` 的脑图
+
+如果你需要，我下一步可以直接帮你补一个新的 `plot_roi_isc_behavior_results.py`，专门读取 `roi_isc_behavior_perm_fwer.csv` 画热图和 top ROI 条形图。
+
+### 6. 脑-行为结果绘图脚本
+
+现在已新增：
+
+- `plot_roi_isc_behavior_results.py`
+
+默认使用：
+
+- `p_fdr_bh_global`
+- 同时支持 `by_stimulus` 和 `by_emotion`
+
+trial 分支示例：
+
+```bash
+python plot_roi_isc_behavior_results.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --p-col p_fdr_bh_global \
+  --alpha 0.05 \
+  --top-k 10
+```
+
+emotion 分支示例：
+
+```bash
+python plot_roi_isc_behavior_results.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --p-col p_fdr_bh_global \
+  --alpha 0.05 \
+  --top-k 10
+```
+
+默认输出到：
+
+- `figures/by_stimulus_brain_behavior/`
+- `figures/by_emotion_brain_behavior/`
+
+主要产物包括：
+
+- `brain_behavior_sig_results_<branch>_<p_col>_a<alpha>.csv`
+- `brain_behavior_heatmap_<branch>_<p_col>_a<alpha>_all.png`
+- `brain_behavior_top_roi_<branch>_<stimulus_type>_<source>_<p_col>_a<alpha>.png`
+
+说明：
+
+- 热图使用显著 ROI 作图
+- 每个 `stimulus_type` 的条形图优先画显著 ROI
+- 如果某个条件没有显著 ROI，默认回退到该条件下 `|r_obs|` 最大的 top ROI
+
 ***
 
 ## 行为分支更新说明（2026-03）
