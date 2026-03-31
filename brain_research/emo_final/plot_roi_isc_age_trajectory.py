@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stimulus-dir-name", type=str, default="by_stimulus")
     p.add_argument("--repr-prefix", type=str, default=None)
     p.add_argument("--stimulus-type", type=str, required=True)
+    p.add_argument("--rois", nargs="+", default=None, help="Optional ROI list. If provided, skip automatic top-ROI selection.")
     p.add_argument("--model", type=str, default="M_conv", choices=["M_nn", "M_conv", "M_div"])
     p.add_argument("--isc-method", type=str, default="mahalanobis", choices=["spearman", "pearson", "euclidean", "mahalanobis"])
     p.add_argument("--isc-prefix", type=str, default=None)
@@ -136,6 +137,21 @@ def load_pair_data(stim_dir: Path, roi: str, isc_prefix: str) -> Tuple[np.ndarra
     return x[m], y[m]
 
 
+def validate_rois(stim_dir: Path, rois: List[str], isc_prefix: str) -> List[str]:
+    roi_list = pd.read_csv(stim_dir / f"{isc_prefix}_rois.csv")["roi"].astype(str).tolist()
+    keep: List[str] = []
+    missing: List[str] = []
+    roi_set = set(roi_list)
+    for roi in [str(x) for x in rois]:
+        if roi in roi_set:
+            keep.append(roi)
+        else:
+            missing.append(roi)
+    if missing:
+        raise ValueError(f"ROIs not found in {stim_dir.name}: {missing}")
+    return keep
+
+
 def plot_one(
     out_path: Path,
     x: np.ndarray,
@@ -236,14 +252,18 @@ def main() -> None:
 
     result_csv = stim_dir / "roi_isc_dev_models_perm_fwer.csv"
     isc_prefix = resolve_isc_prefix(stim_dir, isc_prefix=args.isc_prefix, isc_method=args.isc_method)
-    top = select_top_rois(
-        result_csv=result_csv,
-        model=str(args.model),
-        method=str(args.method),
-        alpha=float(args.alpha),
-        top_k=int(args.top_k),
-        positive_only=bool(args.positive_only),
-    )
+    if args.rois:
+        roi_names = validate_rois(stim_dir, rois=[str(x) for x in args.rois], isc_prefix=str(isc_prefix))
+        top = pd.DataFrame({"roi": roi_names})
+    else:
+        top = select_top_rois(
+            result_csv=result_csv,
+            model=str(args.model),
+            method=str(args.method),
+            alpha=float(args.alpha),
+            top_k=int(args.top_k),
+            positive_only=bool(args.positive_only),
+        )
 
     fig_dir = Path(args.matrix_dir) / "figures" / f"{str(args.stimulus_dir_name)}_pair_age_traj"
     fit = "lowess" if bool(args.lowess) else str(args.fit)

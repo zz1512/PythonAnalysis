@@ -35,7 +35,7 @@
 - `joint_analysis_roi_isc_dev_models.py`：将脑 ISC 与三种年龄模型做关联和置换检验
 - `plot_roi_isc_dev_models_perm_sig.py`：绘制显著 ROI 热图
 - `plot_brain_surface_vol.py`：把显著 ROI 映射回脑表面/皮下
-- `plot_roi_isc_age_trajectory.py`：画被试对平均年龄 vs ROI ISC 的轨迹图
+- `plot_roi_isc_age_trajectory.py`：画被试对平均年龄 vs ROI ISC 的轨迹图，支持直接指定 ROI
 
 ### 2. 推荐配置
 
@@ -212,6 +212,25 @@ python plot_roi_isc_age_trajectory.py \
   --method fdr_model_wise \
   --top-k 5
 ```
+
+如果你已经有明确 ROI，也可以直接指定，例如：
+
+```bash
+python plot_roi_isc_age_trajectory.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --repr-prefix roi_repr_matrix_232_emotion4 \
+  --stimulus-type Reappraisal \
+  --model M_conv \
+  --isc-method mahalanobis \
+  --rois V25
+```
+
+说明：
+
+- 手动传 `--rois` 时，请以结果文件里的 ROI 原名为准
+- 当前常见格式带下划线，例如 `V_25`、`L_24`、`L_75`
+- 如果写成 `V25`、`L24`、`L75`，脚本会因为精确匹配不到而报错
 
 ---
 
@@ -544,6 +563,55 @@ python plot_roi_isc_behavior_age_regression_results.py \
   --alpha 0.05 \
   --top-k 10
 ```
+
+如果希望进一步查看“年龄调制脑-行为耦合”脑区，当前更推荐画“沿年龄模型值排序后的滑动窗口耦合斜率图”。新增脚本：
+
+- `plot_roi_isc_behavior_age_coupling.py`
+
+trial 示例：
+
+```bash
+python plot_roi_isc_behavior_age_coupling.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_stimulus \
+  --stimulus-type Reappraisal \
+  --model M_conv \
+  --p-col p_fdr_perm_interaction_model_wise \
+  --alpha 0.05 \
+  --top-k 5 \
+  --rank-transform
+```
+
+emotion 示例：
+
+```bash
+python plot_roi_isc_behavior_age_coupling.py \
+  --matrix-dir /public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final \
+  --stimulus-dir-name by_emotion \
+  --stimulus-type Reappraisal \
+  --model M_conv \
+  --rois L_24 L_75 \
+  --rank-transform
+```
+
+说明：
+
+- `plot_roi_isc_behavior_age_coupling.py` 使用 `--rois` 时同样要求 ROI 名称与结果文件完全一致
+- 建议优先从 `*_rois.csv` 或结果表里的 `roi` 列直接复制名称
+
+该脚本会：
+
+- 读取年龄调制分析中实际纳入的共同被试
+- 取指定 ROI 的 `Behavior_ISC` 和 `Brain_ISC` 被试对数据
+- 按所选年龄模型（`M_nn / M_conv / M_div`）的模型值对被试对排序
+- 用滑动窗口重复估计 `Brain_ISC ~ Behavior_ISC` 的 simple slope
+- 输出“模型值 -> 耦合斜率”的主图，而不再默认绘制大样本散点云
+- 同时导出每个 ROI 的 pair-level CSV 与窗口级摘要表
+
+默认输出目录：
+
+- `figures/by_stimulus_brain_behavior_age_coupling/`
+- `figures/by_emotion_brain_behavior_age_coupling/`
 
 默认输出目录：
 
