@@ -10,7 +10,6 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 from scipy.stats import rankdata
 
 if __package__ in {None, "", "behavior"}:
@@ -41,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     g.add_argument("--rank-transform", action="store_true", dest="rank_transform", help="Rank transform matrices before regression (similar to Spearman)")
     g.add_argument("--no-rank-transform", action="store_false", dest="rank_transform", help="Disable rank transform and use standard z-scoring")
     p.set_defaults(rank_transform=True)
-    p.add_argument("--tail", type=str, default="two_sided", choices=("two_sided", "positive"))
+    p.add_argument("--tail", type=str, default="positive", choices=("two_sided", "positive"))
     p.add_argument("--correction-mode", type=str, default="perm_fwer_fdr", choices=("fdr_only", "perm_fwer_fdr"))
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
@@ -157,6 +156,39 @@ def _ols_tvals(X: np.ndarray, Y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     se = np.sqrt(np.maximum(0.0, diag * mse.reshape(1, -1)))
     tvals = beta / se
     return beta.T, tvals.T
+
+
+def _ols_fit_1d(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float]:
+    Xv = np.asarray(X, dtype=np.float64)
+    yv = np.asarray(y, dtype=np.float64).reshape(-1)
+    if Xv.ndim != 2:
+        raise ValueError("X must be 2D")
+    if yv.ndim != 1 or yv.shape[0] != Xv.shape[0]:
+        raise ValueError("y must be 1D and aligned with X")
+    n_obs = int(Xv.shape[0])
+    p = int(Xv.shape[1])
+    dof = float(n_obs - p)
+    if dof <= 0:
+        raise ValueError("Too few observations for OLS")
+
+    xtx_inv = np.linalg.pinv(Xv.T @ Xv)
+    beta = xtx_inv @ Xv.T @ yv
+    yhat = Xv @ beta
+    resid = yv - yhat
+    mse = float((resid * resid).sum() / dof)
+    se = np.sqrt(np.maximum(0.0, np.diag(xtx_inv) * mse))
+    tvals = beta / se
+
+    ss_res = float((resid * resid).sum())
+    y_center = yv - float(np.mean(yv))
+    ss_tot = float((y_center * y_center).sum())
+    if ss_tot > 0:
+        r_squared = 1.0 - (ss_res / ss_tot)
+        r_squared_adj = 1.0 - (1.0 - r_squared) * float(n_obs - 1) / float(max(1, n_obs - p))
+    else:
+        r_squared = np.nan
+        r_squared_adj = np.nan
+    return beta.astype(np.float64), tvals.astype(np.float64), float(r_squared), float(r_squared_adj)
 
 def run_one(
     stim_dir: Path,
@@ -343,40 +375,32 @@ def run_one(
                     p_fwer_age[roi_ok_idx] = pf_a
                     p_fwer_interaction[roi_ok_idx] = pf_i
         
+        X_mat_full = X_df[["const", "behavior", "age_model", "interaction"]].to_numpy(dtype=np.float64, copy=True)
         for ri, roi in enumerate(rois):
             y = S_z[ri]
             mask = (
                 np.isfinite(y)
-                & np.isfinite(X_df["behavior"])
-                & np.isfinite(X_df["age_model"])
-                & np.isfinite(X_df["interaction"])
+                & np.isfinite(X_mat_full).all(axis=1)
             )
             
-            if mask.sum() > 10:
+            if int(mask.sum()) > int(X_mat_full.shape[1]):
                 y_clean = y[mask]
-                X_clean = X_df[mask]
-                
-                # OLS Regression
-                model = sm.OLS(y_clean, X_clean)
-                results = model.fit()
+                X_clean = X_mat_full[mask]
+                beta_hat, t_hat, r_squared, r_squared_adj = _ols_fit_1d(X_clean, y_clean)
                 
                 rows.append({
                     "roi": roi,
                     "model": mname,
                     "n_subjects": n_sub,
                     "n_pairs": int(mask.sum()),
-                    "beta_behavior": results.params['behavior'],
-                    "p_behavior": results.pvalues['behavior'],
-                    "t_behavior": results.tvalues['behavior'],
-                    "beta_age": results.params['age_model'],
-                    "p_age": results.pvalues['age_model'],
-                    "t_age": results.tvalues['age_model'],
-                    "beta_interaction": results.params['interaction'],
-                    "p_interaction": results.pvalues['interaction'],
-                    "t_interaction": results.tvalues['interaction'],
-                    "r_squared": results.rsquared,
-                    "r_squared_adj": results.rsquared_adj,
-                    "f_pvalue": results.f_pvalue,
+                    "beta_behavior": float(beta_hat[1]),
+                    "t_behavior": float(t_hat[1]),
+                    "beta_age": float(beta_hat[2]),
+                    "t_age": float(t_hat[2]),
+                    "beta_interaction": float(beta_hat[3]),
+                    "t_interaction": float(t_hat[3]),
+                    "r_squared": float(r_squared),
+                    "r_squared_adj": float(r_squared_adj),
                     "p_perm_behavior": float(p_perm_behavior[ri]),
                     "p_perm_age": float(p_perm_age[ri]),
                     "p_perm_interaction": float(p_perm_interaction[ri]),
@@ -387,10 +411,10 @@ def run_one(
             else:
                 rows.append({
                     "roi": roi, "model": mname, "n_subjects": n_sub, "n_pairs": int(mask.sum()),
-                    "beta_behavior": np.nan, "p_behavior": np.nan, "t_behavior": np.nan,
-                    "beta_age": np.nan, "p_age": np.nan, "t_age": np.nan,
-                    "beta_interaction": np.nan, "p_interaction": np.nan, "t_interaction": np.nan,
-                    "r_squared": np.nan, "r_squared_adj": np.nan, "f_pvalue": np.nan,
+                    "beta_behavior": np.nan, "t_behavior": np.nan,
+                    "beta_age": np.nan, "t_age": np.nan,
+                    "beta_interaction": np.nan, "t_interaction": np.nan,
+                    "r_squared": np.nan, "r_squared_adj": np.nan,
                     "p_perm_behavior": float(p_perm_behavior[ri]),
                     "p_perm_age": float(p_perm_age[ri]),
                     "p_perm_interaction": float(p_perm_interaction[ri]),
@@ -405,17 +429,7 @@ def run_one(
     out_df["n_perm"] = int(n_perm)
     out_df["seed"] = int(seed)
     
-    # FDR Correction for interaction terms per model
-    out_df["p_fdr_interaction_model_wise"] = np.nan
-    for mname in model_names:
-        idx = out_df["model"] == mname
-        out_df.loc[idx, "p_fdr_interaction_model_wise"] = bh_fdr(out_df.loc[idx, "p_interaction"].to_numpy())
-        
-    out_df["p_fdr_behavior_model_wise"] = np.nan
-    for mname in model_names:
-        idx = out_df["model"] == mname
-        out_df.loc[idx, "p_fdr_behavior_model_wise"] = bh_fdr(out_df.loc[idx, "p_behavior"].to_numpy())
-
+    # Model-wise permutation FDR, computed separately for each age model.
     out_df["p_fdr_perm_interaction_model_wise"] = np.nan
     for mname in model_names:
         idx = out_df["model"] == mname
@@ -426,8 +440,14 @@ def run_one(
         idx = out_df["model"] == mname
         out_df.loc[idx, "p_fdr_perm_behavior_model_wise"] = bh_fdr(out_df.loc[idx, "p_perm_behavior"].to_numpy())
 
+    out_df["p_fdr_perm_age_model_wise"] = np.nan
+    for mname in model_names:
+        idx = out_df["model"] == mname
+        out_df.loc[idx, "p_fdr_perm_age_model_wise"] = bh_fdr(out_df.loc[idx, "p_perm_age"].to_numpy())
+
     out_prefix = "roi_isc_behavior_age_regression"
     out_df.to_csv(stim_dir / f"{out_prefix}.csv", index=False)
+    pd.DataFrame({"subject": subjects, "age": ages}).to_csv(stim_dir / f"{out_prefix}_subjects_sorted.csv", index=False)
     
     return out_df
 
@@ -480,11 +500,9 @@ def run(
             seed=int(seed),
         )
         
-        # Count significant interactions
+        # Count significant interaction effects separately for each age model.
         for mname in ("M_nn", "M_conv", "M_div"):
             sub_out = out[out["model"] == mname]
-            sig_inter_raw = sub_out[sub_out["p_interaction"] < 0.05]
-            sig_inter_fdr = sub_out[sub_out["p_fdr_interaction_model_wise"] < 0.05]
             sig_inter_perm_fdr = sub_out[sub_out["p_fdr_perm_interaction_model_wise"] < 0.05]
             sig_inter_perm_fwer = sub_out[sub_out["p_fwer_interaction_model_wise"] < 0.05]
             
@@ -492,10 +510,12 @@ def run(
                 "stimulus_type": stim_dir.name,
                 "model": mname,
                 "n_rois": int(sub_out.shape[0]),
-                "n_sig_inter_raw": int(sig_inter_raw.shape[0]),
-                "n_sig_inter_fdr": int(sig_inter_fdr.shape[0]),
                 "n_sig_inter_perm_fdr": int(sig_inter_perm_fdr.shape[0]),
                 "n_sig_inter_perm_fwer": int(sig_inter_perm_fwer.shape[0]),
+                "n_sig_inter_pos_perm_fdr": int((sig_inter_perm_fdr["beta_interaction"] > 0).sum()),
+                "n_sig_inter_neg_perm_fdr": int((sig_inter_perm_fdr["beta_interaction"] < 0).sum()),
+                "n_sig_inter_pos_perm_fwer": int((sig_inter_perm_fwer["beta_interaction"] > 0).sum()),
+                "n_sig_inter_neg_perm_fwer": int((sig_inter_perm_fwer["beta_interaction"] < 0).sum()),
             })
 
     out_sum = pd.DataFrame(summary)
