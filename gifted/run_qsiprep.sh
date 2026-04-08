@@ -1,54 +1,59 @@
 #!/bin/bash
 set -euo pipefail
 
-# ===================== 【国内环境优化：TemplateFlow 镜像配置】 =====================
-# 强制使用清华大学镜像，彻底解决 AWS 超时问题
-export TEMPLATEFLOW_AWS_S3_ENDPOINT=https://mirrors.tuna.tsinghua.edu.cn/templateflow/
-export TEMPLATEFLOW_AWS_S3_NO_SIGN_REQUEST=YES
-# 增加网络超时时间
-export TEMPLATEFLOW_TIMEOUT=300
+# 用途：
+# - 对同一个 BIDS 根目录中的 dwi 数据运行 QSIPrep（DTI/dMRI 预处理）
+# - 输出写入 derivatives/qsiprep，不会影响 fMRIPrep 的 derivatives/fmriprep
+# - 建议配合 qsiprep_bids_filters.json，仅选择 T1w 与 dwi，避免误选其他模态
+#
+# 运行前需要：
+# - Docker
+# - GNU parallel
+# - ${BIDS_ROOT}/code/participants.txt（每行一个 sub-XXX）
 
-# ===================== 【核心路径配置：已适配新版BIDS】 =====================
 BIDS_ROOT="/home/zhangze/data/gifted_fMRI_BIDS"
 inputdir="${BIDS_ROOT}"
-outputdir="${BIDS_ROOT}/derivatives/fmriprep"
+outputdir="${BIDS_ROOT}/derivatives/qsiprep"
 fslicense="${BIDS_ROOT}/license.txt"
-workingdir="${BIDS_ROOT}/tmp/fmriprep_wd"
+workingdir="${BIDS_ROOT}/tmp/qsiprep_wd"
 TEMPLATEFLOW_DIR="${BIDS_ROOT}/templateflow"
-export TEMPLATEFLOW_HOME="${TEMPLATEFLOW_DIR}"  # 绑定本地缓存目录
-participant_files="${BIDS_ROOT}/code/participants.txt"
-bids_filter_file="${BIDS_ROOT}/code/bids_filters.json"
 
-# ===================== 【资源配置：可根据服务器调整】 =====================
+participant_files="${BIDS_ROOT}/code/participants.txt"
+qsiprep_filter_file="${BIDS_ROOT}/code/qsiprep_bids_filters.json"
+
+# 可通过环境变量覆盖容器镜像，例如：
+# QSIPREP_IMAGE=pennlinc/qsiprep:latest bash run_qsiprep.sh
+QSIPREP_IMAGE="${QSIPREP_IMAGE:-pennlinc/qsiprep:latest}"
+
 num_cores=4
 nthreads=3
 memMB=16000
-parallel_jobs=3
+parallel_jobs=2
 
-# ===================== 【目录创建与权限】 =====================
+export TEMPLATEFLOW_AWS_S3_ENDPOINT=https://mirrors.tuna.tsinghua.edu.cn/templateflow/
+export TEMPLATEFLOW_AWS_S3_NO_SIGN_REQUEST=YES
+export TEMPLATEFLOW_TIMEOUT=300
+export TEMPLATEFLOW_HOME="${TEMPLATEFLOW_DIR}"
+
 mkdir -p "${outputdir}/logs" "${workingdir}" "${TEMPLATEFLOW_DIR}"
-mkdir -p "$(dirname "${bids_filter_file}")"
+mkdir -p "$(dirname "${qsiprep_filter_file}")"
 chown -R "$(id -u):$(id -g)" "${outputdir}" "${workingdir}" "${TEMPLATEFLOW_DIR}"
 
-# ===================== 【BIDS过滤参数配置】 =====================
-# 说明：
-# - bids_filters.json 仅选择 anat(T1w) 与 func(bold)
-# - 即使 BIDS 根目录中存在 dwi/，也不会被筛选进 fMRIPrep 任务
-if [ -f "${bids_filter_file}" ]; then
-    BIDS_FILTER_ARG="--bids-filter-file /code/$(basename "${bids_filter_file}")"
+if [ -f "${qsiprep_filter_file}" ]; then
+    BIDS_FILTER_ARG="--bids-filter-file /code/$(basename "${qsiprep_filter_file}")"
 else
     BIDS_FILTER_ARG=""
-    echo "⚠️  未找到bids_filters.json，跳过过滤"
+    echo "⚠️  未找到qsiprep_bids_filters.json，跳过过滤"
 fi
 
-# ===================== 【并行处理核心逻辑】 =====================
-export inputdir outputdir fslicense workingdir num_cores nthreads memMB TEMPLATEFLOW_DIR bids_filter_file BIDS_FILTER_ARG
+export inputdir outputdir fslicense workingdir num_cores nthreads memMB TEMPLATEFLOW_DIR qsiprep_filter_file BIDS_FILTER_ARG QSIPREP_IMAGE
 
 echo -e "\n========================================"
-echo "  fMRIprep 批量处理脚本 (国内环境优化版)"
+echo "  QSIPrep 批量处理脚本 (DTI/dMRI)"
 echo "========================================"
 echo "BIDS根目录: ${inputdir}"
-echo "TemplateFlow 镜像: ${TEMPLATEFLOW_AWS_S3_ENDPOINT}"
+echo "输出目录:   ${outputdir}"
+echo "镜像:       ${QSIPREP_IMAGE}"
 echo "并行任务数: ${parallel_jobs}"
 echo -e "========================================\n"
 
@@ -68,12 +73,12 @@ parallel -j ${parallel_jobs} --linebuffer '
         -v "${outputdir}:/out"
         -v "${subj_workdir}:/scratch"
         -v "${TEMPLATEFLOW_DIR}:/opt/templateflow"
-        -v "$(dirname "${bids_filter_file}"):/code:ro"
+        -v "$(dirname "${qsiprep_filter_file}"):/code:ro"
         -e "TEMPLATEFLOW_HOME=/opt/templateflow"
         -e "TEMPLATEFLOW_AWS_S3_ENDPOINT=https://mirrors.tuna.tsinghua.edu.cn/templateflow/"
         -e "TEMPLATEFLOW_AWS_S3_NO_SIGN_REQUEST=YES"
         -e "TEMPLATEFLOW_TIMEOUT=300"
-        nipreps/fmriprep:25.1.4
+        ${QSIPREP_IMAGE}
         /data /out participant
         --participant-label "${sub_label}"
         --work-dir /scratch
@@ -83,12 +88,6 @@ parallel -j ${parallel_jobs} --linebuffer '
         --omp-nthreads "${nthreads}"
         --mem-mb "${memMB}"
         --fs-license-file /opt/freesurfer/license.txt
-        --output-spaces MNI152NLin2009cAsym:res-2 fsLR:den-91k
-        --skull-strip-template MNI152NLin2009cAsym
-        --cifti-output 91k
-        --use-syn-sdc warn
-        --fd-spike-threshold 0.5
-        --dvars-spike-threshold 1.5
     )
 
     echo "执行命令: docker run ${docker_args[*]}"
