@@ -16,12 +16,10 @@ mkdir_safe() {
     fi
 }
 
-# 用cp替代ln，物理复制文件，彻底解决挂载问题
 copy_safe() {
     local src="$1"
     local dest="$2"
     if [ -f "$src" ]; then
-        # 过滤隐藏文件（.开头）
         if [[ "$(basename "$src")" == .* ]]; then
             echo "⚠️  跳过隐藏文件: $src"
             return
@@ -37,26 +35,43 @@ copy_safe() {
     fi
 }
 
-# 智能查找文件，过滤隐藏文件
-find_files_smart_batch() {
+# 【适配双T1】智能匹配T1w，自动选第一个，过滤REST
+find_t1_smart() {
+    local raw_dir="$1"
+    local t1_file=""
+
+    # 1. 优先匹配anat子目录里的T1_MPRAGE（你的真实路径）
+    t1_file=$(find "${raw_dir}/anat" -maxdepth 1 -type f -name "*T1_MPRAGE*.nii.gz" ! -name ".*" | head -n 1)
+    if [ -n "$t1_file" ]; then
+        echo "$t1_file"
+        return
+    fi
+
+    # 2. 根目录兜底匹配
+    t1_file=$(find "$raw_dir" -maxdepth 1 -type f -name "*T1_MPRAGE*.nii.gz" ! -name ".*" | grep -v "REST" | head -n 1)
+    echo "$t1_file"
+}
+
+# 功能像批量匹配
+find_func_smart_batch() {
     local raw_dir="$1"
     local pattern="$2"
     local files=""
 
-    # 优先func子目录，过滤隐藏文件
+    # 优先func子目录
     files=$(find "${raw_dir}/func" -maxdepth 1 -type f -name "$pattern" ! -name ".*" | sort)
     if [ -n "$files" ]; then
         echo "$files"
         return
     fi
 
-    # 根目录查找，过滤隐藏文件
+    # 根目录兜底
     files=$(find "$raw_dir" -maxdepth 1 -type f -name "$pattern" ! -name ".*" | sort)
     echo "$files"
 }
 
 # ====================== 主程序 ======================
-echo -e "\n==================== BIDS整理脚本（物理复制最终版） ===================="
+echo -e "\n==================== BIDS整理脚本（双T1适配最终版） ===================="
 echo "原始数据目录：$RAW_ROOT"
 echo "BIDS输出目录：$BIDS_ROOT"
 echo "=======================================================================\n"
@@ -91,20 +106,23 @@ for sub in "${SUBJECTS[@]}"; do
         mkdir_safe "$bids_anat"
         mkdir_safe "$bids_func"
 
-        # 1. T1w结构像
+        # ============== 【双T1适配】1. 处理 Anat (T1w) ==============
         echo -e "\n📦 处理结构像 T1w..."
-        t1_nii=$(find_files_smart_batch "$raw_dir" "*T1_MPRAGE*.nii.gz")
+        t1_nii=$(find_t1_smart "$raw_dir")
         if [ -n "$t1_nii" ]; then
             t1_json="${t1_nii%.nii.gz}.json"
             target_nii="${bids_anat}/sub-${sub}_ses-${ses}_T1w.nii.gz"
             target_json="${bids_anat}/sub-${sub}_ses-${ses}_T1w.json"
             copy_safe "$t1_nii" "$target_nii"
             copy_safe "$t1_json" "$target_json"
+            echo "✅ 成功匹配T1w: $(basename "$t1_nii")"
+        else
+            echo "❌ 错误：未找到${sub}_${ses}的T1w结构像，请检查原始数据！"
         fi
 
-        # 2. REST静息态
+        # ============== 2. 处理 Func - REST ==============
         echo -e "\n📦 处理静息态 REST..."
-        rest_nii=$(find_files_smart_batch "$raw_dir" "*${ses}_REST*.nii.gz")
+        rest_nii=$(find_func_smart_batch "$raw_dir" "*${ses}_REST*.nii.gz")
         if [ -n "$rest_nii" ]; then
             rest_json="${rest_nii%.nii.gz}.json"
             target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-REST_bold.nii.gz"
@@ -113,9 +131,9 @@ for sub in "${SUBJECTS[@]}"; do
             copy_safe "$rest_json" "$target_json"
         fi
 
-        # 3. AUT任务
+        # ============== 3. 处理 Func - AUT ==============
         echo -e "\n📦 处理AUT任务..."
-        aut_list=$(find_files_smart_batch "$raw_dir" "*${ses}_AUT[0-9]*.nii.gz")
+        aut_list=$(find_func_smart_batch "$raw_dir" "*${ses}_AUT[0-9]*.nii.gz")
         if [ -n "$aut_list" ]; then
             run=1
             unique_aut_list=$(echo "$aut_list" | awk '!seen[$0]++')
@@ -129,9 +147,9 @@ for sub in "${SUBJECTS[@]}"; do
             done
         fi
 
-        # 4. P任务
+        # ============== 4. 处理 Func - P ==============
         echo -e "\n📦 处理P任务..."
-        p_list=$(find_files_smart_batch "$raw_dir" "*${ses}_P[0-9]*.nii.gz")
+        p_list=$(find_func_smart_batch "$raw_dir" "*${ses}_P[0-9]*.nii.gz")
         if [ -n "$p_list" ]; then
             run=1
             unique_p_list=$(echo "$p_list" | awk '!seen[$0]++')
@@ -145,10 +163,9 @@ for sub in "${SUBJECTS[@]}"; do
             done
         fi
 
-        # 5. C任务（重点修复，之前匹配可能有问题）
+        # ============== 5. 处理 Func - C ==============
         echo -e "\n📦 处理C任务..."
-        # 精准匹配C1-C7，避免漏匹配
-        c_list=$(find_files_smart_batch "$raw_dir" "*${ses}_C[0-9]*.nii.gz")
+        c_list=$(find_func_smart_batch "$raw_dir" "*${ses}_C[0-9]*.nii.gz")
         if [ -n "$c_list" ]; then
             run=1
             unique_c_list=$(echo "$c_list" | awk '!seen[$0]++')
@@ -160,8 +177,6 @@ for sub in "${SUBJECTS[@]}"; do
                 copy_safe "$json" "$target_json"
                 run=$((run+1))
             done
-        else
-            echo "ℹ️  未找到C任务数据，检查原始文件: ${raw_dir}/*${ses}_C*.nii.gz"
         fi
 
     done
