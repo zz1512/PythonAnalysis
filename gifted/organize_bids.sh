@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# 用途：将已转换好的 NIfTI（按 RAW_ROOT 的命名/目录规则）物理复制整理为 BIDS。
+# 产物：BIDS_ROOT/sub-<ID>/ses-<pre|post>/{anat,func}/...（供 fMRIPrep 使用）。
+
 # ====================== 【可修改配置】 ======================
 RAW_ROOT="/home/zhangze/data/gifted_fMRI"
 BIDS_ROOT="/home/zhangze/data/gifted_fMRI_BIDS"
