@@ -8,10 +8,13 @@ Schaefer 200 7Networks ROI → network mapping & Tian S2 32 subcortical ROI → 
 
 from __future__ import annotations
 
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+
+DEFAULT_DISTANCE_THRESHOLD_MM: float = 20.0
 
 SCHAEFER_7NETWORKS: Dict[str, str] = {
     "Vis": "Visual",
@@ -240,19 +243,163 @@ def _schaefer200_centroids_nilearn() -> Dict[str, tuple[float, float, float]]:
         if parcel_id <= 100:
             roi = f"L_{parcel_id}"
         else:
-            roi = f"R_{parcel_id}"
+            # Keep consistent with Schaefer ROI naming used elsewhere in this repo: R_1..R_100
+            roi = f"R_{parcel_id - 100}"
         centroids[roi] = (float(mni[0]), float(mni[1]), float(mni[2]))
     return centroids
 
 
+def _schaefer200_centroids_from_nifti(atlas_nifti: Union[str, Path]) -> Dict[str, tuple[float, float, float]]:
+    """
+    Compute Schaefer200 centroids from a local NIfTI atlas.
+
+    Assumptions:
+    - Atlas voxel values are integer labels 1..200.
+    - Labels 1..100 correspond to left hemisphere parcels (L_1..L_100),
+      and 101..200 correspond to right hemisphere parcels (R_1..R_100).
+    """
+    try:
+        import nibabel as nib
+    except ImportError:
+        raise ImportError("nibabel is required for local NIfTI atlas: pip install nibabel")
+
+    atlas_img = nib.load(str(atlas_nifti))
+    atlas_data = np.asarray(atlas_img.get_fdata())
+    affine = np.asarray(atlas_img.affine, dtype=np.float64)
+
+    centroids: Dict[str, tuple[float, float, float]] = {}
+    for parcel_id in range(1, 201):
+        voxels = np.argwhere(atlas_data == float(parcel_id))
+        if int(voxels.shape[0]) == 0:
+            continue
+        centroid_vox = voxels.mean(axis=0)
+        mni = affine @ np.append(centroid_vox, 1.0)
+        roi = f"L_{parcel_id}" if parcel_id <= 100 else f"R_{parcel_id - 100}"
+        centroids[roi] = (float(mni[0]), float(mni[1]), float(mni[2]))
+    return centroids
+
+
+def _load_centroids_from_csv(path: Union[str, Path]) -> Dict[str, tuple[float, float, float]]:
+    """
+    Load centroids from a CSV file.
+
+    Supported schemas:
+    - columns: roi, x, y, z
+    - columns: roi, mni_x, mni_y, mni_z
+    """
+    df = pd.read_csv(Path(path))
+    if "roi" not in df.columns:
+        raise ValueError(f"Centroid CSV missing required column 'roi': {path}")
+
+    if {"x", "y", "z"}.issubset(df.columns):
+        x_col, y_col, z_col = "x", "y", "z"
+    elif {"mni_x", "mni_y", "mni_z"}.issubset(df.columns):
+        x_col, y_col, z_col = "mni_x", "mni_y", "mni_z"
+    else:
+        raise ValueError(
+            f"Centroid CSV must include either (x,y,z) or (mni_x,mni_y,mni_z): {path}"
+        )
+
+    centroids: Dict[str, tuple[float, float, float]] = {}
+    for _, row in df.iterrows():
+        roi = str(row["roi"])
+        centroids[roi] = (float(row[x_col]), float(row[y_col]), float(row[z_col]))
+    return centroids
+
+
+def _load_centroids_from_npy(path: Union[str, Path]) -> Dict[str, tuple[float, float, float]]:
+    """
+    Load centroids from a NPY file.
+
+    Supported formats:
+    - dict-like object saved via np.save(..., allow_pickle=True) containing {roi: (x,y,z)}
+    - numpy array of shape (200, 3) or (N, 3) where N>=200:
+      0..99 -> L_1..L_100, 100..199 -> R_1..R_100
+    """
+    arr = np.load(str(path), allow_pickle=True)
+    if isinstance(arr, np.ndarray) and arr.dtype == object:
+        obj = arr.item()
+        if isinstance(obj, dict):
+            centroids: Dict[str, tuple[float, float, float]] = {}
+            for k, v in obj.items():
+                vv = np.asarray(v, dtype=np.float64).reshape(-1)
+                if vv.size != 3:
+                    raise ValueError(f"Invalid centroid for key {k}: expected 3 values")
+                centroids[str(k)] = (float(vv[0]), float(vv[1]), float(vv[2]))
+            return centroids
+
+    arr_f = np.asarray(arr, dtype=np.float64)
+    if arr_f.ndim != 2 or arr_f.shape[1] != 3:
+        raise ValueError(f"Unsupported centroid NPY format (expect dict or Nx3 array): {path}")
+    if arr_f.shape[0] < 200:
+        raise ValueError(f"Centroid NPY array must have at least 200 rows: {path}")
+
+    centroids = {}
+    for i in range(200):
+        x, y, z = arr_f[i, 0], arr_f[i, 1], arr_f[i, 2]
+        roi = f"L_{i + 1}" if i < 100 else f"R_{i - 99}"
+        centroids[roi] = (float(x), float(y), float(z))
+    return centroids
+
+
+def load_schaefer200_centroids(
+    atlas_source: str = "nilearn",
+    atlas_nifti: Optional[Union[str, Path]] = None,
+    centroids_file: Optional[Union[str, Path]] = None,
+) -> Dict[str, tuple[float, float, float]]:
+    """
+    Unified entry for Schaefer200 centroid loading.
+
+    Parameters
+    - atlas_source:
+      - "nilearn": download via nilearn (may require internet)
+      - "nifti": compute from local NIfTI atlas (requires nibabel)
+      - "centroids": load from centroid CSV/NPY
+      - "auto": prefer centroids_file > atlas_nifti > nilearn
+    - atlas_nifti: local Schaefer2018 200 atlas NIfTI path (nii/nii.gz)
+    - centroids_file: centroid cache file (csv or npy)
+    """
+    src = str(atlas_source).lower().strip()
+    if src == "auto":
+        if centroids_file is not None:
+            src = "centroids"
+        elif atlas_nifti is not None:
+            src = "nifti"
+        else:
+            src = "nilearn"
+
+    if src == "centroids":
+        if centroids_file is None:
+            raise ValueError("atlas_source='centroids' requires centroids_file")
+        p = Path(centroids_file)
+        if p.suffix.lower() == ".csv":
+            return _load_centroids_from_csv(p)
+        if p.suffix.lower() == ".npy":
+            return _load_centroids_from_npy(p)
+        raise ValueError(f"Unsupported centroids_file extension (expect .csv/.npy): {p}")
+
+    if src in ("nifti", "nii"):
+        if atlas_nifti is None:
+            raise ValueError("atlas_source='nifti' requires atlas_nifti")
+        return _schaefer200_centroids_from_nifti(atlas_nifti)
+
+    if src == "nilearn":
+        return _schaefer200_centroids_nilearn()
+
+    raise ValueError(f"Unsupported atlas_source: {atlas_source}")
+
+
 def get_scan_roi_mapping(
     atlas_source: str = "nilearn",
-    distance_threshold: float = 20.0,
+    distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD_MM,
+    atlas_nifti: Optional[Union[str, Path]] = None,
+    centroids_file: Optional[Union[str, Path]] = None,
 ) -> pd.DataFrame:
-    if atlas_source == "nilearn":
-        centroids = _schaefer200_centroids_nilearn()
-    else:
-        raise ValueError(f"Unsupported atlas_source: {atlas_source}")
+    centroids = load_schaefer200_centroids(
+        atlas_source=atlas_source,
+        atlas_nifti=atlas_nifti,
+        centroids_file=centroids_file,
+    )
 
     roi_info = get_all_roi_info(roi_set=232)
     roi_net_map = get_roi_network_map(roi_set=232)
@@ -291,8 +438,18 @@ def get_scan_roi_mapping(
     return pd.DataFrame(rows)
 
 
-def get_scan_cortical_rois(distance_threshold: float = 20.0) -> List[str]:
-    df = get_scan_roi_mapping(distance_threshold=distance_threshold)
+def get_scan_cortical_rois(
+    distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD_MM,
+    atlas_source: str = "nilearn",
+    atlas_nifti: Optional[Union[str, Path]] = None,
+    centroids_file: Optional[Union[str, Path]] = None,
+) -> List[str]:
+    df = get_scan_roi_mapping(
+        atlas_source=atlas_source,
+        distance_threshold=distance_threshold,
+        atlas_nifti=atlas_nifti,
+        centroids_file=centroids_file,
+    )
     df = df[(df["is_cortical"]) & (df["within_threshold"])].copy()
     return sorted(set(df["nearest_roi"].tolist()))
 
@@ -304,5 +461,141 @@ def get_scan_subcortical_rois() -> List[str]:
     return sorted(set(rois))
 
 
-def get_scan_all_rois(distance_threshold: float = 20.0) -> List[str]:
-    return sorted(set(get_scan_cortical_rois(distance_threshold) + get_scan_subcortical_rois()))
+def get_scan_all_rois(
+    distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD_MM,
+    atlas_source: str = "nilearn",
+    atlas_nifti: Optional[Union[str, Path]] = None,
+    centroids_file: Optional[Union[str, Path]] = None,
+) -> List[str]:
+    cortical = get_scan_cortical_rois(
+        distance_threshold=distance_threshold,
+        atlas_source=atlas_source,
+        atlas_nifti=atlas_nifti,
+        centroids_file=centroids_file,
+    )
+    return sorted(set(cortical + get_scan_subcortical_rois()))
+
+
+def get_scan_mapping_quality_report(
+    atlas_source: str = "nilearn",
+    distance_threshold: float = DEFAULT_DISTANCE_THRESHOLD_MM,
+    atlas_nifti: Optional[Union[str, Path]] = None,
+    centroids_file: Optional[Union[str, Path]] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Generate a QC report for SCAN->ROI mapping.
+
+    Returns
+    - detail_df: one row per mapping (SCAN region -> nearest ROI; includes fixed subcortical rows)
+    - summary_df: distribution summary (overall + by scan_group + cortical-only)
+    """
+    mapping_df = get_scan_roi_mapping(
+        atlas_source=atlas_source,
+        distance_threshold=distance_threshold,
+        atlas_nifti=atlas_nifti,
+        centroids_file=centroids_file,
+    ).copy()
+
+    region_to_group: Dict[str, str] = {}
+    for grp, regions in SCAN_FUNCTIONAL_GROUPS.items():
+        for r in regions:
+            region_to_group[str(r)] = str(grp)
+
+    mapping_df["scan_group"] = mapping_df["scan_region"].map(lambda x: region_to_group.get(str(x), "unknown"))
+    mapping_df["distance_threshold_mm"] = float(distance_threshold)
+    mapping_df["atlas_source"] = str(atlas_source)
+    mapping_df["atlas_nifti"] = str(atlas_nifti) if atlas_nifti is not None else ""
+    mapping_df["centroids_file"] = str(centroids_file) if centroids_file is not None else ""
+
+    def _summarize(df: pd.DataFrame, label: str) -> Dict[str, object]:
+        dists = df["distance_mm"].to_numpy(dtype=np.float64)
+        within = df["within_threshold"].to_numpy(dtype=bool)
+        dists_ok = dists[np.isfinite(dists)]
+        out: Dict[str, object] = {
+            "scope": label,
+            "n_rows": int(df.shape[0]),
+            "n_within_threshold": int(within.sum()),
+            "pct_within_threshold": float(within.mean() * 100.0) if df.shape[0] > 0 else float("nan"),
+            "distance_mean_mm": float(np.nanmean(dists_ok)) if dists_ok.size else float("nan"),
+            "distance_median_mm": float(np.nanmedian(dists_ok)) if dists_ok.size else float("nan"),
+            "distance_p95_mm": float(np.nanpercentile(dists_ok, 95)) if dists_ok.size else float("nan"),
+            "distance_max_mm": float(np.nanmax(dists_ok)) if dists_ok.size else float("nan"),
+        }
+        return out
+
+    summary_rows: List[Dict[str, object]] = []
+    summary_rows.append(_summarize(mapping_df, "all_rows"))
+    cortical_df = mapping_df[mapping_df["is_cortical"]].copy()
+    summary_rows.append(_summarize(cortical_df, "cortical_only"))
+
+    for grp in sorted(mapping_df["scan_group"].unique().tolist()):
+        df_g = mapping_df[mapping_df["scan_group"] == grp].copy()
+        summary_rows.append(_summarize(df_g, f"scan_group:{grp}"))
+        df_g_c = df_g[df_g["is_cortical"]].copy()
+        if not df_g_c.empty:
+            summary_rows.append(_summarize(df_g_c, f"scan_group:{grp}:cortical_only"))
+
+    summary_df = pd.DataFrame(summary_rows)
+    return mapping_df, summary_df
+
+
+def _parse_cli_args() -> "argparse.Namespace":
+    import argparse
+
+    p = argparse.ArgumentParser(
+        description="生成 SCAN->ROI 映射质量报告（支持离线 atlas/centroid），输出 scan_mapping_qc.csv"
+    )
+    p.add_argument("--matrix-dir", type=Path, default=None, help="若提供，将默认输出到 matrix_dir/gradient_analysis/")
+    p.add_argument("--out", type=Path, default=None, help="输出 CSV 路径（默认: gradient_analysis/scan_mapping_qc.csv 或 ./scan_mapping_qc.csv）")
+    p.add_argument("--out-summary", type=Path, default=None, help="可选：输出 summary CSV（默认: scan_mapping_qc_summary.csv）")
+    p.add_argument(
+        "--atlas-source",
+        type=str,
+        default="nilearn",
+        choices=["nilearn", "nifti", "centroids", "auto"],
+        help="Schaefer200 centroid 来源：nilearn(在线) / nifti(本地NIfTI) / centroids(CSV/NPY) / auto(优先离线)",
+    )
+    p.add_argument("--atlas-nifti", type=Path, default=None, help="本地 Schaefer200 atlas NIfTI 路径（.nii/.nii.gz）")
+    p.add_argument("--centroids-file", type=Path, default=None, help="本地 centroid 缓存（.csv 或 .npy）")
+    p.add_argument("--distance-threshold", type=float, default=float(DEFAULT_DISTANCE_THRESHOLD_MM))
+    return p.parse_args()
+
+
+def main() -> None:
+    args = _parse_cli_args()
+
+    out_dir = Path(".")
+    if args.matrix_dir is not None:
+        out_dir = Path(args.matrix_dir) / "gradient_analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = Path(args.out) if args.out is not None else (out_dir / "scan_mapping_qc.csv")
+    summary_path = Path(args.out_summary) if args.out_summary is not None else (out_dir / "scan_mapping_qc_summary.csv")
+
+    detail_df, summary_df = get_scan_mapping_quality_report(
+        atlas_source=str(args.atlas_source),
+        distance_threshold=float(args.distance_threshold),
+        atlas_nifti=args.atlas_nifti,
+        centroids_file=args.centroids_file,
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    detail_df.to_csv(out_path, index=False)
+    summary_df.to_csv(summary_path, index=False)
+
+    # Minimal stdout summary for quick checks in pipelines.
+    cortical_only = summary_df[summary_df["scope"] == "cortical_only"]
+    if not cortical_only.empty:
+        row0 = cortical_only.iloc[0].to_dict()
+        print(
+            f"[scan_mapping_qc] cortical within_threshold: "
+            f"{row0.get('n_within_threshold')}/{row0.get('n_rows')} "
+            f"({row0.get('pct_within_threshold'):.1f}%), "
+            f"mean={row0.get('distance_mean_mm'):.1f}mm, max={row0.get('distance_max_mm'):.1f}mm"
+        )
+    print(f"[scan_mapping_qc] detail saved: {out_path}")
+    print(f"[scan_mapping_qc] summary saved: {summary_path}")
+
+
+if __name__ == "__main__":
+    main()

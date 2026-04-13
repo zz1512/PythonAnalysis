@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from pathlib import Path
 from typing import List, Tuple
 
@@ -23,7 +24,7 @@ if str(THIS_DIR) not in sys.path:
 
 from calc_roi_isc_by_age import flatten_upper, load_subject_ages_map, sort_subjects_by_age  # noqa: E402
 from joint_analysis_roi_isc_dev_models import assoc, bh_fdr, build_models, fisher_z, zscore_1d  # noqa: E402
-from utils_network_assignment import get_scan_roi_mapping  # noqa: E402
+from utils_network_assignment import DEFAULT_DISTANCE_THRESHOLD_MM, get_roi_network_map, get_scan_roi_mapping  # noqa: E402
 
 DEFAULT_MATRIX_DIR = Path("/public/home/dingrui/fmri_analysis/zz_analysis/roi_results_final")
 
@@ -40,6 +41,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-perm", type=int, default=5000)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--alpha", type=float, default=0.05)
+    p.add_argument(
+        "--scan-distance-threshold",
+        type=float,
+        default=float(DEFAULT_DISTANCE_THRESHOLD_MM),
+        help="SCAN 映射阈值（mm）。仅影响 SCAN 标注列，不影响主分析流程。",
+    )
+    p.add_argument(
+        "--direction-check",
+        action="store_true",
+        default=False,
+        help="输出 ΔISC 方向/网络分布摘要，用于快速核对叙事一致性（提示型，不影响主分析）。",
+    )
     return p.parse_args()
 
 
@@ -104,6 +117,8 @@ def run_dissociation(
     n_perm: int,
     seed: int,
     alpha: float,
+    scan_distance_threshold: float = float(DEFAULT_DISTANCE_THRESHOLD_MM),
+    direction_check: bool = False,
 ) -> pd.DataFrame:
     by_stim = matrix_dir / str(stimulus_dir_name)
     dir_a = by_stim / str(condition_a)
@@ -198,15 +213,42 @@ def run_dissociation(
 
     out_df = pd.DataFrame(rows).sort_values("roi")
 
+    if bool(direction_check):
+        roi_net_map = get_roi_network_map(roi_set=232)
+        out_df["network_or_structure"] = out_df["roi"].map(lambda x: roi_net_map.get(str(x), "Unknown"))
+        sig_df = out_df[out_df["p_fdr_bh"].astype(float) <= float(alpha)].copy()
+        if sig_df.empty:
+            print("[dissociation][direction_check] No FDR-significant ROIs (skip network summary).")
+        else:
+            tab = (
+                sig_df.groupby(["dissociation_label", "network_or_structure"], as_index=False)
+                .size()
+                .sort_values(["dissociation_label", "size"], ascending=[True, False])
+            )
+            print("[dissociation][direction_check] Significant ROI count by label x network:")
+            for _, rr in tab.iterrows():
+                print(f"  {rr['dissociation_label']} | {rr['network_or_structure']}: {int(rr['size'])}")
+
+            if "passive" in str(condition_a).lower():
+                n_sommot = int(sig_df[(sig_df["dissociation_label"] == "condition_a_dominant") & (sig_df["network_or_structure"] == "SomMot")].shape[0])
+                n_amy = int(sig_df[(sig_df["dissociation_label"] == "condition_a_dominant") & (sig_df["network_or_structure"] == "Amygdala")].shape[0])
+                if (n_sommot + n_amy) > 0:
+                    print(
+                        "[dissociation][direction_check][note] "
+                        "condition_a=Passive 但出现 Passive-dominant 的 SomMot/Amygdala 显著 ROI；"
+                        "这表示这些 ROI 的 ΔISC 与发育模型正相关，是否与“早期成熟/稳定”叙事一致需核对。"
+                    )
+
     try:
-        scan_map = get_scan_roi_mapping()
+        thr = float(scan_distance_threshold)
+        scan_map = get_scan_roi_mapping(distance_threshold=thr)
         scan_lookup: dict[str, tuple[str, float]] = {}
         for _, row in scan_map.iterrows():
             r = str(row["nearest_roi"])
             if r not in scan_lookup or float(row["distance_mm"]) < scan_lookup[r][1]:
                 scan_lookup[r] = (str(row["scan_region"]), float(row["distance_mm"]))
         out_df["is_scan_overlap"] = out_df["roi"].apply(
-            lambda x: x in scan_lookup and scan_lookup[x][1] <= 20.0
+            lambda x: x in scan_lookup and scan_lookup[x][1] <= thr
         )
         out_df["nearest_scan_region"] = out_df["roi"].apply(
             lambda x: scan_lookup.get(x, ("", 999.0))[0]
@@ -214,7 +256,8 @@ def run_dissociation(
         out_df["scan_distance_mm"] = out_df["roi"].apply(
             lambda x: scan_lookup.get(x, ("", 999.0))[1]
         )
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"SCAN 标注失败（已跳过，不影响主分析输出）：{e}")
         out_df["is_scan_overlap"] = False
         out_df["nearest_scan_region"] = ""
         out_df["scan_distance_mm"] = float("nan")
@@ -245,6 +288,8 @@ def main() -> None:
         n_perm=int(args.n_perm),
         seed=int(args.seed),
         alpha=float(args.alpha),
+        scan_distance_threshold=float(args.scan_distance_threshold),
+        direction_check=bool(args.direction_check),
     )
 
 

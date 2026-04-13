@@ -31,6 +31,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--repr-prefix", type=str, default="roi_repr_matrix_200")
     p.add_argument("--isc-method", type=str, default="mahalanobis", choices=("spearman", "pearson", "euclidean", "mahalanobis"))
     p.add_argument("--isc-prefix", type=str, default=None)
+    p.add_argument(
+        "--cov-estimator",
+        type=str,
+        default="ridge_pinv",
+        choices=("ridge_pinv", "ledoit_wolf"),
+        help="Mahalanobis 协方差估计器（仅对 isc-method=mahalanobis 生效）。默认 ridge_pinv 以保持历史结果不变。",
+    )
+    p.add_argument(
+        "--ridge",
+        type=float,
+        default=1e-6,
+        help="Mahalanobis 协方差对角线 ridge（仅对 mahalanobis 生效）。默认保持 1e-6 以兼容历史结果。",
+    )
     return p.parse_args()
 
 
@@ -143,7 +156,11 @@ def pairwise_euclidean_distances(X: np.ndarray) -> np.ndarray:
     return np.sqrt(dist2, dtype=np.float64)
 
 
-def pairwise_mahalanobis_distances(X: np.ndarray, ridge: float = 1e-6) -> np.ndarray:
+def pairwise_mahalanobis_distances(
+    X: np.ndarray,
+    ridge: float = 1e-6,
+    cov_estimator: str = "ridge_pinv",
+) -> np.ndarray:
     X = np.asarray(X, dtype=np.float64)
     n_samples, n_features = X.shape
     dist = np.full((n_samples, n_samples), np.nan, dtype=np.float64)
@@ -152,10 +169,23 @@ def pairwise_mahalanobis_distances(X: np.ndarray, ridge: float = 1e-6) -> np.nda
         return dist
 
     Xv = X[valid_rows]
-    cov = np.cov(Xv, rowvar=False)
+    est = str(cov_estimator).strip().lower()
+    if est not in {"ridge_pinv", "ledoit_wolf"}:
+        raise ValueError(f"Unsupported cov_estimator: {cov_estimator}")
+
+    if est == "ledoit_wolf":
+        try:
+            from sklearn.covariance import LedoitWolf  # type: ignore
+
+            cov = np.asarray(LedoitWolf().fit(Xv).covariance_, dtype=np.float64)
+        except Exception as e:
+            print(f"[warn] Ledoit-Wolf 不可用，退回 ridge_pinv（{e}）")
+            cov = np.cov(Xv, rowvar=False)
+    else:
+        cov = np.cov(Xv, rowvar=False)
     if np.ndim(cov) == 0:
         cov = np.array([[float(cov)]], dtype=np.float64)
-    cov = cov + ridge * np.eye(n_features, dtype=np.float64)
+    cov = cov + float(ridge) * np.eye(n_features, dtype=np.float64)
     inv_cov = np.linalg.pinv(cov)
     diff = Xv[:, None, :] - Xv[None, :, :]
     left = np.einsum("...i,ij->...j", diff, inv_cov)
@@ -183,7 +213,12 @@ def distance_to_similarity(dist: np.ndarray) -> np.ndarray:
     return sim.astype(np.float32)
 
 
-def compute_isc(X: np.ndarray, method: str) -> np.ndarray:
+def compute_isc(
+    X: np.ndarray,
+    method: str,
+    cov_estimator: str = "ridge_pinv",
+    ridge: float = 1e-6,
+) -> np.ndarray:
     # X: (n_subjects, n_features) where features are flattened upper-tri of the RSM.
     m = str(method).strip().lower()
     if m == "spearman":
@@ -196,7 +231,7 @@ def compute_isc(X: np.ndarray, method: str) -> np.ndarray:
         return distance_to_similarity(dist)
     if m == "mahalanobis":
         Xz = fisher_z_transform(X)
-        dist = pairwise_mahalanobis_distances(Xz)
+        dist = pairwise_mahalanobis_distances(Xz, ridge=float(ridge), cov_estimator=str(cov_estimator))
         return distance_to_similarity(dist)
     raise ValueError(f"未知 isc-method: {method}")
 
@@ -207,7 +242,15 @@ def flatten_upper(rsm: np.ndarray) -> np.ndarray:
     return rsm[iu].astype(np.float32)
 
 
-def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str, isc_method: str, isc_prefix: str) -> Dict[str, object]:
+def run_one_stimulus(
+    stim_dir: Path,
+    subject_info: Path,
+    repr_prefix: str,
+    isc_method: str,
+    isc_prefix: str,
+    cov_estimator: str = "ridge_pinv",
+    ridge: float = 1e-6,
+) -> Dict[str, object]:
     npz_path = stim_dir / f"{repr_prefix}.npz"
     subjects_path = stim_dir / f"{repr_prefix}_subjects.csv"
     rois_path = stim_dir / f"{repr_prefix}_rois.csv"
@@ -228,7 +271,7 @@ def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str, isc_m
         arr = arr[order, :, :]
         # Per subject: flatten RSM -> vector; across subjects: compute ISC on vectors.
         vecs = np.stack([flatten_upper(arr[i]) for i in range(n_sub)], axis=0)
-        isc[ri] = compute_isc(vecs, method=str(isc_method))
+        isc[ri] = compute_isc(vecs, method=str(isc_method), cov_estimator=str(cov_estimator), ridge=float(ridge))
 
     out_prefix = str(isc_prefix)
     np.save(stim_dir / f"{out_prefix}.npy", isc)
@@ -241,7 +284,16 @@ def run_one_stimulus(stim_dir: Path, subject_info: Path, repr_prefix: str, isc_m
     return {"stimulus_type": stim_dir.name, "n_subjects": n_sub, "n_rois": len(rois), "isc_method": str(isc_method), "isc_prefix": str(out_prefix)}
 
 
-def run(matrix_dir: Path, stimulus_dir_name: str, subject_info: Path, repr_prefix: str, isc_method: str, isc_prefix: str) -> None:
+def run(
+    matrix_dir: Path,
+    stimulus_dir_name: str,
+    subject_info: Path,
+    repr_prefix: str,
+    isc_method: str,
+    isc_prefix: str,
+    cov_estimator: str = "ridge_pinv",
+    ridge: float = 1e-6,
+) -> None:
     by_stim = matrix_dir / str(stimulus_dir_name)
     if not by_stim.exists():
         raise FileNotFoundError(f"未找到目录: {by_stim}")
@@ -251,7 +303,17 @@ def run(matrix_dir: Path, stimulus_dir_name: str, subject_info: Path, repr_prefi
         if not has_repr_files(stim_dir, repr_prefix=str(repr_prefix)):
             print(f"[SKIP] {stim_dir.name}: 缺少 {repr_prefix} 对应输入文件，跳过。")
             continue
-        rows.append(run_one_stimulus(stim_dir, subject_info, repr_prefix, isc_method=str(isc_method), isc_prefix=str(isc_prefix)))
+        rows.append(
+            run_one_stimulus(
+                stim_dir,
+                subject_info,
+                repr_prefix,
+                isc_method=str(isc_method),
+                isc_prefix=str(isc_prefix),
+                cov_estimator=str(cov_estimator),
+                ridge=float(ridge),
+            )
+        )
     out = pd.DataFrame(rows)
     if not out.empty:
         out = out.sort_values("stimulus_type")
@@ -261,7 +323,16 @@ def run(matrix_dir: Path, stimulus_dir_name: str, subject_info: Path, repr_prefi
 def main() -> None:
     args = parse_args()
     isc_prefix = str(args.isc_prefix) if args.isc_prefix is not None else f"roi_isc_{str(args.isc_method)}_by_age"
-    run(args.matrix_dir, args.stimulus_dir_name, args.subject_info, args.repr_prefix, isc_method=str(args.isc_method), isc_prefix=str(isc_prefix))
+    run(
+        args.matrix_dir,
+        args.stimulus_dir_name,
+        args.subject_info,
+        args.repr_prefix,
+        isc_method=str(args.isc_method),
+        isc_prefix=str(isc_prefix),
+        cov_estimator=str(args.cov_estimator),
+        ridge=float(args.ridge),
+    )
 
 
 if __name__ == "__main__":

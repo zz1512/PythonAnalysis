@@ -110,6 +110,35 @@ utils_network_assignment.py    # Schaefer 200 → 7Networks 映射 + Tian S2 →
 - `get_scan_subcortical_rois()` → SCAN 对应的 Tian S2 ROI 列表
 - `get_scan_all_rois()` → 皮层 + 皮下全部 SCAN ROI
 
+**新增：一键生成 SCAN 映射 QC（推荐）**
+
+该脚本新增 CLI 入口，用于输出 SCAN→ROI 映射的逐条明细与分布摘要，便于确认“最近 parcel + 距离阈值”的映射质量是否合理（以及离线环境是否能稳定运行）。
+
+**输出**：
+- `gradient_analysis/scan_mapping_qc.csv`：逐条映射明细（含 `scan_region/nearest_roi/distance_mm/within_threshold/scan_group` 等）
+- `gradient_analysis/scan_mapping_qc_summary.csv`：汇总统计（overall + 分组 + cortical_only）
+
+**离线 atlas/centroids 选项**（避免 `nilearn` 在线下载）：
+- `--atlas-source auto|centroids|nifti|nilearn`
+- `--atlas-nifti /path/to/Schaefer200.nii.gz`：本地 Schaefer200 atlas NIfTI（labels 1..200）
+- `--centroids-file /path/to/centroids.csv|.npy`：本地 centroid 缓存（CSV/NPY）
+
+**运行示例**：
+```bash
+# 1) 优先离线（建议）：有 centroids_file/atlas_nifti 就不会触发在线下载
+python utils_network_assignment.py \
+  --matrix-dir /path/to/roi_results_final \
+  --atlas-source auto \
+  --distance-threshold 20
+
+# 2) 完全离线：指定本地 NIfTI atlas 计算 centroids
+python utils_network_assignment.py \
+  --matrix-dir /path/to/roi_results_final \
+  --atlas-source nifti \
+  --atlas-nifti /path/to/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_1mm.nii.gz \
+  --distance-threshold 20
+```
+
 **Schaefer 200 × 7Networks 映射**：
 
 | 网络 | 缩写 | 左半球 ROI 范围 | 右半球 ROI 范围 |
@@ -182,6 +211,19 @@ python step1_task_dissociation.py \
 - `neuromaps` 库（用于获取 Margulies 2016 G1 梯度 + Spin Test）
 - Step 1 输出（可选，用于 ΔISC 梯度分析）
 
+**新增：SCAN 映射稳健性与负对照（稳健性补充，不改变主分析）**
+
+Step2 在生成 Figure 2 与核心梯度统计的同时，会额外输出两份“SCAN 映射层面”的稳健性文件：
+- `gradient_analysis/scan_mapping_sensitivity.csv`：对 `--scan-threshold-grid`（默认 10/15/20/25mm）的阈值敏感性；记录阈值内命中 ROI 数、映射距离分布摘要，以及 SCAN ROI 上 `r_obs` 的汇总统计（A/B/Δ）
+- `gradient_analysis/scan_negative_control.csv`：最小版负对照基线（默认从 `SomMot` 网络随机抽样与 SCAN 皮层 ROI 数量相同的 parcels，重复 `--scan-negctl-n` 次），并在 observed 行给出经验 p 值（two-sided/greater/less）
+
+与 SCAN 映射相关的新增参数（支持离线）：
+- `--scan-atlas-source`：`nilearn|nifti|centroids|auto`（含义同 `utils_network_assignment.py`）
+- `--scan-atlas-nifti` / `--scan-centroids-file`：离线 atlas/centroids 输入
+- `--scan-distance-threshold`：主分析使用的 SCAN 阈值（用于 `scan_overlap_analysis.csv`、Figure、负对照的“观测 ROI 集合”）
+- `--scan-threshold-grid`：阈值敏感性网格（mm）
+- `--scan-negctl-n`：负对照重复次数 N
+
 **核心算法**：
 1. 获取 G1 梯度并 parcellate 到 Schaefer 200（仅皮层 ROI）
 2. 加载两个条件的 M_conv 发育效应量（r_obs）
@@ -196,6 +238,8 @@ python step1_task_dissociation.py \
 - `gradient_analysis/roi_gradient_scores.csv` — 逐 ROI 的 G1 分数和 r_obs
 - `gradient_analysis/scan_overlap_analysis.csv` — SCAN 各区域在两条件下的发育效应
 - `gradient_analysis/fig2_gradient_shift.png` — 出版级 2×2 四面板图
+- `gradient_analysis/scan_mapping_sensitivity.csv` — SCAN 阈值敏感性（稳健性补充）
+- `gradient_analysis/scan_negative_control.csv` — SCAN 最小负对照（稳健性补充）
 
 **Figure 2 面板说明**：
 - [0,0] ROI 级散点：G1 vs 发育效应量（两条件双色 + 回归线交叉）
@@ -218,11 +262,15 @@ python step2_gradient_shift.py \
   --n-spin 10000
 ```
 
-**如果无法安装 neuromaps**：
+**如果无法安装 neuromaps / spin test 失败**：
 ```bash
 # 手动准备 gradient CSV (columns: roi, g1_score)，然后：
 python step2_gradient_shift.py --gradient-source manual --gradient-file /path/to/g1_scores.csv
 ```
+
+说明：
+- 当 `neuromaps` 不可用或 `alexander_bloch` 旋转失败时，脚本会自动退回“随机置换近似”来估计 p 值；该近似不保留皮层空间自相关结构，因此应标注为 **exploratory**（用于快速 sanity check，而非确认性空间检验）。
+- `gradient_shift_results.csv` 会记录 `spin_test_available/spin_test_method/nulls_shape/spin_test_note`，用于明确区分“确认性 spin test”与“探索性 fallback”。
 
 ---
 
@@ -246,15 +294,26 @@ python step2_gradient_shift.py --gradient-source manual --gradient-file /path/to
 
 **新增参数**：
 - `--condition-contrast`：可选，指定对比条件（如 Passive_Emo）
+- `--rc-aggregate`：网络级 RC 聚合方式：`mean`（默认）或 `median`（稳健性补充），并在 stats 中记录 `n_roi_pairs`
+- `--dev-modeling`：可选（默认关闭），对每个 `pair_label` 做线性 vs 二次模型对比（发育非线性补充）
+- `--dev-model-criterion`：`AIC|R2_adj`（模型选择准则）
+- `--dev-model-min-n`：模型对比所需最小样本数（默认 8）
+- `--skip-repr-complexity`：跳过表征复杂性/区分度补充分析（默认会输出）
+- `--repr-complexity-level`：`roi|network|both`（输出层级）
 
 **输出**：
 - `gradient_analysis/repr_connectivity_subject_scores.csv`
 - `gradient_analysis/repr_connectivity_stats.csv`
+  - 网络级行新增：`n_roi_pairs`、`n_rois_group_a`、`n_rois_group_b`、`rc_aggregate`
 - `gradient_analysis/fig3_representational_connectivity.png`（N 面板，每个网络对一个）
 - `gradient_analysis/fig3_representational_connectivity_contrast.png`（当恰好 2 个网络对时生成对比图）
 - `gradient_analysis/repr_connectivity_subject_scores_<condition>.csv`（指定 `--condition-contrast` 时额外输出）
 - `gradient_analysis/repr_connectivity_stats_<condition>.csv`（指定 `--condition-contrast` 时额外输出）
 - `gradient_analysis/fig3_representational_connectivity_condition_overlay.png`（指定 `--condition-contrast` 时生成双条件叠加图）
+- `gradient_analysis/repr_complexity_subject_scores.csv`（表征复杂性/区分度补充分析）
+- `gradient_analysis/repr_complexity_stats.csv`（表征复杂性/区分度补充分析统计与置换）
+- `gradient_analysis/repr_connectivity_dev_model_comparison.csv`（启用 `--dev-modeling` 时输出；线性 vs 二次对比摘要）
+- `gradient_analysis/repr_connectivity_dev_model_comparison_<condition>.csv`（启用 `--dev-modeling` 且指定 `--condition-contrast` 时额外输出）
 
 **运行**：
 ```bash
@@ -269,6 +328,13 @@ python step3_representational_connectivity.py \
   --condition Reappraisal \
   --condition-contrast Passive_Emo \
   --network-pairs "Hippocampus:Default" "SCAN:Default"
+
+# 若启用发育非线性模型对比（补充，默认关闭）
+python step3_representational_connectivity.py \
+  --matrix-dir /path/to/roi_results_final \
+  --condition Reappraisal \
+  --network-pairs "Hippocampus:Default" "SCAN:Default" \
+  --dev-modeling --dev-model-criterion AIC
 ```
 
 ---
@@ -290,12 +356,20 @@ python step3_representational_connectivity.py \
 
 **新增参数**：
 - `--include-scan`：布尔标志，启用后自动将 SCAN 皮层 ROI 添加到目标 ROI 集合中
+- `--behavior-cols`：行为列名列表（建议在可用时包含 `reappraisal_success`；脚本会尝试从提供的行为表生成该列）
+- `--mature-age-grid`：成熟阈值敏感性网格（不改变主分析的 `--mature-age-min`）
+- `--bootstrap-template`：成熟模板 bootstrap 次数 B（0 关闭），输出 MI 稳定性统计
+- `--loo-template`：最小版 leave-one-out 模板影响分析
+- `--behavior-join`：行为表与 MI 表合并方式：`left`（默认，避免静默丢人）或 `inner`（仅保留有行为的被试）
 
 **输出**：
 - `gradient_analysis/maturity_index_subject_scores.csv`
 - `gradient_analysis/maturity_index_stats.csv`
 - `gradient_analysis/maturity_index_config.csv`（含 `include_scan` 标记和完整 target_rois 列表）
 - `gradient_analysis/fig4_maturity_index.png`
+- `gradient_analysis/maturity_index_sensitivity.csv`（`--mature-age-grid`：成熟阈值敏感性）
+- `gradient_analysis/maturity_index_stability.csv`（`--bootstrap-template`：模板稳定性，含 subject-level mean/SD/CI/CV 与 global 汇总）
+- `gradient_analysis/maturity_index_loo.csv`（`--loo-template`：LOO 模板影响）
 
 **运行**：
 ```bash
@@ -325,6 +399,24 @@ python step4_maturity_index.py \
   --include-scan
 ```
 
+**稳健性补充示例**：
+```bash
+# 1) 成熟阈值敏感性
+python step4_maturity_index.py \
+  --matrix-dir /path/to/roi_results_final \
+  --condition Reappraisal \
+  --include-scan \
+  --mature-age-grid 16.5 17 17.5 18
+
+# 2) 模板稳定性（bootstrap）+ LOO
+python step4_maturity_index.py \
+  --matrix-dir /path/to/roi_results_final \
+  --condition Reappraisal \
+  --include-scan \
+  --bootstrap-template 1000 \
+  --loo-template
+```
+
 ---
 
 ## 预期 Figures 对照表
@@ -342,6 +434,11 @@ python step4_maturity_index.py \
 | Fig 3C | step3 | SCAN-DMN 表征连通性 ~ 年龄（"想到→做到"通路） |
 | Fig 4 | step4 | 成熟度指数 ~ 年龄 + 成熟度 ~ 行为偏相关（SCAN 增强版模板） |
 
+补充说明（非 Figure 主面板，但用于稳健性/复现）：
+- Step2 额外输出：`scan_mapping_sensitivity.csv`、`scan_negative_control.csv`（SCAN 映射稳健性与负对照）
+- Step3 额外输出：`repr_complexity_*.csv`（排他解释补充）、`repr_connectivity_dev_model_comparison*.csv`（非线性发育建模补充）
+- Step4 额外输出：`maturity_index_sensitivity.csv`、`maturity_index_stability.csv`、`maturity_index_loo.csv`（模板稳健性）
+
 ---
 
 ## 执行顺序
@@ -350,8 +447,15 @@ python step4_maturity_index.py \
 # Phase 1（已有，无需重跑除非更改参数）
 python run_pipeline.py --config config_trial.json
 
+# （可选）如果希望 pipeline 自动跑 Phase 2（Step1-4）
+python run_pipeline.py --config config_trial.json --run-phase2
+
 # Phase 2（新增分析，按顺序执行）
 python step1_task_dissociation.py --matrix-dir ... --n-perm 5000
+
+# （可选但推荐）先生成/检查 SCAN 映射质量，尤其是离线环境
+python utils_network_assignment.py --matrix-dir ... --atlas-source auto --distance-threshold 20
+
 python step2_gradient_shift.py --matrix-dir ... --n-spin 10000
 python step3_representational_connectivity.py --matrix-dir ... --condition Reappraisal --network-pairs "Hippocampus:Default" "Amygdala:SomMot" "SCAN:Default"
 python step4_maturity_index.py --matrix-dir ... --condition Reappraisal --include-scan
@@ -367,7 +471,9 @@ python step4_maturity_index.py --matrix-dir ... --condition Reappraisal --includ
 - **输出隔离**：新增分析的所有产出保存在 `gradient_analysis/` 子目录
 - **模块复用**：通过 import 复用 `build_models()`、`assoc()`、`flatten_upper()` 等已有函数
 - **命名约定一致**：argparse 参数风格、文件命名、CSV 列名均与已有脚本保持一致
-- **SCAN 分析为纯增量**：SCAN 相关代码均通过 try/except 包装，若 nilearn 不可用则自动跳过 SCAN 标注，不影响核心分析流程
+- **SCAN 分析为纯增量**：
+  - SCAN 映射支持离线 atlas/centroids（`--scan-atlas-source auto|nifti|centroids`），避免在线下载
+  - 当环境缺少 `neuromaps` 时，Step2 的空间检验会退回随机置换近似；建议将该 p 值作为 exploratory 标记使用
 
 ---
 

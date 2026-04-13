@@ -14,6 +14,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="emo_final pipeline runner (config-driven)")
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--steps", type=str, default=None, help="可选：逗号分隔步骤名，仅执行这些步骤")
+    p.add_argument(
+        "--run-phase2",
+        action="store_true",
+        default=False,
+        help="可选：在 Phase 1 完成后，按默认参数运行 Step1-4（Phase 2）。默认关闭，避免改变现有 pipeline 行为。",
+    )
     return p.parse_args()
 
 
@@ -106,6 +112,7 @@ def main() -> None:
     args = parse_args()
     cfg = read_json(Path(args.config))
     steps = resolve_steps(cfg, args.steps)
+    run_phase2 = bool(args.run_phase2)
 
     if "lss" in steps and _as_bool(cfg.get("lss", {}).get("run"), default=False):
         from lss_main import run_lss
@@ -524,6 +531,139 @@ def main() -> None:
         run_plot_traj("plot_traj_trial")
     if "plot_traj_emotion" in steps:
         run_plot_traj("plot_traj_emotion")
+
+    if run_phase2:
+        # Optional Phase 2 runner: keep minimal and backward-compatible.
+        phase2_cfg = cfg.get("phase2", {})
+        if isinstance(phase2_cfg, dict) and not _as_bool(phase2_cfg.get("run"), default=True):
+            print("[phase2] phase2.run is False in config; skip.")
+            return
+
+        # Resolve matrix_dir/subject_info from existing blocks to avoid requiring extra config.
+        def _resolve_first_path(keys: List[str], field: str) -> Optional[Path]:
+            for k in keys:
+                block = cfg.get(k, {})
+                if isinstance(block, dict):
+                    pth = _as_path(block.get(field), default=None)
+                    if pth is not None:
+                        return Path(pth)
+            return None
+
+        matrix_dir = _resolve_first_path(
+            ["perm_trial", "isc_trial", "plot_brain_trial", "plot_sig_trial", "repr_emotion", "repr_trial"],
+            "matrix_dir",
+        )
+        if matrix_dir is None:
+            matrix_dir = _resolve_first_path(["repr_trial"], "out_dir")
+        subject_info = _resolve_first_path(["isc_trial", "isc_emotion", "perm_trial"], "subject_info")
+
+        if matrix_dir is None or subject_info is None:
+            print(f"[phase2][skip] 无法解析 matrix_dir 或 subject_info（matrix_dir={matrix_dir}, subject_info={subject_info}）。")
+            return
+
+        stimulus_dir_name = _as_str(phase2_cfg.get("stimulus_dir_name"), default="by_stimulus") or "by_stimulus"
+        condition_a = _as_str(phase2_cfg.get("condition_a"), default="Passive_Emo") or "Passive_Emo"
+        condition_b = _as_str(phase2_cfg.get("condition_b"), default="Reappraisal") or "Reappraisal"
+
+        print(f"[phase2] matrix_dir={matrix_dir} stimulus_dir_name={stimulus_dir_name} conditions={condition_a},{condition_b}")
+
+        try:
+            from step1_task_dissociation import run_dissociation
+
+            run_dissociation(
+                matrix_dir=Path(matrix_dir),
+                stimulus_dir_name=str(stimulus_dir_name),
+                condition_a=str(condition_a),
+                condition_b=str(condition_b),
+                model=_as_str(phase2_cfg.get("model"), default="M_conv") or "M_conv",
+                perm_result_file=_as_str(phase2_cfg.get("perm_result_file"), default="roi_isc_dev_models_perm_fwer.csv")
+                or "roi_isc_dev_models_perm_fwer.csv",
+                assoc_method=_as_str(phase2_cfg.get("assoc_method"), default="spearman") or "spearman",
+                n_perm=_as_int(phase2_cfg.get("n_perm"), 5000),
+                seed=_as_int(phase2_cfg.get("seed"), 42),
+                alpha=_as_float(phase2_cfg.get("alpha"), 0.05),
+                scan_distance_threshold=_as_float(phase2_cfg.get("scan_distance_threshold"), 20.0),
+                direction_check=_as_bool(phase2_cfg.get("direction_check"), default=False),
+            )
+        except Exception as e:
+            print(f"[phase2][step1][skip] {e}")
+
+        try:
+            from step2_gradient_shift import run_gradient_shift
+
+            run_gradient_shift(
+                matrix_dir=Path(matrix_dir),
+                stimulus_dir_name=str(stimulus_dir_name),
+                condition_a=str(condition_a),
+                condition_b=str(condition_b),
+                model=_as_str(phase2_cfg.get("model"), default="M_conv") or "M_conv",
+                perm_result_file=_as_str(phase2_cfg.get("perm_result_file"), default="roi_isc_dev_models_perm_fwer.csv")
+                or "roi_isc_dev_models_perm_fwer.csv",
+                gradient_source=_as_str(phase2_cfg.get("gradient_source"), default="neuromaps") or "neuromaps",
+                gradient_file=_as_path(phase2_cfg.get("gradient_file"), default=None),
+                atlas_lh=_as_path(phase2_cfg.get("atlas_lh"), default=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"))
+                or Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_L.label.gii"),
+                atlas_rh=_as_path(phase2_cfg.get("atlas_rh"), default=Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"))
+                or Path("/public/home/dingrui/tools/masks_atlas/Schaefer2018_200Parcels_7Networks_R.label.gii"),
+                n_spin=_as_int(phase2_cfg.get("n_spin"), 10000),
+                seed=_as_int(phase2_cfg.get("seed"), 42),
+                alpha=_as_float(phase2_cfg.get("alpha"), 0.05),
+                out_dir=_as_path(phase2_cfg.get("out_dir"), default=None),
+                dpi=_as_int(phase2_cfg.get("dpi"), 300),
+                scan_distance_threshold=_as_float(phase2_cfg.get("scan_distance_threshold"), 20.0),
+            )
+        except Exception as e:
+            print(f"[phase2][step2][skip] {e}")
+
+        try:
+            from step3_representational_connectivity import run_representational_connectivity
+
+            run_representational_connectivity(
+                matrix_dir=Path(matrix_dir),
+                stimulus_dir_name=str(stimulus_dir_name),
+                condition=str(condition_b),
+                repr_prefix=_as_str(phase2_cfg.get("repr_prefix"), default="roi_repr_matrix_232") or "roi_repr_matrix_232",
+                subject_info=Path(subject_info),
+                roi_pairs=[],
+                network_pairs=[str(x) for x in phase2_cfg.get("network_pairs", ["Hippocampus:Default", "Amygdala:SomMot", "SCAN:Default"])],
+                n_perm=_as_int(phase2_cfg.get("rc_n_perm"), 5000),
+                seed=_as_int(phase2_cfg.get("seed"), 42),
+                dpi=_as_int(phase2_cfg.get("dpi"), 300),
+                out_dir=_as_path(phase2_cfg.get("out_dir"), default=None),
+                condition_contrast=_as_str(phase2_cfg.get("condition_contrast"), default=None),
+                rc_aggregate=_as_str(phase2_cfg.get("rc_aggregate"), default="mean") or "mean",
+            )
+        except Exception as e:
+            print(f"[phase2][step3][skip] {e}")
+
+        try:
+            from step4_maturity_index import run_maturity_index
+
+            run_maturity_index(
+                matrix_dir=Path(matrix_dir),
+                stimulus_dir_name=str(stimulus_dir_name),
+                condition=str(condition_b),
+                repr_prefix=_as_str(phase2_cfg.get("repr_prefix"), default="roi_repr_matrix_232") or "roi_repr_matrix_232",
+                subject_info=Path(subject_info),
+                behavior_file=_as_path(phase2_cfg.get("behavior_file"), default=None),
+                behavior_cols=[str(x) for x in phase2_cfg.get("behavior_cols", ["emot_rating", "reappraisal_success"])],
+                behavior_join=_as_str(phase2_cfg.get("behavior_join"), default="left") or "left",
+                mature_age_min=_as_float(phase2_cfg.get("mature_age_min"), 17.0),
+                target_networks=[str(x) for x in phase2_cfg.get("target_networks", ["Default", "DorsAttn"])],
+                include_subcortical=[str(x) for x in phase2_cfg.get("include_subcortical", ["Hippocampus"])],
+                include_scan=_as_bool(phase2_cfg.get("include_scan"), default=True),
+                n_perm=_as_int(phase2_cfg.get("mi_n_perm"), 5000),
+                seed=_as_int(phase2_cfg.get("seed"), 42),
+                alpha=_as_float(phase2_cfg.get("alpha"), 0.05),
+                dpi=_as_int(phase2_cfg.get("dpi"), 300),
+                out_dir=_as_path(phase2_cfg.get("out_dir"), default=None),
+                mature_age_grid=None,
+                bootstrap_template=_as_int(phase2_cfg.get("bootstrap_template"), 0),
+                bootstrap_seed=_as_int(phase2_cfg.get("bootstrap_seed"), _as_int(phase2_cfg.get("seed"), 42)),
+                loo_template=_as_bool(phase2_cfg.get("loo_template"), default=False),
+            )
+        except Exception as e:
+            print(f"[phase2][step4][skip] {e}")
 
 
 if __name__ == "__main__":

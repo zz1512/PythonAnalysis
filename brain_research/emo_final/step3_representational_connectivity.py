@@ -57,6 +57,47 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument("--condition-contrast", type=str, default=None)
+    # Supplementary analysis (Task 7): non-linear developmental modeling (optional; default off).
+    p.add_argument(
+        "--dev-modeling",
+        action="store_true",
+        default=False,
+        help="启用发育曲线模型对比（线性 vs 二次），输出模型对比摘要 CSV；默认关闭，不影响既有输出",
+    )
+    p.add_argument(
+        "--dev-model-criterion",
+        type=str,
+        default="AIC",
+        choices=["AIC", "R2_adj"],
+        help="模型选择准则：AIC(越小越好) / R2_adj(越大越好)",
+    )
+    p.add_argument(
+        "--dev-model-min-n",
+        type=int,
+        default=8,
+        help="每个 pair_label 进行模型对比所需的最小有效样本数（默认 8）",
+    )
+    # Supplementary analysis (Task 6): representational complexity / distinctiveness.
+    p.add_argument(
+        "--skip-repr-complexity",
+        action="store_true",
+        default=False,
+        help="跳过表征复杂性/区分度补充分析（默认会输出 repr_complexity_*.csv，不影响既有 RC 输出）",
+    )
+    p.add_argument(
+        "--repr-complexity-level",
+        type=str,
+        default="roi",
+        choices=["roi", "network", "both"],
+        help="表征复杂性输出层级：roi(逐 ROI) / network(按网络聚合) / both(两者都输出)",
+    )
+    p.add_argument(
+        "--rc-aggregate",
+        type=str,
+        default="mean",
+        choices=["mean", "median"],
+        help="网络级 RC 的聚合方式：mean（默认）或 median。",
+    )
     return p.parse_args()
 
 
@@ -110,6 +151,158 @@ def _try_lowess(
         return None
 
 
+def _ols_fit_metrics(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    """
+    Lightweight OLS (no hard dependency on statsmodels).
+
+    Metrics are suitable for comparing models fit on the same y (same n):
+    - AIC: Gaussian with unknown variance, constant term dropped: n*log(RSS/n) + 2k
+    - R2_adj: adjusted R^2
+    """
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    n = int(y.size)
+    k = int(X.shape[1])
+    if n == 0 or k == 0:
+        return {
+            "n": float(n),
+            "k": float(k),
+            "rss": float("nan"),
+            "aic": float("nan"),
+            "r2": float("nan"),
+            "r2_adj": float("nan"),
+        }
+    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+    y_hat = X @ beta
+    resid = y - y_hat
+    rss = float(np.sum(resid ** 2))
+
+    # AIC (drop additive constants shared across models with same n).
+    eps = 1e-12
+    sigma2 = max(rss / float(n), eps)
+    aic = float(float(n) * np.log(sigma2) + 2.0 * float(k))
+
+    # R^2 and adjusted R^2.
+    y_mean = float(np.mean(y))
+    tss = float(np.sum((y - y_mean) ** 2))
+    if tss <= 0.0:
+        r2 = float("nan")
+        r2_adj = float("nan")
+    else:
+        r2 = float(1.0 - (rss / tss))
+        if n > k:
+            r2_adj = float(1.0 - (1.0 - r2) * (float(n - 1) / float(n - k)))
+        else:
+            r2_adj = float("nan")
+
+    out: Dict[str, float] = {
+        "n": float(n),
+        "k": float(k),
+        "rss": float(rss),
+        "aic": float(aic),
+        "r2": float(r2),
+        "r2_adj": float(r2_adj),
+    }
+    # Coefficients for downstream reporting (beta0, beta1, beta2...).
+    for i, b in enumerate(np.asarray(beta, dtype=np.float64).tolist()):
+        out[f"beta_{i}"] = float(b)
+    return out
+
+
+def _compare_dev_models_linear_vs_quadratic(
+    df_scores: pd.DataFrame,
+    condition: str,
+    criterion: str,
+    min_n: int,
+) -> pd.DataFrame:
+    """
+    For each pair_label, compare:
+    - linear: y ~ 1 + age
+    - quadratic: y ~ 1 + age + age^2
+    """
+    if df_scores.empty:
+        return pd.DataFrame()
+    rows: List[Dict[str, object]] = []
+    for pair_label, sub in df_scores.groupby("pair_label", sort=True):
+        ages = np.asarray(sub["age"].to_numpy(dtype=np.float64), dtype=np.float64)
+        scores = np.asarray(sub["RC_score"].to_numpy(dtype=np.float64), dtype=np.float64)
+        mask = np.isfinite(ages) & np.isfinite(scores)
+        x = ages[mask]
+        y = scores[mask]
+        n = int(y.size)
+
+        base_row: Dict[str, object] = {
+            "condition": str(condition),
+            "pair_label": str(pair_label),
+            "n": int(n),
+            "criterion": str(criterion),
+        }
+        if n < int(min_n):
+            base_row.update(
+                {
+                    "best_model": "skip",
+                    "skip_reason": f"n<{int(min_n)}",
+                    "aic_linear": float("nan"),
+                    "aic_quadratic": float("nan"),
+                    "delta_aic_quadratic_minus_linear": float("nan"),
+                    "r2_adj_linear": float("nan"),
+                    "r2_adj_quadratic": float("nan"),
+                    "quad_vertex_age": float("nan"),
+                    "quad_vertex_in_age_range": False,
+                }
+            )
+            rows.append(base_row)
+            continue
+
+        X_lin = np.column_stack([np.ones_like(x), x])
+        X_quad = np.column_stack([np.ones_like(x), x, x ** 2])
+        m_lin = _ols_fit_metrics(X_lin, y)
+        m_quad = _ols_fit_metrics(X_quad, y)
+
+        aic_lin = float(m_lin.get("aic", float("nan")))
+        aic_quad = float(m_quad.get("aic", float("nan")))
+        r2a_lin = float(m_lin.get("r2_adj", float("nan")))
+        r2a_quad = float(m_quad.get("r2_adj", float("nan")))
+
+        # Quadratic turning point: -b1 / (2*b2)
+        b1 = float(m_quad.get("beta_1", float("nan")))
+        b2 = float(m_quad.get("beta_2", float("nan")))
+        vertex_age = float("nan")
+        vertex_in_range = False
+        if np.isfinite(b1) and np.isfinite(b2) and abs(b2) > 1e-12:
+            vertex_age = float(-b1 / (2.0 * b2))
+            vertex_in_range = bool((vertex_age >= float(np.nanmin(x))) and (vertex_age <= float(np.nanmax(x))))
+
+        # Select best model.
+        best_model = "linear"
+        if str(criterion).upper() == "AIC":
+            if np.isfinite(aic_quad) and np.isfinite(aic_lin) and (aic_quad < aic_lin):
+                best_model = "quadratic"
+        else:  # R2_adj
+            if np.isfinite(r2a_quad) and np.isfinite(r2a_lin) and (r2a_quad > r2a_lin):
+                best_model = "quadratic"
+
+        base_row.update(
+            {
+                "best_model": best_model,
+                "skip_reason": "",
+                "aic_linear": aic_lin,
+                "aic_quadratic": aic_quad,
+                "delta_aic_quadratic_minus_linear": float(aic_quad - aic_lin)
+                if (np.isfinite(aic_quad) and np.isfinite(aic_lin))
+                else float("nan"),
+                "r2_adj_linear": r2a_lin,
+                "r2_adj_quadratic": r2a_quad,
+                "quad_beta_age": float(m_quad.get("beta_1", float("nan"))),
+                "quad_beta_age2": float(m_quad.get("beta_2", float("nan"))),
+                "quad_vertex_age": vertex_age,
+                "quad_vertex_in_age_range": bool(vertex_in_range),
+            }
+        )
+        rows.append(base_row)
+    return pd.DataFrame(rows)
+
+
 def _permutation_test_age(
     ages: np.ndarray,
     scores: np.ndarray,
@@ -142,6 +335,170 @@ def _resolve_group_rois(group_name: str, roi_network_map: Dict[str, str]) -> Lis
     return [roi for roi, net in roi_network_map.items() if net == group_name]
 
 
+def _offdiag_upper_std(rsm: np.ndarray, iu: Tuple[np.ndarray, np.ndarray]) -> float:
+    """
+    Minimal viable "representational complexity/distinctiveness" metric:
+    std of the strict upper-triangle off-diagonal elements of an ROI RSM.
+    """
+    arr = np.asarray(rsm, dtype=np.float64)
+    vals = arr[iu]
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 2:
+        return float("nan")
+    return float(np.std(vals, ddof=1))
+
+
+def _pattern_distinctiveness(rsm: np.ndarray) -> float:
+    """
+    A more interpretable distinctiveness metric:
+    for each stimulus, compute its mean similarity to all *other* stimuli, then
+    quantify the standard deviation across stimuli. Larger values imply that some
+    stimuli are systematically more/less confusable than others.
+    """
+    arr = np.asarray(rsm, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        return float("nan")
+    n = arr.shape[0]
+    if n < 3:
+        return float("nan")
+    arr = arr.copy()
+    np.fill_diagonal(arr, np.nan)
+    row_means = np.nanmean(arr, axis=1)
+    row_means = row_means[np.isfinite(row_means)]
+    if row_means.size < 2:
+        return float("nan")
+    return float(np.std(row_means, ddof=1))
+
+
+def _compute_condition_repr_complexity(
+    matrix_dir: Path,
+    stimulus_dir_name: str,
+    condition: str,
+    repr_prefix: str,
+    subject_info: Path,
+    level: str,
+    n_perm: int,
+    seed: int,
+) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    """
+    Compute supplementary representational complexity scores and age association stats.
+
+    Output rows are compatible with gradient_analysis/*.csv conventions in this repo.
+    """
+    cond_dir = matrix_dir / str(stimulus_dir_name) / str(condition)
+    npz_path = cond_dir / f"{repr_prefix}.npz"
+    subjects_path = cond_dir / f"{repr_prefix}_subjects.csv"
+    rois_path = cond_dir / f"{repr_prefix}_rois.csv"
+
+    npz = np.load(npz_path, allow_pickle=False)
+    subjects = pd.read_csv(subjects_path)["subject"].astype(str).tolist()
+    rois = pd.read_csv(rois_path)["roi"].astype(str).tolist()
+
+    age_map = load_subject_ages_map(subject_info)
+    subjects_sorted, ages_sorted = sort_subjects_by_age(subjects, age_map)
+    idx_map = {s: i for i, s in enumerate(subjects)}
+    order = [idx_map[s] for s in subjects_sorted]
+
+    n_sub = len(subjects_sorted)
+    ages_arr = np.asarray(ages_sorted, dtype=np.float64)
+
+    # Determine RSM size from the first ROI entry.
+    if len(rois) == 0:
+        return [], []
+    sample = np.asarray(npz[rois[0]][order[0]], dtype=np.float64)
+    iu = np.triu_indices(sample.shape[0], k=1)
+
+    score_rows: List[Dict[str, object]] = []
+    stat_rows: List[Dict[str, object]] = []
+
+    want_roi = str(level) in ("roi", "both")
+    want_net = str(level) in ("network", "both")
+
+    metric_funcs = {
+        "offdiag_std_upper": lambda rsm: _offdiag_upper_std(rsm, iu),
+        "pattern_distinctiveness": _pattern_distinctiveness,
+    }
+    roi_scores_by_metric: Dict[str, np.ndarray] = {
+        metric: np.full((n_sub, len(rois)), np.nan, dtype=np.float64)
+        for metric in metric_funcs
+    }
+    if want_roi or want_net:
+        for ri, roi in enumerate(rois):
+            arr = np.asarray(npz[roi], dtype=np.float64)
+            arr = arr[order, :, :]
+            for si in range(n_sub):
+                for metric_name, func in metric_funcs.items():
+                    roi_scores_by_metric[metric_name][si, ri] = func(arr[si])
+
+    if want_roi:
+        for metric_name, roi_scores in roi_scores_by_metric.items():
+            for ri, roi in enumerate(rois):
+                scores = roi_scores[:, ri]
+                for si in range(n_sub):
+                    score_rows.append(
+                        {
+                            "subject": subjects_sorted[si],
+                            "age": float(ages_arr[si]),
+                            "level": "roi",
+                            "label": str(roi),
+                            "metric": metric_name,
+                            "repr_complexity": float(scores[si]) if np.isfinite(scores[si]) else float("nan"),
+                        }
+                    )
+                r_age, p_age, p_perm = _permutation_test_age(ages_arr, scores, n_perm=n_perm, seed=seed)
+                stat_rows.append(
+                    {
+                        "condition": str(condition),
+                        "level": "roi",
+                        "label": str(roi),
+                        "metric": metric_name,
+                        "r_age": r_age,
+                        "p_age": p_age,
+                        "p_perm": p_perm,
+                        "n_subjects": int(n_sub),
+                    }
+                )
+
+    # 2) Network-level aggregation (mean across ROIs within network_or_structure)
+    if want_net:
+        roi_network_map = get_roi_network_map(roi_set=232)
+        roi_to_group = {roi: roi_network_map.get(roi, "Unknown") for roi in rois}
+        groups = sorted(set(roi_to_group.values()))
+        for metric_name, roi_scores in roi_scores_by_metric.items():
+            for g in groups:
+                idx = [ri for ri, roi in enumerate(rois) if roi_to_group.get(roi) == g]
+                if not idx:
+                    continue
+                scores = np.nanmean(roi_scores[:, idx], axis=1)
+                for si in range(n_sub):
+                    score_rows.append(
+                        {
+                            "subject": subjects_sorted[si],
+                            "age": float(ages_arr[si]),
+                            "level": "network",
+                            "label": str(g),
+                            "metric": metric_name,
+                            "repr_complexity": float(scores[si]) if np.isfinite(scores[si]) else float("nan"),
+                        }
+                    )
+                r_age, p_age, p_perm = _permutation_test_age(ages_arr, scores, n_perm=n_perm, seed=seed)
+                stat_rows.append(
+                    {
+                        "condition": str(condition),
+                        "level": "network",
+                        "label": str(g),
+                        "metric": metric_name,
+                        "r_age": r_age,
+                        "p_age": p_age,
+                        "p_perm": p_perm,
+                        "n_subjects": int(n_sub),
+                        "n_rois_in_group": int(len(idx)),
+                    }
+                )
+
+    return score_rows, stat_rows
+
+
 def _compute_condition_rc(
     matrix_dir: Path,
     stimulus_dir_name: str,
@@ -152,6 +509,7 @@ def _compute_condition_rc(
     network_pairs: List[Tuple[str, str]],
     n_perm: int,
     seed: int,
+    rc_aggregate: str = "mean",
 ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], Dict[str, np.ndarray], np.ndarray]:
     cond_dir = matrix_dir / str(stimulus_dir_name) / str(condition)
     npz_path = cond_dir / f"{repr_prefix}.npz"
@@ -202,9 +560,19 @@ def _compute_condition_rc(
 
     roi_network_map = get_roi_network_map(roi_set=232)
 
+    agg = str(rc_aggregate).strip().lower()
+    if agg not in {"mean", "median"}:
+        raise ValueError(f"Unsupported rc_aggregate: {rc_aggregate}")
+
     network_rc: Dict[str, np.ndarray] = {}
     for group_a, group_b in network_pairs:
-        cross_pairs = _get_cross_group_pairs(group_a, group_b, roi_network_map, available_rois)
+        # Keep group ROI lists to report n_roi_pairs and group sizes for interpretability.
+        rois_a = sorted([r for r in _resolve_group_rois(group_a, roi_network_map) if r in available_rois])
+        rois_b = sorted([r for r in _resolve_group_rois(group_b, roi_network_map) if r in available_rois])
+        cross_pairs: List[Tuple[str, str]] = []
+        for ra in rois_a:
+            for rb in rois_b:
+                cross_pairs.append((ra, rb))
         if len(cross_pairs) == 0:
             raise ValueError(f"网络对 {group_a}:{group_b} 在当前 ROI 集合中无交叉 ROI 对")
         net_label = f"{group_a}-{group_b}"
@@ -212,17 +580,17 @@ def _compute_condition_rc(
         for pi, (ra, rb) in enumerate(cross_pairs):
             for si in range(n_sub):
                 rc_mat[si, pi] = _compute_rc_single(npz, ra, rb, order[si])
-        mean_rc = np.nanmean(rc_mat, axis=1)
-        network_rc[net_label] = mean_rc
+        agg_rc = np.nanmedian(rc_mat, axis=1) if agg == "median" else np.nanmean(rc_mat, axis=1)
+        network_rc[net_label] = agg_rc
 
         for si in range(n_sub):
             score_rows.append({
                 "subject": subjects_sorted[si],
                 "age": float(ages_arr[si]),
                 "pair_label": net_label,
-                "RC_score": float(mean_rc[si]),
+                "RC_score": float(agg_rc[si]),
             })
-        r_age, p_age, p_perm = _permutation_test_age(ages_arr, mean_rc, n_perm=n_perm, seed=seed)
+        r_age, p_age, p_perm = _permutation_test_age(ages_arr, agg_rc, n_perm=n_perm, seed=seed)
         stat_rows.append({
             "pair_label": net_label,
             "condition": str(condition),
@@ -230,7 +598,12 @@ def _compute_condition_rc(
             "p_age": p_age,
             "p_perm": p_perm,
             "n_subjects": int(n_sub),
+            "rc_aggregate": str(agg),
+            "n_roi_pairs": int(len(cross_pairs)),
+            "n_rois_group_a": int(len(rois_a)),
+            "n_rois_group_b": int(len(rois_b)),
         })
+        print(f"[repr_connectivity] {net_label}: n_roi_pairs={len(cross_pairs)} (agg={agg})")
 
     return score_rows, stat_rows, network_rc, ages_arr
 
@@ -248,6 +621,12 @@ def run_representational_connectivity(
     dpi: int,
     out_dir: Optional[Path],
     condition_contrast: Optional[str],
+    dev_modeling: bool = False,
+    dev_model_criterion: str = "AIC",
+    dev_model_min_n: int = 8,
+    skip_repr_complexity: bool = False,
+    repr_complexity_level: str = "roi",
+    rc_aggregate: str = "mean",
 ) -> None:
     if out_dir is None:
         out_dir = matrix_dir / "gradient_analysis"
@@ -267,10 +646,37 @@ def run_representational_connectivity(
         network_pairs=parsed_network_pairs,
         n_perm=n_perm,
         seed=seed,
+        rc_aggregate=str(rc_aggregate),
     )
 
     pd.DataFrame(score_rows).to_csv(out_dir / "repr_connectivity_subject_scores.csv", index=False)
     pd.DataFrame(stat_rows).to_csv(out_dir / "repr_connectivity_stats.csv", index=False)
+
+    # Task 7: (optional) developmental model comparison (linear vs quadratic).
+    if bool(dev_modeling):
+        dev_df = _compare_dev_models_linear_vs_quadratic(
+            df_scores=pd.DataFrame(score_rows),
+            condition=str(condition),
+            criterion=str(dev_model_criterion),
+            min_n=int(dev_model_min_n),
+        )
+        if not dev_df.empty:
+            dev_df.to_csv(out_dir / "repr_connectivity_dev_model_comparison.csv", index=False)
+
+    # Task 6: representational complexity/distinctiveness (supplementary; does not change RC outputs)
+    if not bool(skip_repr_complexity):
+        comp_score_rows, comp_stat_rows = _compute_condition_repr_complexity(
+            matrix_dir=matrix_dir,
+            stimulus_dir_name=stimulus_dir_name,
+            condition=condition,
+            repr_prefix=repr_prefix,
+            subject_info=subject_info,
+            level=str(repr_complexity_level),
+            n_perm=n_perm,
+            seed=seed,
+        )
+        pd.DataFrame(comp_score_rows).to_csv(out_dir / "repr_complexity_subject_scores.csv", index=False)
+        pd.DataFrame(comp_stat_rows).to_csv(out_dir / "repr_complexity_stats.csv", index=False)
 
     if parsed_network_pairs:
         _plot_network_rc(
@@ -303,6 +709,7 @@ def run_representational_connectivity(
             network_pairs=parsed_network_pairs,
             n_perm=n_perm,
             seed=seed,
+            rc_aggregate=str(rc_aggregate),
         )
 
         safe_name = str(condition_contrast).replace("/", "_")
@@ -312,6 +719,18 @@ def run_representational_connectivity(
         pd.DataFrame(contrast_stat_rows).to_csv(
             out_dir / f"repr_connectivity_stats_{safe_name}.csv", index=False
         )
+
+        if bool(dev_modeling):
+            contrast_dev_df = _compare_dev_models_linear_vs_quadratic(
+                df_scores=pd.DataFrame(contrast_score_rows),
+                condition=str(condition_contrast),
+                criterion=str(dev_model_criterion),
+                min_n=int(dev_model_min_n),
+            )
+            if not contrast_dev_df.empty:
+                contrast_dev_df.to_csv(
+                    out_dir / f"repr_connectivity_dev_model_comparison_{safe_name}.csv", index=False
+                )
 
         _plot_condition_overlay(
             primary_network_rc=network_rc,
@@ -506,6 +925,12 @@ def main() -> None:
         dpi=int(args.dpi),
         out_dir=Path(args.out_dir) if args.out_dir is not None else None,
         condition_contrast=str(args.condition_contrast) if args.condition_contrast is not None else None,
+        dev_modeling=bool(args.dev_modeling),
+        dev_model_criterion=str(args.dev_model_criterion),
+        dev_model_min_n=int(args.dev_model_min_n),
+        skip_repr_complexity=bool(args.skip_repr_complexity),
+        repr_complexity_level=str(args.repr_complexity_level),
+        rc_aggregate=str(args.rc_aggregate),
     )
 
 

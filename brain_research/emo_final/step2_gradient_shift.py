@@ -18,6 +18,7 @@ if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
 from utils_network_assignment import (  # noqa: E402
+    DEFAULT_DISTANCE_THRESHOLD_MM,
     get_schaefer200_network_labels,
     get_sensorimotor_association_order,
     get_scan_cortical_rois,
@@ -48,6 +49,43 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument("--dpi", type=int, default=300)
+
+    # SCAN robustness / negative control (Task 2)
+    p.add_argument(
+        "--scan-atlas-source",
+        type=str,
+        default="nilearn",
+        choices=["nilearn", "nifti", "centroids", "auto"],
+        help="SCAN 映射用 Schaefer200 centroid 来源：nilearn(在线)/nifti(本地)/centroids(CSV/NPY)/auto(优先离线)",
+    )
+    p.add_argument("--scan-atlas-nifti", type=Path, default=None, help="SCAN 映射用本地 Schaefer200 atlas NIfTI（.nii/.nii.gz）")
+    p.add_argument("--scan-centroids-file", type=Path, default=None, help="SCAN 映射用本地 centroid 缓存（.csv/.npy）")
+    p.add_argument(
+        "--scan-distance-threshold",
+        type=float,
+        default=float(DEFAULT_DISTANCE_THRESHOLD_MM),
+        help="SCAN 主分析阈值（用于 fig/scan_overlap/负对照的观测 ROI 集合）",
+    )
+    p.add_argument(
+        "--scan-threshold-grid",
+        type=float,
+        nargs="+",
+        default=[10.0, 15.0, 20.0, 25.0],
+        help="SCAN 阈值敏感性阈值网格（mm），例如：--scan-threshold-grid 10 15 20 25",
+    )
+    p.add_argument(
+        "--scan-negctl-n",
+        type=int,
+        default=1000,
+        help="负对照重复次数 N（从指定网络随机抽样与 SCAN ROI 数量相同的 parcels）",
+    )
+    p.add_argument(
+        "--scan-negctl-networks",
+        type=str,
+        nargs="+",
+        default=["SomMot"],
+        help="负对照抽样网络集合，例如：--scan-negctl-networks SomMot Vis Limbic",
+    )
     return p.parse_args()
 
 
@@ -129,12 +167,11 @@ def _spin_test(
     atlas_rh: Path,
     n_spin: int,
     seed: int,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, Dict[str, object]]:
     observed_r, _ = spearmanr(g1_scores, r_obs_vec, nan_policy="omit")
 
     try:
         from neuromaps.nulls import alexander_bloch
-        from neuromaps.stats import compare_images
 
         g1_lh_arr = g1_scores[:100]
         g1_rh_arr = g1_scores[100:]
@@ -149,14 +186,38 @@ def _spin_test(
             parcellation=(str(atlas_lh), str(atlas_rh)),
         )
 
+        nulls_arr = np.asarray(nulls)
+        # neuromaps currently returns (n_parcels, n_perm) for parcellated data. We harden against
+        # format changes to avoid silent misalignment.
+        if nulls_arr.ndim != 2:
+            raise ValueError(f"Unexpected nulls ndim={nulls_arr.ndim} (expected 2)")
+        if nulls_arr.shape[0] == 200:
+            nulls_parcel_perm = nulls_arr
+        elif nulls_arr.shape[1] == 200:
+            nulls_parcel_perm = nulls_arr.T
+        else:
+            raise ValueError(
+                f"Unexpected nulls shape={nulls_arr.shape} (expected 200 parcels on one axis)"
+            )
+        if int(nulls_parcel_perm.shape[0]) != 200:
+            raise AssertionError(
+                f"Expected 200 parcels, got {int(nulls_parcel_perm.shape[0])}"
+            )
+
         null_rs = np.zeros(int(n_spin), dtype=np.float64)
         for pi in range(int(n_spin)):
-            rotated = nulls[:, pi] if nulls.ndim == 2 else nulls[pi]
+            rotated = nulls_parcel_perm[:, pi]
             r_null, _ = spearmanr(rotated, r_obs_vec, nan_policy="omit")
             null_rs[pi] = r_null
 
         p_spin = float((np.sum(np.abs(null_rs) >= np.abs(observed_r)) + 1) / (int(n_spin) + 1))
-        return float(observed_r), p_spin
+        meta: Dict[str, object] = {
+            "spin_test_available": True,
+            "spin_test_method": "alexander_bloch",
+            "nulls_shape": f"{int(nulls_parcel_perm.shape[0])}x{int(nulls_parcel_perm.shape[1])}",
+            "spin_test_note": "",
+        }
+        return float(observed_r), p_spin, meta
 
     except Exception as e:
         warnings.warn(
@@ -170,7 +231,13 @@ def _spin_test(
             null_rs[pi] = r_null
 
         p_spin = float((np.sum(np.abs(null_rs) >= np.abs(observed_r)) + 1) / (int(n_spin) + 1))
-        return float(observed_r), p_spin
+        meta = {
+            "spin_test_available": False,
+            "spin_test_method": "random_permutation",
+            "nulls_shape": "",
+            "spin_test_note": "exploratory_fallback_no_spatial_autocorr",
+        }
+        return float(observed_r), p_spin, meta
 
 
 def _make_figure(
@@ -336,6 +403,240 @@ def _make_figure(
     return out_path
 
 
+def _summarize_r(values: np.ndarray) -> dict:
+    vals = np.asarray(values, dtype=np.float64)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return {
+            "mean": float("nan"),
+            "median": float("nan"),
+            "std": float("nan"),
+            "min": float("nan"),
+            "max": float("nan"),
+        }
+    return {
+        "mean": float(np.nanmean(vals)),
+        "median": float(np.nanmedian(vals)),
+        "std": float(np.nanstd(vals)),
+        "min": float(np.nanmin(vals)),
+        "max": float(np.nanmax(vals)),
+    }
+
+
+def _write_scan_mapping_sensitivity(
+    *,
+    out_dir: Path,
+    threshold_grid: List[float],
+    atlas_source: str,
+    atlas_nifti: Optional[Path],
+    centroids_file: Optional[Path],
+    r_obs_a: np.ndarray,
+    r_obs_b: np.ndarray,
+    condition_a: str,
+    condition_b: str,
+) -> Optional[Path]:
+    """
+    Task 2: SCAN threshold sensitivity analysis.
+    Output: scan_mapping_sensitivity.csv
+    """
+    roi_index_map: Dict[str, int] = {roi: i for i, roi in enumerate(CORTICAL_ROIS)}
+
+    rows: List[dict] = []
+    for thr in threshold_grid:
+        try:
+            scan_map = get_scan_roi_mapping(
+                atlas_source=str(atlas_source),
+                distance_threshold=float(thr),
+                atlas_nifti=atlas_nifti,
+                centroids_file=centroids_file,
+            )
+        except Exception as e:
+            warnings.warn(f"SCAN 映射失败，已跳过阈值敏感性分析（threshold={thr}mm）：{e}")
+            return None
+
+        scan_map_c = scan_map[scan_map["is_cortical"]].copy()
+        within = scan_map_c[scan_map_c["within_threshold"]].copy()
+        within_rois = sorted(set(within["nearest_roi"].astype(str).tolist()))
+        within_idx = [roi_index_map[r] for r in within_rois if r in roi_index_map]
+
+        dists = within["distance_mm"].to_numpy(dtype=np.float64) if not within.empty else np.array([], dtype=np.float64)
+        dists_all_c = scan_map_c["distance_mm"].to_numpy(dtype=np.float64) if not scan_map_c.empty else np.array([], dtype=np.float64)
+
+        r_a = r_obs_a[within_idx] if within_idx else np.array([], dtype=np.float64)
+        r_b = r_obs_b[within_idx] if within_idx else np.array([], dtype=np.float64)
+        r_delta = (r_obs_a - r_obs_b)[within_idx] if within_idx else np.array([], dtype=np.float64)
+
+        row = {
+            "distance_threshold_mm": float(thr),
+            "atlas_source": str(atlas_source),
+            "atlas_nifti": str(atlas_nifti) if atlas_nifti is not None else "",
+            "centroids_file": str(centroids_file) if centroids_file is not None else "",
+            "n_scan_regions_total": int(len(SCAN_REGIONS)),
+            "n_scan_cortical_rows": int(scan_map_c.shape[0]),
+            "n_scan_cortical_within_threshold_rows": int(within.shape[0]),
+            "n_scan_cortical_unique_rois_within_threshold": int(len(within_rois)),
+            "distance_cortical_mean_mm": float(np.nanmean(dists_all_c)) if dists_all_c.size else float("nan"),
+            "distance_cortical_median_mm": float(np.nanmedian(dists_all_c)) if dists_all_c.size else float("nan"),
+            "distance_cortical_p95_mm": float(np.nanpercentile(dists_all_c, 95)) if dists_all_c.size else float("nan"),
+            "distance_cortical_max_mm": float(np.nanmax(dists_all_c)) if dists_all_c.size else float("nan"),
+            "distance_within_mean_mm": float(np.nanmean(dists)) if dists.size else float("nan"),
+            "distance_within_median_mm": float(np.nanmedian(dists)) if dists.size else float("nan"),
+            "condition_a": str(condition_a),
+            "condition_b": str(condition_b),
+        }
+
+        s_a = _summarize_r(r_a)
+        s_b = _summarize_r(r_b)
+        s_d = _summarize_r(r_delta)
+        row.update(
+            {
+                "r_obs_a_mean": s_a["mean"],
+                "r_obs_a_median": s_a["median"],
+                "r_obs_a_std": s_a["std"],
+                "r_obs_b_mean": s_b["mean"],
+                "r_obs_b_median": s_b["median"],
+                "r_obs_b_std": s_b["std"],
+                "r_obs_delta_mean": s_d["mean"],
+                "r_obs_delta_median": s_d["median"],
+                "r_obs_delta_std": s_d["std"],
+            }
+        )
+        rows.append(row)
+
+    out_path = out_dir / "scan_mapping_sensitivity.csv"
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    return out_path
+
+
+def _write_scan_negative_control(
+    *,
+    out_dir: Path,
+    scan_rois: List[str],
+    scan_distance_threshold: float,
+    atlas_source: str,
+    atlas_nifti: Optional[Path],
+    centroids_file: Optional[Path],
+    r_obs_a: np.ndarray,
+    r_obs_b: np.ndarray,
+    seed: int,
+    n_repeat: int,
+    network_populations: Optional[List[str]] = None,
+) -> Optional[Path]:
+    """
+    Task 2: Negative control baseline.
+    Randomly sample parcels from one or more comparison networks with same count as SCAN cortical ROI count.
+    Output: scan_negative_control.csv (includes empirical p-values on observed row).
+    """
+    if int(n_repeat) <= 0:
+        return None
+
+    net_df = get_schaefer200_network_labels()
+    target_networks = [str(x) for x in (network_populations or ["SomMot"])]
+    target_networks = [x for x in target_networks if x]
+    if not target_networks:
+        target_networks = ["SomMot"]
+
+    roi_index_map: Dict[str, int] = {roi: i for i, roi in enumerate(CORTICAL_ROIS)}
+    scan_idx = [roi_index_map[r] for r in sorted(set(scan_rois)) if r in roi_index_map]
+    n_scan = int(len(scan_idx))
+
+    rows: List[dict] = []
+
+    obs_mean_a = float(np.nanmean(r_obs_a[scan_idx])) if scan_idx else float("nan")
+    obs_mean_b = float(np.nanmean(r_obs_b[scan_idx])) if scan_idx else float("nan")
+    obs_mean_delta = float(np.nanmean((r_obs_a - r_obs_b)[scan_idx])) if scan_idx else float("nan")
+
+    # Store observed as row 0; p-values filled after null distribution is generated.
+    rows.append(
+        {
+            "kind": "observed",
+            "iter": 0,
+            "seed": int(seed),
+            "distance_threshold_mm": float(scan_distance_threshold),
+            "atlas_source": str(atlas_source),
+            "atlas_nifti": str(atlas_nifti) if atlas_nifti is not None else "",
+            "centroids_file": str(centroids_file) if centroids_file is not None else "",
+            "network_population": "SCAN_observed",
+            "network_population_n": int(n_scan),
+            "n_rois": int(n_scan),
+            "mean_r_obs_a": obs_mean_a,
+            "mean_r_obs_b": obs_mean_b,
+            "mean_r_obs_delta": obs_mean_delta,
+            "empirical_p_two_sided": float("nan"),
+            "empirical_p_greater": float("nan"),
+            "empirical_p_less": float("nan"),
+        }
+    )
+
+    if n_scan == 0:
+        warnings.warn("SCAN cortical ROI 数为 0，负对照无法计算（已仅输出 observed 行）。")
+        out_path0 = out_dir / "scan_negative_control.csv"
+        pd.DataFrame(rows).to_csv(out_path0, index=False)
+        return out_path0
+
+    rng = np.random.default_rng(int(seed))
+    all_null_delta: List[float] = []
+    for net_name in target_networks:
+        pool = net_df[net_df["network"] == net_name]["roi"].astype(str).tolist()
+        pool = [r for r in pool if r in set(CORTICAL_ROIS)]
+        pool = sorted(set(pool))
+        if n_scan > int(len(pool)):
+            warnings.warn(
+                f"{net_name} 网络可用 parcel 数({len(pool)}) < SCAN ROI 数({n_scan})，该网络负对照已跳过。"
+            )
+            continue
+
+        null_delta = np.zeros(int(n_repeat), dtype=np.float64)
+        pool_idx = np.array([roi_index_map[r] for r in pool if r in roi_index_map], dtype=int)
+        for i in range(int(n_repeat)):
+            pick = rng.choice(pool_idx, size=int(n_scan), replace=False)
+            mean_a = float(np.nanmean(r_obs_a[pick]))
+            mean_b = float(np.nanmean(r_obs_b[pick]))
+            mean_d = float(np.nanmean((r_obs_a - r_obs_b)[pick]))
+            null_delta[i] = mean_d
+            rows.append(
+                {
+                    "kind": "null",
+                    "iter": int(i + 1),
+                    "seed": int(seed),
+                    "distance_threshold_mm": float(scan_distance_threshold),
+                    "atlas_source": str(atlas_source),
+                    "atlas_nifti": str(atlas_nifti) if atlas_nifti is not None else "",
+                    "centroids_file": str(centroids_file) if centroids_file is not None else "",
+                    "network_population": str(net_name),
+                    "network_population_n": int(len(pool)),
+                    "n_rois": int(n_scan),
+                    "mean_r_obs_a": mean_a,
+                    "mean_r_obs_b": mean_b,
+                    "mean_r_obs_delta": mean_d,
+                    "empirical_p_two_sided": float("nan"),
+                    "empirical_p_greater": float("nan"),
+                    "empirical_p_less": float("nan"),
+                }
+            )
+        all_null_delta.extend([float(x) for x in null_delta if np.isfinite(x)])
+
+    # Empirical p-values for observed mean_delta against the combined null distribution.
+    obs = float(obs_mean_delta)
+    null_ok = np.asarray(all_null_delta, dtype=np.float64)
+    if np.isfinite(obs) and null_ok.size > 0:
+        p_two = float((np.sum(np.abs(null_ok) >= np.abs(obs)) + 1.0) / (null_ok.size + 1.0))
+        p_g = float((np.sum(null_ok >= obs) + 1.0) / (null_ok.size + 1.0))
+        p_l = float((np.sum(null_ok <= obs) + 1.0) / (null_ok.size + 1.0))
+    else:
+        p_two, p_g, p_l = float("nan"), float("nan"), float("nan")
+
+    rows[0]["network_population"] = "|".join(target_networks)
+    rows[0]["network_population_n"] = int(sum((net_df["network"] == x).sum() for x in target_networks))
+    rows[0]["empirical_p_two_sided"] = p_two
+    rows[0]["empirical_p_greater"] = p_g
+    rows[0]["empirical_p_less"] = p_l
+
+    out_path = out_dir / "scan_negative_control.csv"
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    return out_path
+
+
 def run_gradient_shift(
     matrix_dir: Path,
     stimulus_dir_name: str,
@@ -352,6 +653,13 @@ def run_gradient_shift(
     alpha: float,
     out_dir: Optional[Path],
     dpi: int,
+    scan_atlas_source: str = "nilearn",
+    scan_atlas_nifti: Optional[Path] = None,
+    scan_centroids_file: Optional[Path] = None,
+    scan_distance_threshold: float = float(DEFAULT_DISTANCE_THRESHOLD_MM),
+    scan_threshold_grid: Optional[List[float]] = None,
+    scan_negctl_n: int = 1000,
+    scan_negctl_networks: Optional[List[str]] = None,
 ) -> None:
     if out_dir is None:
         out_dir = Path(matrix_dir) / "gradient_analysis"
@@ -376,8 +684,8 @@ def run_gradient_shift(
     r_gradient_a, _ = spearmanr(g1_scores, r_obs_a, nan_policy="omit")
     r_gradient_b, _ = spearmanr(g1_scores, r_obs_b, nan_policy="omit")
 
-    r_gradient_a_spin, p_spin_a = _spin_test(g1_scores, r_obs_a, atlas_lh, atlas_rh, n_spin, seed)
-    r_gradient_b_spin, p_spin_b = _spin_test(g1_scores, r_obs_b, atlas_lh, atlas_rh, n_spin, seed)
+    r_gradient_a_spin, p_spin_a, spin_meta_a = _spin_test(g1_scores, r_obs_a, atlas_lh, atlas_rh, n_spin, seed)
+    r_gradient_b_spin, p_spin_b, spin_meta_b = _spin_test(g1_scores, r_obs_b, atlas_lh, atlas_rh, n_spin, seed)
 
     network_labels = get_schaefer200_network_labels()
     sa_order = get_sensorimotor_association_order()
@@ -385,19 +693,31 @@ def run_gradient_shift(
     dissociation_path = out_dir / "roi_isc_task_dissociation.csv"
     r_gradient_delta: Optional[float] = None
     p_spin_delta: Optional[float] = None
+    spin_meta_delta: Optional[Dict[str, object]] = None
     if dissociation_path.exists():
         dissoc_df = pd.read_csv(dissociation_path)
         dissoc_df = dissoc_df[dissoc_df["roi"].isin(CORTICAL_ROIS)].copy()
         dissoc_df = dissoc_df.set_index("roi").loc[CORTICAL_ROIS].reset_index()
         r_obs_delta = dissoc_df["r_obs_delta"].to_numpy(dtype=np.float64)
-        r_gradient_delta, p_spin_delta = _spin_test(
+        r_gradient_delta, p_spin_delta, spin_meta_delta = _spin_test(
             g1_scores, r_obs_delta, atlas_lh, atlas_rh, n_spin, seed
         )
 
     try:
-        scan_rois = get_scan_cortical_rois()
-        scan_map_df = get_scan_roi_mapping()
-    except Exception:
+        scan_rois = get_scan_cortical_rois(
+            distance_threshold=float(scan_distance_threshold),
+            atlas_source=str(scan_atlas_source),
+            atlas_nifti=scan_atlas_nifti,
+            centroids_file=scan_centroids_file,
+        )
+        scan_map_df = get_scan_roi_mapping(
+            atlas_source=str(scan_atlas_source),
+            distance_threshold=float(scan_distance_threshold),
+            atlas_nifti=scan_atlas_nifti,
+            centroids_file=scan_centroids_file,
+        )
+    except Exception as e:
+        warnings.warn(f"SCAN 映射不可用（将跳过 SCAN 标注/稳健性输出）：{e}")
         scan_rois = []
         scan_map_df = pd.DataFrame()
 
@@ -425,6 +745,10 @@ def run_gradient_shift(
             "model": str(model),
             "r_gradient": float(r_gradient_a_spin),
             "p_spin": float(p_spin_a),
+            "spin_test_available": bool(spin_meta_a.get("spin_test_available", False)),
+            "spin_test_method": str(spin_meta_a.get("spin_test_method", "")),
+            "nulls_shape": str(spin_meta_a.get("nulls_shape", "")),
+            "spin_test_note": str(spin_meta_a.get("spin_test_note", "")),
             "n_cortical_rois": int(len(rois_a)),
             "n_spin": int(n_spin),
         },
@@ -433,16 +757,25 @@ def run_gradient_shift(
             "model": str(model),
             "r_gradient": float(r_gradient_b_spin),
             "p_spin": float(p_spin_b),
+            "spin_test_available": bool(spin_meta_b.get("spin_test_available", False)),
+            "spin_test_method": str(spin_meta_b.get("spin_test_method", "")),
+            "nulls_shape": str(spin_meta_b.get("nulls_shape", "")),
+            "spin_test_note": str(spin_meta_b.get("spin_test_note", "")),
             "n_cortical_rois": int(len(rois_b)),
             "n_spin": int(n_spin),
         },
     ]
     if r_gradient_delta is not None and p_spin_delta is not None:
+        smd = spin_meta_delta or {}
         results_rows.append({
             "condition": f"delta_{condition_a}_minus_{condition_b}",
             "model": str(model),
             "r_gradient": float(r_gradient_delta),
             "p_spin": float(p_spin_delta),
+            "spin_test_available": bool(smd.get("spin_test_available", False)),
+            "spin_test_method": str(smd.get("spin_test_method", "")),
+            "nulls_shape": str(smd.get("nulls_shape", "")),
+            "spin_test_note": str(smd.get("spin_test_note", "")),
             "n_cortical_rois": 200,
             "n_spin": int(n_spin),
         })
@@ -479,6 +812,37 @@ def run_gradient_shift(
     if scan_overlap_rows:
         pd.DataFrame(scan_overlap_rows).to_csv(out_dir / "scan_overlap_analysis.csv", index=False)
 
+    # Task 2 outputs: sensitivity + negative control baseline (new files only).
+    thr_grid = scan_threshold_grid if scan_threshold_grid is not None else [10.0, 15.0, 20.0, 25.0]
+    thr_grid = [float(x) for x in thr_grid]
+    thr_grid = sorted(set(thr_grid))
+
+    sens_path = _write_scan_mapping_sensitivity(
+        out_dir=out_dir,
+        threshold_grid=thr_grid,
+        atlas_source=str(scan_atlas_source),
+        atlas_nifti=scan_atlas_nifti,
+        centroids_file=scan_centroids_file,
+        r_obs_a=r_obs_a,
+        r_obs_b=r_obs_b,
+        condition_a=str(condition_a),
+        condition_b=str(condition_b),
+    )
+
+    negctl_path = _write_scan_negative_control(
+        out_dir=out_dir,
+        scan_rois=scan_rois,
+        scan_distance_threshold=float(scan_distance_threshold),
+        atlas_source=str(scan_atlas_source),
+        atlas_nifti=scan_atlas_nifti,
+        centroids_file=scan_centroids_file,
+        r_obs_a=r_obs_a,
+        r_obs_b=r_obs_b,
+        seed=int(seed),
+        n_repeat=int(scan_negctl_n),
+        network_populations=[str(x) for x in (scan_negctl_networks or ["SomMot"])],
+    )
+
     print(f"[gradient_shift] {condition_a}: r={r_gradient_a_spin:.4f}, p_spin={p_spin_a:.4f}")
     print(f"[gradient_shift] {condition_b}: r={r_gradient_b_spin:.4f}, p_spin={p_spin_b:.4f}")
     if r_gradient_delta is not None:
@@ -491,6 +855,21 @@ def run_gradient_shift(
                 print(f"  {sr}: {condition_a} r={r_obs_a[idx]:.4f}, {condition_b} r={r_obs_b[idx]:.4f}")
     if scan_overlap_rows:
         print(f"[gradient_shift] SCAN overlap analysis saved ({len(scan_overlap_rows)} entries)")
+    if sens_path is not None:
+        print(f"[gradient_shift] SCAN mapping sensitivity saved: {sens_path}")
+    if negctl_path is not None:
+        try:
+            nc = pd.read_csv(negctl_path)
+            obs_row = nc[nc["kind"] == "observed"].head(1)
+            if not obs_row.empty:
+                p_two = float(obs_row.iloc[0].get("empirical_p_two_sided"))
+                n_rois = int(obs_row.iloc[0].get("n_rois"))
+                print(f"[gradient_shift] SCAN negative control saved: {negctl_path} (n_rois={n_rois}, p_two={p_two:.4g})")
+            else:
+                print(f"[gradient_shift] SCAN negative control saved: {negctl_path}")
+        except Exception as e:
+            warnings.warn(f"SCAN 负对照摘要读取失败（已忽略，仅提示）：{e}")
+            print(f"[gradient_shift] SCAN negative control saved: {negctl_path}")
     print(f"[gradient_shift] 结果已保存至 {out_dir}")
 
 
@@ -512,6 +891,13 @@ def main() -> None:
         alpha=float(args.alpha),
         out_dir=args.out_dir,
         dpi=int(args.dpi),
+        scan_atlas_source=str(args.scan_atlas_source),
+        scan_atlas_nifti=args.scan_atlas_nifti,
+        scan_centroids_file=args.scan_centroids_file,
+        scan_distance_threshold=float(args.scan_distance_threshold),
+        scan_threshold_grid=[float(x) for x in (args.scan_threshold_grid or [])],
+        scan_negctl_n=int(args.scan_negctl_n),
+        scan_negctl_networks=[str(x) for x in (args.scan_negctl_networks or ["SomMot"])],
     )
 
 

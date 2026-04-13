@@ -1,0 +1,11 @@
+- [x] Step2 `_spin_test()` 对 neuromaps `nulls` 做形状断言/显式分支；`gradient_shift_results.csv` 记录 `spin_test_available/spin_test_method/nulls_shape/spin_test_note`
+- [x] Step2 fallback（随机置换）在结果 CSV 中明确标注为 exploratory（`spin_test_available=False`），避免与 spin test p 值混淆
+- [x] Step4 行为合并默认不静默丢弃被试：支持 `--behavior-join`（默认 left）并报告 `n_total_subjects/n_with_behavior/n_lost_behavior`（写入 config + warning）
+- [x] Step3 网络级 RC stats 输出包含 `n_roi_pairs`（必要时含 group a/b ROI 数），便于审稿比较稳定性差异来源
+- [x] Step3 支持 `--rc-aggregate median`（或 stats 同时报告 mean/median），以降低极端值影响并提升可辩护性
+- [x] Step1 提供 ΔISC 方向一致性检查（提示型、默认不改旧行为），可快速定位潜在叙事冲突
+- [x] Step4 `reappraisal_success` suffix 匹配使用白名单关键词过滤，并把匹配来源写入 config
+- [x] Step3 复杂性/区分度指标包含更可解释的 `pattern_distinctiveness`，并保留 `offdiag_std_upper` 作为对照
+- [x] （可选）`calc_roi_isc_by_age.py` 支持 shrinkage（默认不改变旧结果），并可在小样本特征下稳定运行
+- [x] `readall.md` 已同步新增参数/列含义与“确认性 vs 探索性（exploratory）”标注
+- [x] 语法验证通过：`python -m py_compile` 覆盖相关脚本；最小 mock 跑通新增分支并确认新增列/文件存在
