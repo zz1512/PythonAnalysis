@@ -20,14 +20,14 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
 
 SUBJECT_DIR_RE = re.compile(r"^sub-[A-Za-z0-9]+$")
 SESSION_DIR_RE = re.compile(r"^ses-[A-Za-z0-9]+$")
 
-ANAT_T1W_RE = re.compile(r"^sub-[^_]+_ses-[^_]+(_acq-[^_]+)?_T1w\.nii\.gz$")
-DWI_RE = re.compile(r"^sub-[^_]+_ses-[^_]+_dwi\.nii\.gz$")
+ANAT_T1W_RE = re.compile(r"^sub-[^_]+_ses-[^_]+(_acq-[^_]+)?(_run-\d{2})?_T1w\.nii\.gz$")
+DWI_RE = re.compile(r"^sub-[^_]+_ses-[^_]+(_run-\d{2})?_dwi\.nii\.gz$")
 FUNC_BOLD_RE = re.compile(
     r"^sub-[^_]+_ses-[^_]+_task-[^_]+(_acq-[^_]+)?(_run-\d{2})?_bold\.nii\.gz$"
 )
@@ -66,14 +66,6 @@ def _read_json(path: Path) -> Optional[Dict[str, object]]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-
-
-def _collect_pairs(folder: Path, suffix_niigz: str) -> List[Tuple[Path, Path]]:
-    pairs = []
-    for nii in sorted(folder.glob(f"*{suffix_niigz}")):
-        json_path = nii.with_suffix("").with_suffix(".json") if nii.name.endswith(".nii.gz") else nii.with_suffix(".json")
-        pairs.append((nii, json_path))
-    return pairs
 
 
 def _validate_anat(anat_dir: Path) -> List[Issue]:

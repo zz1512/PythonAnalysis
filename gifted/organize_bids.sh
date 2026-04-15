@@ -42,16 +42,19 @@ copy_safe() {
 find_t1_smart() {
     local raw_dir="$1"
     local t1_file=""
+    local anat_dir="${raw_dir}/anat"
 
     # 1. 优先匹配anat子目录里的T1_MPRAGE（你的真实路径）
-    t1_file=$(find "${raw_dir}/anat" -maxdepth 1 -type f -name "*T1_MPRAGE*.nii.gz" ! -name ".*" | head -n 1)
-    if [ -n "$t1_file" ]; then
-        echo "$t1_file"
-        return
+    if [ -d "$anat_dir" ]; then
+        t1_file=$(find "$anat_dir" -maxdepth 1 -type f -name "*T1_MPRAGE*.nii.gz" ! -name ".*" -print -quit)
+        if [ -n "$t1_file" ]; then
+            echo "$t1_file"
+            return
+        fi
     fi
 
     # 2. 根目录兜底匹配
-    t1_file=$(find "$raw_dir" -maxdepth 1 -type f -name "*T1_MPRAGE*.nii.gz" ! -name ".*" | grep -v "REST" | head -n 1)
+    t1_file=$(find "$raw_dir" -maxdepth 1 -type f -name "*T1_MPRAGE*.nii.gz" ! -name ".*" ! -name "*REST*" -print -quit)
     echo "$t1_file"
 }
 
@@ -60,12 +63,15 @@ find_func_smart_batch() {
     local raw_dir="$1"
     local pattern="$2"
     local files=""
+    local func_dir="${raw_dir}/func"
 
     # 优先func子目录
-    files=$(find "${raw_dir}/func" -maxdepth 1 -type f -name "$pattern" ! -name ".*" | sort)
-    if [ -n "$files" ]; then
-        echo "$files"
-        return
+    if [ -d "$func_dir" ]; then
+        files=$(find "$func_dir" -maxdepth 1 -type f -name "$pattern" ! -name ".*" | sort)
+        if [ -n "$files" ]; then
+            echo "$files"
+            return
+        fi
     fi
 
     # 根目录兜底
@@ -127,11 +133,24 @@ for sub in "${SUBJECTS[@]}"; do
         echo -e "\n📦 处理静息态 REST..."
         rest_nii=$(find_func_smart_batch "$raw_dir" "*${ses}_REST*.nii.gz")
         if [ -n "$rest_nii" ]; then
-            rest_json="${rest_nii%.nii.gz}.json"
-            target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-REST_bold.nii.gz"
-            target_json="${bids_func}/sub-${sub}_ses-${ses}_task-REST_bold.json"
-            copy_safe "$rest_nii" "$target_nii"
-            copy_safe "$rest_json" "$target_json"
+            run=1
+            unique_rest_list=$(printf '%s\n' "$rest_nii" | awk 'NF && !seen[$0]++')
+            rest_count=$(printf '%s\n' "$unique_rest_list" | wc -l | tr -d ' ')
+            while IFS= read -r nii; do
+                [ -z "$nii" ] && continue
+                json="${nii%.nii.gz}.json"
+                if [ "$rest_count" -eq 1 ]; then
+                    target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-REST_bold.nii.gz"
+                    target_json="${bids_func}/sub-${sub}_ses-${ses}_task-REST_bold.json"
+                else
+                    run_label=$(printf "%02d" "$run")
+                    target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-REST_run-${run_label}_bold.nii.gz"
+                    target_json="${bids_func}/sub-${sub}_ses-${ses}_task-REST_run-${run_label}_bold.json"
+                fi
+                copy_safe "$nii" "$target_nii"
+                copy_safe "$json" "$target_json"
+                run=$((run+1))
+            done <<< "$unique_rest_list"
         fi
 
         # ============== 3. 处理 Func - AUT ==============
@@ -139,15 +158,17 @@ for sub in "${SUBJECTS[@]}"; do
         aut_list=$(find_func_smart_batch "$raw_dir" "*${ses}_AUT[0-9]*.nii.gz")
         if [ -n "$aut_list" ]; then
             run=1
-            unique_aut_list=$(echo "$aut_list" | awk '!seen[$0]++')
-            for nii in $unique_aut_list; do
+            unique_aut_list=$(printf '%s\n' "$aut_list" | awk 'NF && !seen[$0]++')
+            while IFS= read -r nii; do
+                [ -z "$nii" ] && continue
                 json="${nii%.nii.gz}.json"
-                target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-AUT_run-${run}_bold.nii.gz"
-                target_json="${bids_func}/sub-${sub}_ses-${ses}_task-AUT_run-${run}_bold.json"
+                run_label=$(printf "%02d" "$run")
+                target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-AUT_run-${run_label}_bold.nii.gz"
+                target_json="${bids_func}/sub-${sub}_ses-${ses}_task-AUT_run-${run_label}_bold.json"
                 copy_safe "$nii" "$target_nii"
                 copy_safe "$json" "$target_json"
                 run=$((run+1))
-            done
+            done <<< "$unique_aut_list"
         fi
 
         # ============== 4. 处理 Func - P ==============
@@ -155,15 +176,17 @@ for sub in "${SUBJECTS[@]}"; do
         p_list=$(find_func_smart_batch "$raw_dir" "*${ses}_P[0-9]*.nii.gz")
         if [ -n "$p_list" ]; then
             run=1
-            unique_p_list=$(echo "$p_list" | awk '!seen[$0]++')
-            for nii in $unique_p_list; do
+            unique_p_list=$(printf '%s\n' "$p_list" | awk 'NF && !seen[$0]++')
+            while IFS= read -r nii; do
+                [ -z "$nii" ] && continue
                 json="${nii%.nii.gz}.json"
-                target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-P_run-${run}_bold.nii.gz"
-                target_json="${bids_func}/sub-${sub}_ses-${ses}_task-P_run-${run}_bold.json"
+                run_label=$(printf "%02d" "$run")
+                target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-P_run-${run_label}_bold.nii.gz"
+                target_json="${bids_func}/sub-${sub}_ses-${ses}_task-P_run-${run_label}_bold.json"
                 copy_safe "$nii" "$target_nii"
                 copy_safe "$json" "$target_json"
                 run=$((run+1))
-            done
+            done <<< "$unique_p_list"
         fi
 
         # ============== 5. 处理 Func - C ==============
@@ -171,15 +194,17 @@ for sub in "${SUBJECTS[@]}"; do
         c_list=$(find_func_smart_batch "$raw_dir" "*${ses}_C[0-9]*.nii.gz")
         if [ -n "$c_list" ]; then
             run=1
-            unique_c_list=$(echo "$c_list" | awk '!seen[$0]++')
-            for nii in $unique_c_list; do
+            unique_c_list=$(printf '%s\n' "$c_list" | awk 'NF && !seen[$0]++')
+            while IFS= read -r nii; do
+                [ -z "$nii" ] && continue
                 json="${nii%.nii.gz}.json"
-                target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-C_run-${run}_bold.nii.gz"
-                target_json="${bids_func}/sub-${sub}_ses-${ses}_task-C_run-${run}_bold.json"
+                run_label=$(printf "%02d" "$run")
+                target_nii="${bids_func}/sub-${sub}_ses-${ses}_task-C_run-${run_label}_bold.nii.gz"
+                target_json="${bids_func}/sub-${sub}_ses-${ses}_task-C_run-${run_label}_bold.json"
                 copy_safe "$nii" "$target_nii"
                 copy_safe "$json" "$target_json"
                 run=$((run+1))
-            done
+            done <<< "$unique_c_list"
         fi
 
     done

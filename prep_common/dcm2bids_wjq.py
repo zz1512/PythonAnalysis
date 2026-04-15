@@ -31,7 +31,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 DEFAULT_README_TEXT = "Data description: Building on the model of our initial NKI-RS effort"
@@ -349,6 +349,9 @@ def _rename_anat_outputs(
         parts = _split_tokens(base)
         if len(parts) == 2:
             dst = out_dir / f"sub-{participant}_ses-{ses_label}_T1w.json"
+            safe_rename_with_autorun(p, dst, overwrite=overwrite, dry_run=dry_run, auto_run=auto_run)
+        elif len(parts) == 4 and "Crop" in parts[2]:
+            dst = out_dir / f"sub-{participant}_ses-{ses_label}_acq-crop_T1w.json"
             safe_rename_with_autorun(p, dst, overwrite=overwrite, dry_run=dry_run, auto_run=auto_run)
         else:
             _print(f"[Skip] 不符合 anat JSON 命名规则: {p.name}")
