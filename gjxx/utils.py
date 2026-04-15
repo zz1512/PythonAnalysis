@@ -12,7 +12,7 @@ import pandas as pd
 from scipy import stats
 
 
-@dataclass(slots=True)
+@dataclass
 class SubjectRun:
     subject: str
     run: int

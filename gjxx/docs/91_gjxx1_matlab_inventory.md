@@ -1,3 +1,5 @@
+> 归档说明：此文档由 `gjxx/MATLAB_脚本梳理.md` 移入 `gjxx/docs/`，内容基本不改，仅用于历史参考。
+
 # GJXX_1_reanalysis MATLAB 脚本梳理
 
 ## 1. 先给结论

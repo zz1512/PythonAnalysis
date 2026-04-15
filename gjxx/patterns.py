@@ -6,7 +6,7 @@ from typing import Sequence
 import nibabel as nib
 import pandas as pd
 
-from .utils import ensure_dir, write_table
+from gjxx.utils import ensure_dir, write_table
 
 
 def stack_maps(

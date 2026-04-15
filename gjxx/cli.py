@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from .config import GlmSettings
+from gjxx.config import GlmSettings
 
 
 def _add_shared_glm_args(parser: argparse.ArgumentParser) -> None:
@@ -94,6 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     regression.add_argument("--min-cluster-size", type=int, default=5)
     regression.add_argument("--no-rank-inputs", action="store_true")
 
+    # Dimension analysis stages (formerly B-line)
+    subparsers.add_parser("roi-robustness", help="Stage 08: ROI dimensionality + robustness suite.")
+    subparsers.add_parser("remembered-forgotten", help="Stage 09: remembered vs forgotten dimension analysis.")
+    subparsers.add_parser("memory-group", help="Stage 10: memory-good vs memory-poor dimension analysis.")
+    subparsers.add_parser("behavior-pooling", help="Stage 11: pooled behavioral item analyses.")
+    subparsers.add_parser("dimension-searchlight", help="Stage 12: whole-brain RD dimensionality searchlight.")
+    subparsers.add_parser("seed-connectivity", help="Stage 13: hippocampal seed PCA-connectivity searchlight.")
+
     return parser
 
 
@@ -108,16 +116,16 @@ def _glm_from_args(args: argparse.Namespace) -> GlmSettings:
 
 def main() -> None:
     parser = build_parser()
-    args = parser.parse_args()
+    args, remaining = parser.parse_known_args()
 
     if args.command == "relabel-events":
-        from .events import relabel_events_excluding_extremes
+        from gjxx.events import relabel_events_excluding_extremes
 
         relabel_events_excluding_extremes(args.input_root, args.output_root)
         return
 
     if args.command == "item-glm":
-        from .first_level import fit_item_level_story
+        from gjxx.first_level import fit_item_level_story
 
         fit_item_level_story(
             bold_root=args.bold_root,
@@ -130,7 +138,7 @@ def main() -> None:
         return
 
     if args.command == "activation-glm":
-        from .first_level import fit_activation_story
+        from gjxx.first_level import fit_activation_story
 
         fit_activation_story(
             bold_root=args.bold_root,
@@ -143,13 +151,13 @@ def main() -> None:
         return
 
     if args.command == "stack-patterns":
-        from .patterns import build_story_pattern_outputs
+        from gjxx.patterns import build_story_pattern_outputs
 
         build_story_pattern_outputs(args.trial_map_root, args.output_root, story=args.story, filter_query=args.filter_query)
         return
 
     if args.command == "gps":
-        from .roi import run_group_gps
+        from gjxx.roi import run_group_gps
 
         run_group_gps(
             pattern_root=args.pattern_root,
@@ -161,7 +169,7 @@ def main() -> None:
         return
 
     if args.command == "roi-dsm":
-        from .roi import run_group_roi_dsm_correlation
+        from gjxx.roi import run_group_roi_dsm_correlation
 
         run_group_roi_dsm_correlation(
             pattern_root=args.pattern_root,
@@ -174,7 +182,7 @@ def main() -> None:
         return
 
     if args.command == "rd":
-        from .rd import run_group_rd
+        from gjxx.rd import run_group_rd
 
         run_group_rd(
             pattern_root=args.pattern_root,
@@ -185,7 +193,7 @@ def main() -> None:
         return
 
     if args.command == "rd-equalized":
-        from .rd import run_group_equalized_rd
+        from gjxx.rd import run_group_equalized_rd
 
         run_group_equalized_rd(
             pattern_root=args.pattern_root,
@@ -198,7 +206,7 @@ def main() -> None:
         return
 
     if args.command == "rd-searchlight":
-        from .rd import run_rd_searchlight
+        from gjxx.rd import run_rd_searchlight
 
         run_rd_searchlight(
             input_img=args.input_img,
@@ -210,7 +218,7 @@ def main() -> None:
         return
 
     if args.command == "subject-scores":
-        from .group import get_subject_mean_scores
+        from gjxx.group import get_subject_mean_scores
 
         get_subject_mean_scores(
             events_root=args.events_root,
@@ -220,7 +228,7 @@ def main() -> None:
         return
 
     if args.command == "group-regression":
-        from .group import run_group_regression
+        from gjxx.group import run_group_regression
 
         run_group_regression(
             map_root=args.map_root,
@@ -235,4 +243,26 @@ def main() -> None:
         )
         return
 
+    _STAGE_DISPATCH = {
+        "roi-robustness": "gjxx.run_stage08_roi_robustness",
+        "remembered-forgotten": "gjxx.run_stage09_remembered_forgotten",
+        "memory-group": "gjxx.run_stage10_memory_group",
+        "behavior-pooling": "gjxx.run_stage11_behavior_pooling",
+        "dimension-searchlight": "gjxx.run_stage12_dimension_searchlight",
+        "seed-connectivity": "gjxx.run_stage13_seed_connectivity",
+    }
+
+    if args.command in _STAGE_DISPATCH:
+        import importlib
+        import sys
+        # The target module has its own argparse; pass remaining args through.
+        sys.argv = [sys.argv[0]] + remaining
+        module = importlib.import_module(_STAGE_DISPATCH[args.command])
+        module.main()
+        return
+
     raise ValueError(f"Unhandled command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()

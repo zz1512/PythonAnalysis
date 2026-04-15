@@ -4,28 +4,30 @@ import argparse
 import logging
 from pathlib import Path
 
-from dimension_analysis_core import DEFAULT_OUTPUT_ROOT, SUBJECTS, write_json, setup_logging
-from dimension_story_utils import (
+from gjxx.dimension_analysis_core import DEFAULT_EVENTS_DIR, DEFAULT_OUTPUT_ROOT, SUBJECTS, setup_logging, write_json
+from gjxx.dimension_story_utils import (
     DEFAULT_ALT_EVENTS_DIR,
     DEFAULT_HIPPOCAMPUS_LEFT_MASK,
     DEFAULT_RSA_ALL_DIR,
     run_behavioral_pooling_analysis,
 )
+from gjxx.runtime_config import load_config_json, pick_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert the behavioral item-sampling MATLAB scripts into Python."
+        description="Stage 13: pooled behavioral item analyses (MATLAB Dimension story)."
     )
-    parser.add_argument("--rsa-all-dir", type=Path, default=DEFAULT_RSA_ALL_DIR)
-    parser.add_argument("--roi-mask-path", type=Path, default=DEFAULT_HIPPOCAMPUS_LEFT_MASK)
-    parser.add_argument("--events-dir", type=Path, default=Path(r"I:\FLXX1\events"))
-    parser.add_argument("--alt-events-dir", type=Path, default=DEFAULT_ALT_EVENTS_DIR)
     parser.add_argument(
-        "--output-dir",
+        "--config-json",
         type=Path,
-        default=DEFAULT_OUTPUT_ROOT / "story_behavior_suite",
+        help="Optional config JSON. Priority: CLI > config > legacy preset.",
     )
+    parser.add_argument("--rsa-all-dir", type=Path, default=None)
+    parser.add_argument("--roi-mask-path", type=Path, default=None)
+    parser.add_argument("--events-dir", type=Path, default=None)
+    parser.add_argument("--alt-events-dir", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -36,6 +38,44 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    config = load_config_json(args.config_json)
+    args.rsa_all_dir = pick_path(
+        cli_value=args.rsa_all_dir,
+        config_payload=config,
+        config_key="rsa_all_dir",
+        preset_value=DEFAULT_RSA_ALL_DIR,
+    )
+    args.roi_mask_path = pick_path(
+        cli_value=args.roi_mask_path,
+        config_payload=config,
+        config_key="mask_left",
+        preset_value=DEFAULT_HIPPOCAMPUS_LEFT_MASK,
+    )
+    args.events_dir = pick_path(
+        cli_value=args.events_dir,
+        config_payload=config,
+        config_key="events_dir",
+        preset_value=DEFAULT_EVENTS_DIR,
+    )
+    args.alt_events_dir = pick_path(
+        cli_value=args.alt_events_dir,
+        config_payload=config,
+        config_key="alt_events_dir",
+        preset_value=DEFAULT_ALT_EVENTS_DIR,
+    )
+    output_root = pick_path(
+        cli_value=None,
+        config_payload=config,
+        config_key="output_root",
+        preset_value=DEFAULT_OUTPUT_ROOT,
+    )
+    # Keep legacy output folder name.
+    args.output_dir = pick_path(
+        cli_value=args.output_dir,
+        config_payload=config,
+        config_key="output_dir",
+        preset_value=output_root / "story_behavior_suite",
+    )
     setup_logging(args.log_level)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -90,13 +130,14 @@ def main() -> None:
     )
 
     summary = {
-        "task": "story_behavior_suite",
+        "task": "stage13_behavior_pooling",
         "output_dir": str(args.output_dir),
         "analyses": summaries,
     }
     write_json(args.output_dir / "summary.json", summary)
-    logging.info("Behavior suite finished. Summary written to %s", args.output_dir / "summary.json")
+    logging.info("Stage 13 finished. Summary written to %s", args.output_dir / "summary.json")
 
 
 if __name__ == "__main__":
     main()
+

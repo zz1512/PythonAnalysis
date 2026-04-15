@@ -1,4 +1,8 @@
+> 归档说明：此文档由 `gjxx/整体分析链路优化建议.md` 移入 `gjxx/docs/`，内容基本不改，仅用于历史参考。
+
 # 整体分析链路优化建议
+
+> NOTE: 本文档记录的是重构前的历史现状与建议，文件名示例（如 `run_story_*`、`run_*.py`、`memory_dimension_analysis.py`）可能已在后续迭代中按 `run_stageNN_*.py` 规范重命名。
 
 ## 1. 背景与结论
 

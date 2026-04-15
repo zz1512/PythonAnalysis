@@ -7,8 +7,8 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from .config import GlmSettings
-from .utils import (
+from gjxx.config import GlmSettings
+from gjxx.utils import (
     ensure_dir,
     infer_subject_mapping,
     list_bold_runs,
@@ -24,7 +24,7 @@ from .utils import (
 ItemGroupingFn = Callable[[pd.Series], str | None]
 
 
-@dataclass(slots=True)
+@dataclass
 class TrialMapRecord:
     subject: str
     run: int

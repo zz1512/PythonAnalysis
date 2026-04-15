@@ -16,7 +16,7 @@ except ImportError as exc:
         f"Original error: {exc}"
     )
 
-from dimension_analysis_core import (
+from gjxx.dimension_analysis_core import (
     DEFAULT_EVENTS_DIR,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_PATTERN_DIR,
@@ -33,13 +33,14 @@ from dimension_analysis_core import (
     write_csv,
     write_json,
 )
+from gjxx.legacy_presets import FLXX1_WINDOWS
 
 
-DEFAULT_HIPPOCAMPUS_LEFT_MASK = Path(r"I:\FLXX1\mask\Hippocampus_L.nii")
-DEFAULT_HIPPOCAMPUS_RIGHT_MASK = Path(r"I:\FLXX1\mask\Hippocampus_R.nii")
-DEFAULT_SEARCHLIGHT_MASK_ROOT = Path(r"L:\FLXX_1\mvpa\GLM_item_allexample")
-DEFAULT_RSA_ALL_DIR = Path(r"L:\FLXX_1\mvpa\GLM_item_allexample\rsa")
-DEFAULT_ALT_EVENTS_DIR = Path(r"L:\FLXX_1\First_level\get_onset\newdata_to_use")
+DEFAULT_HIPPOCAMPUS_LEFT_MASK = FLXX1_WINDOWS.mask_left
+DEFAULT_HIPPOCAMPUS_RIGHT_MASK = FLXX1_WINDOWS.mask_right
+DEFAULT_SEARCHLIGHT_MASK_ROOT = FLXX1_WINDOWS.searchlight_mask_root
+DEFAULT_RSA_ALL_DIR = FLXX1_WINDOWS.rsa_all_dir
+DEFAULT_ALT_EVENTS_DIR = FLXX1_WINDOWS.alt_events_dir
 
 
 def iter_thresholds(start: int, end: int) -> list[int]:
@@ -347,6 +348,8 @@ def run_roi_threshold_analysis(
         "threshold_summaries": threshold_summaries,
     }
     write_csv(output_dir / "subject_results.csv", subject_rows)
+    # Keep a stable, convention-friendly alias.
+    write_csv(output_dir / "subject_outputs.csv", subject_rows)
     write_csv(output_dir / "selection_details.csv", selection_rows)
     write_json(output_dir / "summary.json", summary)
     return summary

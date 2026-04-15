@@ -6,7 +6,7 @@ from typing import Any
 import json
 
 
-@dataclass(slots=True)
+@dataclass
 class StudyPaths:
     """Shared filesystem locations used throughout the pipeline."""
 
@@ -39,7 +39,7 @@ class StudyPaths:
         }
 
 
-@dataclass(slots=True)
+@dataclass
 class GlmSettings:
     tr: float = 2.0
     hrf_model: str = "spm"
@@ -50,7 +50,7 @@ class GlmSettings:
     minimize_memory: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class RdSettings:
     variance_threshold: float = 80.0
     equalized_iterations: int = 1000
@@ -59,7 +59,7 @@ class RdSettings:
     min_cluster_size: int = 5
 
 
-@dataclass(slots=True)
+@dataclass
 class StoryConfig:
     paths: StudyPaths
     glm: GlmSettings = field(default_factory=GlmSettings)

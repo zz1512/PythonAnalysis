@@ -6,7 +6,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 
-from .utils import ensure_dir, fisher_z_from_samples, mean_row_similarity, paired_t_summary, save_json, write_table
+from gjxx.utils import ensure_dir, fisher_z_from_samples, mean_row_similarity, paired_t_summary, save_json, write_table
 
 
 def _masked_samples(four_d_path: str | Path, mask_path: str | Path) -> np.ndarray:

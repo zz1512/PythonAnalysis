@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage, stats
 
-from .utils import ensure_dir, rank_transform, save_json, write_table, zscore
+from gjxx.utils import ensure_dir, rank_transform, save_json, write_table, zscore
 
 
 def get_subject_mean_scores(

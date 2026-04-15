@@ -6,10 +6,10 @@ from typing import Iterable
 
 import pandas as pd
 
-from .utils import ensure_dir, list_run_event_files, read_table, write_table
+from gjxx.utils import ensure_dir, list_run_event_files, read_table, write_table
 
 
-@dataclass(slots=True)
+@dataclass
 class ExtremeItemResult:
     pic_ids: list[int]
     summary: pd.DataFrame

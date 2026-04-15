@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from gjxx.legacy_presets import FLXX1_WINDOWS
+
 try:
     import nibabel as nib
     import numpy as np
@@ -46,11 +48,11 @@ SUBJECTS = [
 ]
 
 
-DEFAULT_PATTERN_DIR = Path(r"I:\FLXX1\Dimension\pattern")
-DEFAULT_PATTERNS_HLRF_DIR = Path(r"I:\FLXX1\First_level\patterns_hlrf")
-DEFAULT_EVENTS_DIR = Path(r"I:\FLXX1\events")
-DEFAULT_MASK_PATH = Path(r"I:\FLXX1\mask\Hippocampus_L.nii")
-DEFAULT_OUTPUT_ROOT = Path(r"I:\FLXX1\Dimension\python_results")
+DEFAULT_PATTERN_DIR = FLXX1_WINDOWS.pattern_dir
+DEFAULT_PATTERNS_HLRF_DIR = FLXX1_WINDOWS.patterns_hlrf_dir
+DEFAULT_EVENTS_DIR = FLXX1_WINDOWS.events_dir
+DEFAULT_MASK_PATH = FLXX1_WINDOWS.mask_left
+DEFAULT_OUTPUT_ROOT = FLXX1_WINDOWS.output_root
 
 
 @dataclass

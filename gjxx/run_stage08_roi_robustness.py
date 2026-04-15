@@ -4,8 +4,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from dimension_analysis_core import DEFAULT_OUTPUT_ROOT, DEFAULT_PATTERN_DIR, SUBJECTS, setup_logging, write_json
-from dimension_story_utils import (
+from gjxx.dimension_analysis_core import DEFAULT_OUTPUT_ROOT, DEFAULT_PATTERN_DIR, SUBJECTS, setup_logging, write_json
+from gjxx.dimension_story_utils import (
     DEFAULT_HIPPOCAMPUS_LEFT_MASK,
     DEFAULT_HIPPOCAMPUS_RIGHT_MASK,
     build_cross_subject_voxel_keep_vector,
@@ -13,20 +13,22 @@ from dimension_story_utils import (
     run_roi_threshold_analysis,
     save_roi_keep_vector,
 )
+from gjxx.runtime_config import load_config_json, pick_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert the main ROI MATLAB story into a consolidated Python ROI suite."
+        description="Stage 10: consolidated ROI dimensionality + robustness suite (MATLAB Dimension story)."
     )
-    parser.add_argument("--pattern-dir", type=Path, default=DEFAULT_PATTERN_DIR)
-    parser.add_argument("--left-mask-path", type=Path, default=DEFAULT_HIPPOCAMPUS_LEFT_MASK)
-    parser.add_argument("--right-mask-path", type=Path, default=DEFAULT_HIPPOCAMPUS_RIGHT_MASK)
     parser.add_argument(
-        "--output-dir",
+        "--config-json",
         type=Path,
-        default=DEFAULT_OUTPUT_ROOT / "story_roi_suite",
+        help="Optional config JSON. Priority: CLI > config > legacy preset.",
     )
+    parser.add_argument("--pattern-dir", type=Path, default=None)
+    parser.add_argument("--left-mask-path", type=Path, default=None)
+    parser.add_argument("--right-mask-path", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--voxel-alpha", type=float, default=0.05)
     parser.add_argument(
         "--log-level",
@@ -38,6 +40,38 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    config = load_config_json(args.config_json)
+    args.pattern_dir = pick_path(
+        cli_value=args.pattern_dir,
+        config_payload=config,
+        config_key="pattern_dir",
+        preset_value=DEFAULT_PATTERN_DIR,
+    )
+    args.left_mask_path = pick_path(
+        cli_value=args.left_mask_path,
+        config_payload=config,
+        config_key="mask_left",
+        preset_value=DEFAULT_HIPPOCAMPUS_LEFT_MASK,
+    )
+    args.right_mask_path = pick_path(
+        cli_value=args.right_mask_path,
+        config_payload=config,
+        config_key="mask_right",
+        preset_value=DEFAULT_HIPPOCAMPUS_RIGHT_MASK,
+    )
+    output_root = pick_path(
+        cli_value=None,
+        config_payload=config,
+        config_key="output_root",
+        preset_value=DEFAULT_OUTPUT_ROOT,
+    )
+    # Keep legacy output folder name to avoid surprising downstream scripts.
+    args.output_dir = pick_path(
+        cli_value=args.output_dir,
+        config_payload=config,
+        config_key="output_dir",
+        preset_value=output_root / "story_roi_suite",
+    )
     setup_logging(args.log_level)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,13 +195,14 @@ def main() -> None:
     )
 
     master_summary = {
-        "task": "story_roi_suite",
+        "task": "stage10_roi_robustness",
         "output_dir": str(args.output_dir),
         "analyses": summaries,
     }
     write_json(args.output_dir / "summary.json", master_summary)
-    logging.info("ROI story suite finished. Summary written to %s", args.output_dir / "summary.json")
+    logging.info("Stage 10 finished. Summary written to %s", args.output_dir / "summary.json")
 
 
 if __name__ == "__main__":
     main()
+

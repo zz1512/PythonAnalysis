@@ -4,7 +4,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from dimension_analysis_core import (
+from gjxx.dimension_analysis_core import (
     DEFAULT_EVENTS_DIR,
     DEFAULT_MASK_PATH,
     DEFAULT_OUTPUT_ROOT,
@@ -20,20 +20,22 @@ from dimension_analysis_core import (
     write_csv,
     write_json,
 )
+from gjxx.runtime_config import load_config_json, pick_path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Task 2: compare HSC vs LSC within memory-good and memory-poor subjects."
+        description="Stage 12: compare HSC vs LSC within memory-good and memory-poor subjects."
     )
-    parser.add_argument("--pattern-dir", type=Path, default=DEFAULT_PATTERN_DIR)
-    parser.add_argument("--events-dir", type=Path, default=DEFAULT_EVENTS_DIR)
-    parser.add_argument("--mask-path", type=Path, default=DEFAULT_MASK_PATH)
     parser.add_argument(
-        "--output-dir",
+        "--config-json",
         type=Path,
-        default=DEFAULT_OUTPUT_ROOT / "memory_group_dimension",
+        help="Optional config JSON. Priority: CLI > config > legacy preset.",
     )
+    parser.add_argument("--pattern-dir", type=Path, default=None)
+    parser.add_argument("--events-dir", type=Path, default=None)
+    parser.add_argument("--mask-path", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--explained-threshold", type=float, default=80.0)
     parser.add_argument("--min-trials", type=int, default=8)
     parser.add_argument("--good-memory-threshold", type=float, default=0.2)
@@ -47,6 +49,37 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    config = load_config_json(args.config_json)
+    args.pattern_dir = pick_path(
+        cli_value=args.pattern_dir,
+        config_payload=config,
+        config_key="pattern_dir",
+        preset_value=DEFAULT_PATTERN_DIR,
+    )
+    args.events_dir = pick_path(
+        cli_value=args.events_dir,
+        config_payload=config,
+        config_key="events_dir",
+        preset_value=DEFAULT_EVENTS_DIR,
+    )
+    args.mask_path = pick_path(
+        cli_value=args.mask_path,
+        config_payload=config,
+        config_key="mask_left",
+        preset_value=DEFAULT_MASK_PATH,
+    )
+    output_root = pick_path(
+        cli_value=None,
+        config_payload=config,
+        config_key="output_root",
+        preset_value=DEFAULT_OUTPUT_ROOT,
+    )
+    args.output_dir = pick_path(
+        cli_value=args.output_dir,
+        config_payload=config,
+        config_key="output_dir",
+        preset_value=output_root / "memory_group_dimension",
+    )
     setup_logging(args.log_level)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -117,6 +150,8 @@ def main() -> None:
     rows.extend(subject_dimension_rows(grouped_records["good"].records, "memory_group", "good"))
     rows.extend(subject_dimension_rows(grouped_records["poor"].records, "memory_group", "poor"))
     write_csv(args.output_dir / "memory_group_dimensions.csv", rows)
+    # Convention-friendly alias.
+    write_csv(args.output_dir / "subject_outputs.csv", rows)
     selection_rows = []
     selection_rows.extend(
         {
@@ -161,7 +196,7 @@ def main() -> None:
 
     logging.info("Memory-good HSC vs LSC: %s", good_stats)
     logging.info("Memory-poor HSC vs LSC: %s", poor_stats)
-    logging.info("Task 2 outputs written to %s", args.output_dir)
+    logging.info("Stage 12 outputs written to %s", args.output_dir)
 
 
 if __name__ == "__main__":
