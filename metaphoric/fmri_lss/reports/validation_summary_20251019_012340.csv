@@ -1,0 +1,2 @@
+﻿csv_total_files,csv_valid_files,csv_insufficient_rows,csv_missing_files,csv_error_files,beta_total_files,beta_valid_files,beta_invalid_files,beta_missing_files,beta_nan_issue_files,beta_zero_issue_files,total_subjects,total_runs,valid_subjects,problematic_subjects
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,[]
