@@ -1,162 +1,194 @@
-# Memory Dimension Analysis README
+# Dimension Story Python README
 
-## 1. Purpose
+## 1. Goal
 
-This Python codebase rebuilds the current MATLAB analysis logic in a cleaner form and splits it into two separate tasks.
+This folder now contains a fuller Python conversion of the MATLAB analysis story in `I:\FLXX1\Dimension`.
 
-Task 1:
-- extend the existing remembered-only analysis to forgotten trials
-- compare `HSC` vs `LSC` dimensionality within remembered trials
-- compare `HSC` vs `LSC` dimensionality within forgotten trials
+The code is organized by analysis stage instead of by many one-off scripts:
 
-Task 2:
-- compute memory accuracy for each subject
-- split subjects into `memory-good` and `memory-poor`
-- compare `HSC` vs `LSC` dimensionality within each subject group
+1. remembered / forgotten ROI analysis
+2. memory-good / memory-poor ROI analysis
+3. main ROI dimensionality and robustness analyses
+4. pooled behavioral item analyses
+5. whole-brain dimensionality searchlight
+6. hippocampal seed PCA-connectivity searchlight
 
 
-## 2. Main Files
+## 2. Main Python Files
 
 - [dimension_analysis_core.py](/I:/FLXX1/Dimension/dimension_analysis_core.py:1)
-  - shared functions
-  - contains data loading, ROI extraction, RDM computation, PCA-based dimensionality, memory accuracy calculation, subject filtering, statistics, and result writing
+  - shared functions for the two previously built ROI tasks
+  - handles mask loading, NIfTI loading, event reading, RDM dimensionality, paired t-tests, `R^2`, CSV / JSON writing
+
+- [dimension_story_utils.py](/I:/FLXX1/Dimension/dimension_story_utils.py:1)
+  - shared functions for the full research-story conversion
+  - adds pattern-PCA dimensionality, same-trial resampling, demean logic, cross-subject voxel filtering, behavioral pooling, searchlight generation, and group-level map statistics
 
 - [run_remembered_forgotten_dimension.py](/I:/FLXX1/Dimension/run_remembered_forgotten_dimension.py:1)
-  - Task 1 entry script
-  - remembered vs forgotten analysis
+  - task 1
+  - extends the remembered-only MATLAB logic to forgotten trials
 
 - [run_memory_group_dimension.py](/I:/FLXX1/Dimension/run_memory_group_dimension.py:1)
-  - Task 2 entry script
-  - memory-good vs memory-poor grouped analysis
+  - task 2
+  - splits subjects into memory-good / memory-poor and compares `HSC` vs `LSC` within each group
+
+- [run_story_roi_suite.py](/I:/FLXX1/Dimension/run_story_roi_suite.py:1)
+  - main ROI suite
+  - consolidates the core ROI MATLAB scripts and major robustness checks
+
+- [run_story_behavior_suite.py](/I:/FLXX1/Dimension/run_story_behavior_suite.py:1)
+  - converts the pooled item-score exploratory scripts
+
+- [run_story_searchlight_suite.py](/I:/FLXX1/Dimension/run_story_searchlight_suite.py:1)
+  - converts `searchlight_RD.m`, `my_var_measure.m`, and the paired group map step
+
+- [run_story_connectivity_suite.py](/I:/FLXX1/Dimension/run_story_connectivity_suite.py:1)
+  - converts `stage1_pca_conn_searchlight.m` and `my_measure.m`
 
 - [memory_dimension_analysis.py](/I:/FLXX1/Dimension/memory_dimension_analysis.py:1)
-  - lightweight wrapper
-  - just reminds you which task scripts to run
-
-- [requirements_memory_dimension.txt](/I:/FLXX1/Dimension/requirements_memory_dimension.txt:1)
-  - minimal dependency list
+  - lightweight launcher help
+  - prints the full list of entry scripts and their MATLAB mapping
 
 
-## 3. Current Fixed Data Paths
+## 3. Fixed Data Paths
 
-These defaults are written as absolute paths on purpose. Even if you move the Python scripts into another project folder, they still point to the current project data unless you override them with command-line arguments.
+These defaults are written as absolute paths so the scripts still point to the current project data even if you move the Python files into another project folder.
 
-- pattern directory:
+- main pattern directory:
   - `I:\FLXX1\Dimension\pattern`
 
-- remembered/forgotten single-trial directory:
+- remembered / forgotten single-trial directory:
   - `I:\FLXX1\First_level\patterns_hlrf`
 
 - event directory:
   - `I:\FLXX1\events`
 
-- ROI mask:
+- left hippocampus mask:
   - `I:\FLXX1\mask\Hippocampus_L.nii`
+
+- right hippocampus mask:
+  - `I:\FLXX1\mask\Hippocampus_R.nii`
+
+- subject-specific searchlight masks:
+  - `L:\FLXX_1\mvpa\GLM_item_allexample\sub-XX\mask.nii`
+
+- pooled item `glm_T_all.nii` directory:
+  - `L:\FLXX_1\mvpa\GLM_item_allexample\rsa`
+
+- alternative behavior event directory used in `Untitled2.m` / `Untitled3.m`:
+  - `L:\FLXX_1\First_level\get_onset\newdata_to_use`
 
 - output root:
   - `I:\FLXX1\Dimension\python_results`
 
 
-## 4. How Memory Results Are Read
+## 4. MATLAB to Python Mapping
 
-The subject-level memory result is read exactly from:
+### 4.1 Remembered / forgotten
 
-- `I:\FLXX1\events\sub-XX\sub-XX_run-1_events.txt`
-- `I:\FLXX1\events\sub-XX\sub-XX_run-2_events.txt`
-- `I:\FLXX1\events\sub-XX\sub-XX_run-3_events.txt`
-- `I:\FLXX1\events\sub-XX\sub-XX_run-4_events.txt`
-
-Current logic:
-
-1. match files using:
-   - `sub-XX_run-*_events.txt`
-2. only keep rows where:
-   - `trial_type == "e"`
-3. read the `memory` column:
-   - `memory == 1` means remembered
-   - `memory == -1` means forgotten
-4. ignore all other rows and all other memory codes
-
-The code also checks whether each subject has exactly 4 event files and prints a warning if not.
-
-
-## 5. Dimensionality Logic
-
-The dimensionality metric follows the main MATLAB logic as closely as possible.
-
-For each condition:
-
-1. extract a `trial x voxel` matrix within the ROI
-2. compute the trial-by-trial correlation-distance RDM
-3. run PCA on the RDM matrix
-4. return the first dimension count whose cumulative explained variance exceeds the threshold
-
-Default explained variance threshold:
-
-- `80%`
-
-This is meant to match the spirit of scripts such as:
-
+MATLAB source:
 - [only_consider_remembered_items.m](/I:/FLXX1/Dimension/only_consider_remembered_items.m:1)
+
+Python:
+- [run_remembered_forgotten_dimension.py](/I:/FLXX1/Dimension/run_remembered_forgotten_dimension.py:1)
+
+### 4.2 Memory-good / memory-poor
+
+MATLAB source:
+- no single clean MATLAB entry script existed; this Python task formalizes the grouped ROI comparison
+
+Python:
+- [run_memory_group_dimension.py](/I:/FLXX1/Dimension/run_memory_group_dimension.py:1)
+
+### 4.3 Main ROI dimensionality and robustness
+
+MATLAB sources:
+- [hl_patternbutnotrdm.m](/I:/FLXX1/Dimension/hl_patternbutnotrdm.m:1)
 - [hl.m](/I:/FLXX1/Dimension/hl.m:1)
+- [demeantest.m](/I:/FLXX1/Dimension/demeantest.m:1)
+- [demeantest2.m](/I:/FLXX1/Dimension/demeantest2.m:1)
+- [get_voxel_mask.m](/I:/FLXX1/Dimension/get_voxel_mask.m:1)
+- [sametrialnumber_maskvoxel.m](/I:/FLXX1/Dimension/sametrialnumber_maskvoxel.m:1)
+- [sametrialnumber_first_3_pc.m](/I:/FLXX1/Dimension/sametrialnumber_first_3_pc.m:1)
+
+Python:
+- [run_story_roi_suite.py](/I:/FLXX1/Dimension/run_story_roi_suite.py:1)
+
+### 4.4 Behavioral pooling
+
+MATLAB sources:
+- [across_sub_dim.m](/I:/FLXX1/Dimension/across_sub_dim.m:1)
+- [Untitled2.m](/I:/FLXX1/Dimension/Untitled2.m:1)
+- [Untitled3.m](/I:/FLXX1/Dimension/Untitled3.m:1)
+
+Python:
+- [run_story_behavior_suite.py](/I:/FLXX1/Dimension/run_story_behavior_suite.py:1)
+
+### 4.5 Whole-brain searchlight
+
+MATLAB sources:
+- [searchlight_RD.m](/I:/FLXX1/Dimension/searchlight_RD.m:1)
+- [my_var_measure.m](/I:/FLXX1/Dimension/my_var_measure.m:1)
+- [pairedttest.m](/I:/FLXX1/Dimension/pairedttest.m:1)
+
+Python:
+- [run_story_searchlight_suite.py](/I:/FLXX1/Dimension/run_story_searchlight_suite.py:1)
+
+### 4.6 Seed connectivity searchlight
+
+MATLAB sources:
+- [stage1_pca_conn_searchlight.m](/I:/FLXX1/Dimension/stage1_pca_conn_searchlight.m:1)
+- [my_measure.m](/I:/FLXX1/Dimension/my_measure.m:1)
+
+Python:
+- [run_story_connectivity_suite.py](/I:/FLXX1/Dimension/run_story_connectivity_suite.py:1)
 
 
-## 6. Remembered / Forgotten Mapping
+## 5. Core Logic Notes
 
-Task 1 uses the following file prefixes under:
+### 5.1 Event reading
 
-- `I:\FLXX1\First_level\patterns_hlrf\sub-XX`
+Memory accuracy uses:
+- `sub-XX_run-1_events.txt`
+- `sub-XX_run-2_events.txt`
+- `sub-XX_run-3_events.txt`
+- `sub-XX_run-4_events.txt`
 
-Remembered:
-- `HSC_rspmT_*.nii`
-- `LSC_rspmT_*.nii`
+Rules:
+- only keep `trial_type == "e"`
+- `memory == 1` means remembered
+- `memory == -1` means forgotten
 
-Forgotten:
-- `HSC_fspmT_*.nii`
-- `LSC_fspmT_*.nii`
+### 5.2 Dimensionality metrics
 
+Two ROI dimensionality styles are used because the MATLAB code uses both:
 
-## 7. Memory-Good / Memory-Poor Grouping
+1. `pattern` mode
+   - direct PCA on the `voxel x trial` matrix
+   - used for scripts like `hl_patternbutnotrdm.m`
 
-Task 2 computes each subject's memory accuracy from the event files.
+2. `rdm` mode
+   - build the trial-by-trial correlation-distance RDM
+   - run PCA on the RDM
+   - used for scripts like `hl.m`, `only_consider_remembered_items.m`, and the searchlight dimension story
 
-Default rule:
+### 5.3 Trial equalization
 
-- accuracy `> 0.5` -> `memory-good`
-- accuracy `<= 0.5` -> `memory-poor`
+The ROI suite supports:
+- `all`
+  - use all trials
+- `min`
+  - equalize to the smaller condition count within subject
+- `fixed`
+  - equalize to a fixed trial count such as 20 or 25
 
-Important:
+Random equalization follows the MATLAB style:
+- repeated subsampling without replacement
+- average the metric across 1000 resamples by default
 
-- after grouping, dimensionality is still computed subject by subject
-- then a paired `HSC vs LSC` comparison is performed within each group
-- the code does not pool all subjects' trials into one huge matrix
+### 5.4 Effect size
 
-
-## 8. Trial Count Filtering
-
-Both Task 1 and Task 2 now use a `min_trials` filter.
-
-Default:
-
-- `min_trials = 8`
-
-Meaning:
-
-- if a subject has fewer than 8 trials in either `HSC` or `LSC` for the relevant analysis, that subject is excluded from that analysis
-
-Important distinction:
-
-1. `min_trials` is an analysis rule
-2. there is also a mathematical lower bound:
-   - at least 2 valid trials are required to build an RDM
-
-So even if you set `min_trials=0`, the code can still skip a subject if fewer than 2 valid trials remain for dimensionality estimation.
-
-
-## 9. Effect Size
-
-The statistical summary includes:
-
+All paired ROI summaries report:
 - `n_subjects`
 - `degrees_of_freedom`
 - `t_stat`
@@ -165,149 +197,140 @@ The statistical summary includes:
 - `mean_hsc`
 - `mean_lsc`
 
-`r_squared` is computed from the paired t-test as:
+`r_squared` is computed as:
 
 ```text
-R² = t² / (t² + df)
+R^2 = t^2 / (t^2 + df)
 ```
 
-This matches your current reporting preference that emphasizes `R²`.
+
+## 6. What `run_story_roi_suite.py` Includes
+
+The ROI suite writes one subfolder per analysis stage:
+
+- `hl_patternbutnotrdm`
+  - left hippocampus
+  - threshold sweep `70:80`
+  - direct pattern PCA
+
+- `hl_rdm_baseline`
+  - right hippocampus
+  - threshold `80`
+  - RDM-based PCA
+
+- `sametrial_rdm_fixed20`
+  - left hippocampus
+  - fixed `20` trials
+  - threshold sweep `70:80`
+  - RDM-based PCA
+
+- `demean_pattern_min`
+  - left hippocampus
+  - demean after concatenating HSC and LSC
+  - equalize to the smaller condition count
+  - threshold sweep `70:90`
+
+- `demean_pattern_fixed25`
+  - left hippocampus
+  - demean after concatenating HSC and LSC
+  - fixed `25` trials
+  - threshold sweep `70:90`
+
+- `cross_subject_voxel_mask`
+  - builds a voxel keep-mask using a paired HSC vs LSC voxel-wise test across subjects
+
+- `voxelmask_pattern_fixed20`
+  - left hippocampus
+  - apply the cross-subject voxel mask
+  - fixed `20` trials
+  - threshold sweep `70:80`
+
+- `pc_window_3_5_fixed20`
+  - left hippocampus
+  - fixed `20` trials
+  - uses the summed explained variance from PCs `3:5`
 
 
-## 10. Installation
-
-Install dependencies first:
+## 7. Installation
 
 ```bash
 pip install -r I:\FLXX1\Dimension\requirements_memory_dimension.txt
 ```
 
-Current dependencies:
-
+Dependencies:
 - `numpy`
 - `scipy`
 - `nibabel`
 
 
-## 11. How To Run
+## 8. How To Run
 
-### Task 1
-
-```bash
-python run_remembered_forgotten_dimension.py ^
-  --patterns-hlrf-dir I:\FLXX1\First_level\patterns_hlrf ^
-  --mask-path I:\FLXX1\mask\Hippocampus_L.nii ^
-  --output-dir I:\FLXX1\Dimension\python_results\remembered_forgotten_dimension ^
-  --min-trials 8
-```
-
-### Task 2
+### 8.1 Custom tasks already built
 
 ```bash
-python run_memory_group_dimension.py ^
-  --pattern-dir I:\FLXX1\Dimension\pattern ^
-  --events-dir I:\FLXX1\events ^
-  --mask-path I:\FLXX1\mask\Hippocampus_L.nii ^
-  --output-dir I:\FLXX1\Dimension\python_results\memory_group_dimension ^
-  --min-trials 8
+python I:\FLXX1\Dimension\run_remembered_forgotten_dimension.py
+python I:\FLXX1\Dimension\run_memory_group_dimension.py --good-memory-threshold 0.2
 ```
 
-### Show available arguments
+### 8.2 Full ROI story
 
 ```bash
-python run_remembered_forgotten_dimension.py --help
-python run_memory_group_dimension.py --help
+python I:\FLXX1\Dimension\run_story_roi_suite.py
+```
+
+### 8.3 Behavioral pooling
+
+```bash
+python I:\FLXX1\Dimension\run_story_behavior_suite.py
+```
+
+### 8.4 Whole-brain searchlight
+
+```bash
+python I:\FLXX1\Dimension\run_story_searchlight_suite.py
+```
+
+### 8.5 Seed connectivity searchlight
+
+```bash
+python I:\FLXX1\Dimension\run_story_connectivity_suite.py
 ```
 
 
-## 12. Outputs
+## 9. Outputs
 
-### Task 1 output folder
+Each entry script writes to its own subfolder under:
 
-- `I:\FLXX1\Dimension\python_results\remembered_forgotten_dimension`
+- `I:\FLXX1\Dimension\python_results`
 
-Files:
-
-- `remembered_forgotten_dimensions.csv`
-  - subject-level dimensionality results for remembered and forgotten analyses
-
-- `selection_details.csv`
-  - inclusion/exclusion list for remembered and forgotten analyses
-  - shows which subjects were included
-  - shows which subjects were excluded due to trial count
-
+Common output files:
 - `summary.json`
-  - task configuration
-  - included subject IDs
-  - excluded subject details
-  - remembered `HSC vs LSC` statistics
-  - forgotten `HSC vs LSC` statistics
+- `subject_results.csv` or `subject_outputs.csv`
+- `selection_details.csv` when subject inclusion / exclusion matters
+
+Searchlight suites additionally write:
+- subject-level NIfTI maps
+- group-level paired `t`, `p`, `R^2`, mean-difference maps
 
 
-### Task 2 output folder
+## 10. Current Boundaries
 
-- `I:\FLXX1\Dimension\python_results\memory_group_dimension`
+This conversion is designed to preserve the main MATLAB logic while making the workflow easier to maintain.
 
-Files:
+What is preserved:
+- main paths
+- major masks
+- main dimensionality definitions
+- same-trial resampling logic
+- demean logic
+- voxel-filter logic
+- searchlight / group-map workflow structure
 
-- `subject_memory_accuracy.csv`
-  - subject-level memory accuracy and memory-good / memory-poor assignment
+What is intentionally cleaned up:
+- many scratch scripts are merged into a smaller number of clearer Python entry points
+- outputs are written as CSV / JSON instead of scattered `.mat` snapshots
+- subject inclusion is logged explicitly
 
-- `memory_group_dimensions.csv`
-  - subject-level dimensionality results within the two memory groups
-
-- `selection_details.csv`
-  - inclusion/exclusion list for `memory-good` and `memory-poor`
-  - shows which subjects were included in each group analysis
-  - shows which subjects were excluded due to trial count
-
-- `summary.json`
-  - task configuration
-  - original memory-good / memory-poor subject IDs from the behavioral grouping step
-  - final included subject IDs after dimensionality filtering
-  - excluded subject details
-  - `memory-good` group `HSC vs LSC` statistics
-  - `memory-poor` group `HSC vs LSC` statistics
-
-
-## 13. Logging
-
-The scripts print:
-
-- subject-level memory accuracy
-- memory-good subject IDs
-- memory-poor subject IDs
-- final included subject IDs for each analysis
-- subject IDs excluded because trial count is below `min_trials`
-- subject IDs excluded because dimensionality estimation failed
-
-This is meant to make subject inclusion transparent.
-
-
-## 14. Current Scope
-
-What the code currently does:
-
-- reproduces the ROI-based dimensionality logic
-- extends remembered-only analysis to forgotten trials
-- supports subject grouping by memory ability
-- reports paired t-tests and `R²`
-- records inclusion/exclusion details
-
-What it does not do yet:
-
-- direct between-group comparison between memory-good and memory-poor
-- searchlight analysis
-- automatic Chinese report writing
-- multi-ROI batch runs
-
-
-## 15. Suggested Next Steps
-
-If you continue extending this workflow, the most useful next upgrades would be:
-
-1. add a small reporting script that converts `summary.json` into a human-readable result note
-2. add multi-ROI support
-3. add a command-line option to save subject-level HSC-LSC differences
-4. add a compact QC report for trial counts before analysis
-
+What still needs empirical verification:
+- the Python code has been syntax-checked, but not every heavy analysis has been run end-to-end in this environment
+- searchlight and connectivity steps are computationally expensive and should be validated on one subject first before a full batch run
