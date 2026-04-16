@@ -14,7 +14,7 @@
 
 ### 一句话故事
 
-隐喻概念学习不仅改变了脑区的激活强度，更深层地重组了多变量编码模式和表征几何结构；这种多层次重组在空间概念学习中不存在，并且跨层次地预测了行为学习效果。
+隐喻联结学习不仅改变了脑区的激活强度，更深层地重组了多变量编码模式和表征几何结构；这种多层次重组在空间联结学习中显著减弱，而在不参与学习的基线条件中不存在——证明是学习驱动的而非重复暴露效应。这种重组跨层次地预测了行为学习效果。
 
 ### 叙事逻辑链
 
@@ -23,6 +23,8 @@
     ↓             ↓              ↓             ↓
 记忆优势    GLM条件效应    MVPA可解码性    RSA/RD/GPS重组
     └─────────────── 脑-行为关联 ──────────────┘
+                         ↑
+              baseline控制：排除重测效应
 ```
 
 ***
@@ -36,9 +38,22 @@
 | Run 5-6 | 后测 (Post-test)  | RSA/RD/GPS 后测 + 后测MVPA      |
 | Run 7   | 记忆测试            | 行为数据                        |
 
-- 被试：28人（sub-01至sub-28），排除sub-14和sub-24后有效26人
-- 条件：yy（隐喻）vs kj（空间控制）
-- 核心对比：2（条件）× 2（时间：pre vs post）被试内设计
+- 被试：28人（sub-01至sub-28），被试排除标准需统一（见下方问题清单）
+- **条件：3个水平**——yy（隐喻联结）、kj（空间联结）、baseline（不联结基线）
+- **材料**：40隐喻词对(80词) + 40空间词对(80词) + 20基线词对(40词) + 干扰假词(80词)
+- 核心对比：3（条件）× 2（时间：pre vs post）被试内设计
+- **注意**：baseline条件**不参与学习（Run3-4）和回忆（Run7）**，仅出现在前后测（Run1-2, 5-6）中，是关键的"无学习"控制条件
+
+### 各Run的详细条件构成
+
+| Run | 阶段 | 材料构成 | 任务 | 条件 |
+|-----|------|---------|------|------|
+| Run 1-2 | 前测 | 240词 = 80yy + 80kj + 40baseline + 40假词 | 真假词判断 | yy/kj/baseline/fake |
+| Run 3 | 第一遍学习 | 80句 = 40隐喻句 + 40空间句 | 理解判断(5s) | yy/kj |
+| Run 4 | 第二遍学习 | 80句 = 同Run3内容不同顺序 | 喜好判断(5s) | yy/kj |
+| Run 5-6 | 后测 | 240词 = 80yy + 80kj + 40baseline + 40新假词 | 真假词判断 | yy/kj/baseline/fake |
+| Run 7 | 回忆 | 160词 = 80yy线索 + 80kj线索 | 回忆判断 | yy/kj |
+| Stage6 | 行为后测 | 问卷 | 回忆填写+评分 | 非fMRI |
 
 ***
 
@@ -57,6 +72,179 @@
 | mPFC | 球形ROI [0, 52, -6]，参考Subramaniam et al. (2013) | 效价调节、中介分析 |
 | L-STS / R-STS | Harvard-Oxford Atlas | 偏侧化分析 |
 | dACC / AI | Harvard-Oxford Atlas | 突显网络、有效连接 |
+
+***
+
+# ⚠️ 实验流程审查：关键问题与修正方案
+
+> 以下问题来自实验流程文档与当前方案/代码的系统交叉审查。**问题A和B为严重级别，影响研究结论的可靠性，必须在运行分析前修正。**
+
+## 问题A（严重）：baseline基线条件完全遗漏
+
+### 问题描述
+
+实验设计是 **3条件**（隐喻联结yy / 空间联结kj / 不联结baseline），但当前方案和几乎全部代码（15/19个文件）都只假设了2个条件（yy/kj），**完全遗漏了baseline条件**。
+
+baseline是实验设计中的关键控制条件——它不参与学习，因此前后测中的表征变化应为零或最小值。如果没有baseline作为对照，无法区分yy/kj的表征变化是"学习效应"还是"重复测量效应（如重复抑制、熟悉度变化等）"。
+
+### 影响范围
+
+| 文件 | 当前状态 | 需要修正 |
+|------|---------|---------|
+| `common/final_utils.py` → `difference_in_differences()` | 只支持yy vs kj | 需扩展为3条件，或增加baseline对比 |
+| `representation_analysis/stack_patterns.py` → `CONDITION_MAP` | 只映射yy/kj | 需添加baseline映射 |
+| `representation_analysis/gps_analysis.py` | 硬编码 `for condition in ["yy", "kj"]` | 需添加baseline |
+| `representation_analysis/rd_analysis.py` | 同上 | 需添加baseline |
+| `rsa_analysis/cross_roi_rsa.py` | 同上 | 需添加baseline |
+| `rsa_analysis/model_rdm_comparison.py` | 同上 | 需添加baseline |
+| `rsa_analysis/rsa_config.py` | 只有2个对比的ROI | 需考虑是否需要yy-baseline, kj-baseline对比的ROI |
+| `fmri_rsa/fmri_rsa_pipline.py` | `self.conditions = ['yy', 'kj']` | 需添加baseline（仅前后测） |
+| `fmri_mvpa/cross_phase_decoding.py` | 只加载yy/kj | 可选添加baseline |
+| `fmri_mvpa/mvpa_pre_post_comparison.py` | 只分类yy vs kj | 可选增加3-class分类 |
+
+### 修正方案
+
+**核心原则**：baseline在不同分析阶段的角色不同
+
+- **前后测（Run1-2, 5-6）**：baseline是完整的第3个条件，必须纳入RSA/RD/GPS分析
+- **学习阶段（Run3-4）**：baseline不存在，2条件设计正确
+- **回忆（Run7）**：baseline不存在，2条件设计正确
+
+**分析策略**：
+
+1. **主分析**：保持 yy vs kj 的直接对比（论文的核心故事）
+2. **关键控制分析**：增加 baseline 的前后测变化作为"无学习"对照
+   - `Δ_yy = post_yy - pre_yy`（隐喻学习效应）
+   - `Δ_kj = post_kj - pre_kj`（空间学习效应）
+   - `Δ_baseline = post_baseline - pre_baseline`（重测效应/零假设）
+   - 核心检验：`Δ_yy > Δ_baseline` 且 `Δ_kj > Δ_baseline`（学习效应超过重测）
+   - 进一步检验：`(Δ_yy - Δ_baseline) > (Δ_kj - Δ_baseline)`（隐喻学习特异性超过空间学习）
+
+**具体修改清单**：
+
+1. `final_utils.py`：扩展 `difference_in_differences()` 支持3条件，增加 `three_condition_anova()` 函数
+2. `stack_patterns.py`：`CONDITION_MAP` 增加 `{"baseline": "baseline", "bl": "baseline", ...}`
+3. 所有前后测分析脚本（gps, rd, cross_roi_rsa, model_rdm等）：条件循环从 `["yy", "kj"]` 改为 `["yy", "kj", "baseline"]`
+4. 统计方案：从2×2 ANOVA升级为 **3（条件）× 2（时间）重复测量ANOVA**，配合事后两两比较
+
+## 问题B（严重）：前后测GLM分析缺失
+
+### 问题描述
+
+当前GLM分析（`glm_config.py`的`RUNS=[3,4]`）**只分析学习阶段**，完全未覆盖前测（Run1-2）和后测（Run5-6）。
+
+缺少前后测GLM意味着：
+1. 无法检验学习前后**激活水平**的变化（只有表征层面的RSA/RD/GPS，缺少Layer 1的纵向证据）
+2. 无法生成前后测阶段的condition对比map
+3. 无法做 GLM层面的 post > pre 交互效应
+
+### 修正方案
+
+**新增前后测GLM分析**：
+
+1. 在`glm_config.py`中新增前后测配置：
+   - `PRE_POST_RUNS = [1, 2, 5, 6]`
+   - 前后测对比增加：`"yy_gt_baseline"`, `"kj_gt_baseline"`, `"learning_gt_baseline": "(yy + kj)/2 - baseline"`
+2. 二阶分析增加：
+   - 前后测配对t检验：`post_yy > pre_yy`, `post_kj > pre_kj`, `post_baseline > pre_baseline`
+   - 交互效应：`(post_yy - pre_yy) - (post_baseline - pre_baseline)`
+3. 🔴 需修改 `glm_config.py` 和 `main_analysis.py` 支持多阶段GLM
+
+## 问题C（中等）：被试排除标准不统一
+
+### 问题描述
+
+不同文件的被试列表不一致：
+- `glm_config.py`：28人（sub-01~28）
+- `rsa_config.py`：28人
+- `fmri_rsa_pipline.py`：26人（排除sub-14, sub-24）
+- 行为分析暗示sub-12无数据
+
+### 修正方案
+
+1. 在 `final_utils.py` 或新建 `common/subjects.py` 中定义**唯一的被试排除列表**
+2. 排除标准文档化：说明每个被试的排除原因（数据缺失/头动过大/行为异常等）
+3. 所有脚本从统一配置读取被试列表
+
+## 问题D（中等）：前后测行为分析缺失
+
+### 问题描述
+
+`getAccuracyScore.py` 只分析Run7回忆数据。但前测（Run1-2）和后测（Run5-6）也有**真假词判断的正确率和反应时**行为数据，这些数据完全未被分析。
+
+### 修正方案
+
+1. 🔴 需新建 `behavior_analysis/prepost_behavior.py`
+   - 分析前后测的真假词判断正确率和反应时
+   - **3条件（yy/kj/baseline）× 2时间（pre/post）** 重复测量ANOVA
+   - 排除假词trials
+   - 关键检验：学习后yy和kj的反应时是否加快（语义启动效应），baseline是否无变化
+
+## 问题E（中等）：前后测的假词trials处理策略不明确
+
+### 问题描述
+
+前后测各有40个假词，这些假词在events文件中是独立的trial_type。当前LSS代码（`run_lss.py`）会为**所有trial_type**生成beta map（包括假词）。后续RSA/RD/GPS分析是否需要排除假词beta？
+
+### 修正方案
+
+1. 在 `stack_patterns.py` 中添加 `EXCLUDE_CONDITIONS = ["fake", "jia", ...]`（假词相关标签）
+2. 确保LSS生成所有trial的beta（保持完整性），但下游分析只使用真词条件的beta
+3. 在文档中明确记录假词的处理策略
+
+## 问题F（低）：Run3和Run4的任务差异未被利用
+
+### 问题描述
+
+Run3（理解判断）和Run4（喜好判断）虽然刺激内容相同，但**任务要求不同**。当前方案将Run3和Run4合并为"学习阶段"统一分析，未利用两个run之间的任务差异。
+
+### 修正方案
+
+作为补充分析，可以比较Run3 vs Run4的：
+- MVPA分类准确率（理解任务 vs 喜好任务下的条件可区分性）
+- RSA表征距离（两次学习是否产生了渐进的表征变化）
+- 这与"补充E. 学习阶段时间窗分析"自然整合
+
+## 问题G（低）：Stage6行为后测数据未纳入分析
+
+### 问题描述
+
+Stage6收集了被试的回忆填写、回忆程度评分（1-7级），以及是否在后测中自发回忆了对应词。这些数据可以作为个体差异变量：
+- 回忆程度评分 → 可作为RSA模型RDM中的"记忆强度模型"
+- 后测中是否自发回忆 → 可按trial筛选（回忆 vs 未回忆）做条件分析
+
+### 修正方案
+
+1. 在 `model_rdm_comparison.py` 的模型RDM中增加 **M5: 记忆强度模型**（基于Stage6的1-7级回忆程度评分）
+2. 可选：将后测trials按"是否自发回忆"拆分，比较回忆trial和未回忆trial的神经表征差异
+
+***
+
+# 脚本修改清单（按优先级）
+
+## 必须修改的现有脚本（对应问题A-E）
+
+| 优先级 | 脚本 | 修改内容 | 对应问题 |
+|--------|------|---------|---------|
+| **P0** | `common/final_utils.py` | `difference_in_differences()` 支持3条件；新增 `three_condition_anova()` | A |
+| **P0** | `representation_analysis/stack_patterns.py` | `CONDITION_MAP` 添加baseline；`PHASE_MAP` 添加recall；增加假词排除逻辑 | A, E, F |
+| **P0** | `representation_analysis/gps_analysis.py` | 条件循环添加baseline；统计升级为3×2 ANOVA | A |
+| **P0** | `representation_analysis/rd_analysis.py` | 同上 | A |
+| **P0** | `rsa_analysis/cross_roi_rsa.py` | 条件循环添加baseline | A |
+| **P0** | `rsa_analysis/model_rdm_comparison.py` | 条件模型升级为3条件 | A |
+| **P1** | `glm_analysis/glm_config.py` | 新增前后测Run配置和3条件对比 | B |
+| **P1** | `glm_analysis/main_analysis.py` | 支持前后测GLM + 交互效应分析 | B |
+| **P1** | `rsa_analysis/rsa_config.py` | 被试列表统一化 | C |
+| **P1** | `fmri_rsa/fmri_rsa_pipline.py` | `conditions` 添加baseline（前后测分析时） | A |
+| **P2** | `fmri_mvpa/cross_phase_decoding.py` | 可选：添加baseline泛化对比 | A |
+| **P2** | `fmri_mvpa/mvpa_pre_post_comparison.py` | 可选：添加3-class分类或baseline控制 | A |
+
+## 必须新建的脚本
+
+| 优先级 | 脚本 | 功能 | 对应问题 |
+|--------|------|------|---------|
+| **P0** | `common/subjects.py` | 统一的被试排除列表和排除原因记录 | C |
+| **P1** | `behavior_analysis/prepost_behavior.py` | 前后测真假词判断的3条件×2时间行为分析 | D |
 
 ***
 
@@ -724,13 +912,13 @@
 
 | 分析类型 | 主要统计方法 | 多重比较校正 | 效应量 |
 |---------|------------|------------|--------|
-| 行为分析 | LMM + 配对t检验 | N/A（单次比较） | Cohen's dz |
+| 行为分析 | LMM + 3×2重复测量ANOVA | N/A（单次比较） | Cohen's dz / η² |
 | GLM全脑 | Cluster-FWE（置换检验5000次） | FWE | — |
 | GLM ROI | FDR-BH | FDR q<0.05 | partial η² |
 | MVPA | 置换检验(10000次) + 配对t检验 | FDR跨ROI | 准确率-0.5 |
 | RSA | LMM + 置换检验 | FDR跨ROI | Cohen's d |
-| RD | 配对t检验 + 等量化重采样 | FDR跨ROI | Cohen's d |
-| GPS | 配对t检验 | FDR跨ROI | Cohen's d |
+| RD | 3×2重复测量ANOVA + 等量化重采样 | FDR跨ROI | η² / Cohen's d |
+| GPS | 3×2重复测量ANOVA | FDR跨ROI | η² / Cohen's d |
 | PPI | Cluster-FWE（置换检验） | FWE | — |
 | 脑-行为 | Pearson/Spearman + 置换检验 | FDR | r / R² |
 | Searchlight | 配对t检验 + Cluster-FWE | FWE | — |
