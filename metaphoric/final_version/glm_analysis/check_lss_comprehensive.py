@@ -7,6 +7,19 @@ LSS 分析结果深度校验工具 (适配 RSA 专用流程)
 1. 基于 trial_info.csv 驱动的文件校验 (确保元数据与文件一一对应)
 2. 适配动态文件名 beta_trial-{idx}_{unique_label}.nii.gz
 3. 增加 "空脑检测" (全0值) 和 "数值异常检测" (标准化后的Beta值不应过大)
+
+输入
+- `${PYTHON_METAPHOR_ROOT}/lss_betas_final/sub-xx/run-{run}/trial_info.csv`
+- `${PYTHON_METAPHOR_ROOT}/lss_betas_final/sub-xx/run-{run}/beta_trial-*_*.nii.gz`
+
+输出
+- 控制台打印校验摘要
+-（如脚本实现）在当前目录或输出目录写出校验报告（JSON/CSV）
+
+注意
+- `EXPECTED_TRIALS` 需要与你的 LSS “实际建模的 trial 数”一致：
+  - 如果 LSS 只对真词建模（排除假词），每个 run 可能是 100
+  - 如果 LSS 包含假词，每个 run 可能是 120（以你的 events.tsv 为准）
 """
 
 import os
@@ -22,7 +35,7 @@ import logging
 # ===========================
 # 1. 核心配置 (适配你的实验)
 # ===========================
-OUTPUT_ROOT = Path("E:/python_metaphor/lss_betas_final")
+OUTPUT_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor")) / "lss_betas_final"
 # 你的被试列表 (根据实际情况修改范围)
 SUBJECTS = [f"sub-{i:02d}" for i in range(1, 29)]
 # LSS 分析涉及的 Run

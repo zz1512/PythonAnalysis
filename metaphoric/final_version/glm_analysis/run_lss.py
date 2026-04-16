@@ -9,14 +9,26 @@ LSS 分析终极优化版 (RSA适配 + 内存安全)
 2. 唯一 ID: 自动结合 trial_type + pic_num 生成 unique_label
 3. 内存安全: 批处理 (Batching) + 缓存自动清理 + 线程锁
 4. 结果校验: 生成详细的 metadata 用于 RSA 配对
+
+输入
+- fMRI BOLD：`${PYTHON_METAPHOR_ROOT}/Pro_proc_data/{sub}/run{run}/*.nii(.gz)`
+- events：`${PYTHON_METAPHOR_ROOT}/data_events/{sub}/{sub}_run-{run}_events.tsv`
+  需要包含 `onset/duration/trial_type`，建议包含 `pic_num`（用于生成 `unique_label`）
+- confounds：`${PYTHON_METAPHOR_ROOT}/Pro_proc_data/{sub}/multi_reg/*confounds_timeseries.tsv`
+
+输出（默认 `${PYTHON_METAPHOR_ROOT}/lss_betas_final`）
+- `lss_betas_final/sub-xx/run-{run}/beta_trial-XYZ_{unique_label}.nii.gz`：每个 trial 一个 beta
+- `lss_betas_final/sub-xx/run-{run}/trial_info.csv`：trial 索引（RSA/stack_patterns 的上游输入）
+
+注意
+- 当前实现会对 events 表中的每一行都建模（包含你提供的所有 trial_type）。
+  如果你希望排除 fake/nonword，请在 `load_and_prep_events()` 中做过滤，或在后续堆叠时排除。
 """
 
 import os, gc, shutil, tempfile, sys, traceback
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from joblib import Parallel, delayed
-from nilearn import image
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn.masking import compute_brain_mask
 import logging
@@ -51,7 +63,7 @@ LSS_SMOOTHING = None  # 绝对不能平滑！
 LSS_TR = 2.0
 
 # 输出目录
-OUTPUT_ROOT = Path("E:/python_metaphor/lss_betas_final")
+OUTPUT_ROOT = getattr(config, "LSS_OUTPUT_ROOT", config.BASE_DIR / "lss_betas_final")
 
 # 日志配置
 logging.basicConfig(level=logging.INFO,
@@ -106,7 +118,6 @@ def create_lss_events(target_idx, all_events):
     Other: 其他条件的试次 -> 保持原名
     """
     lss_df = all_events.copy()
-    target_cond = lss_df.loc[target_idx, 'trial_type']
 
     # 策略：最简单的 LSS 实现
     # 1. 目标试次 -> 'LSS_TARGET'
@@ -152,7 +163,7 @@ def process_single_trial(args):
             "onset": events_df.iloc[trial_idx]['onset']
         }
 
-    except Exception as e:
+    except Exception:
         return None
 
 

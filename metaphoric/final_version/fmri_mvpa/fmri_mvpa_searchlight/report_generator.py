@@ -1,5 +1,15 @@
-# report_generator.py
-# HTML报告生成模块 - Searchlight版本
+"""
+report_generator.py (Searchlight)
+
+用途
+- 生成 Searchlight MVPA 的 HTML 报告：汇总组水平统计、阈值化 map、关键图表与参数配置。
+
+输入
+- searchlight pipeline 输出的统计表/图片（accuracy maps、p-map、cluster table 等）
+
+输出
+- HTML 报告（输出目录由调用方传入/配置）
+"""
 
 import base64
 import numpy as np

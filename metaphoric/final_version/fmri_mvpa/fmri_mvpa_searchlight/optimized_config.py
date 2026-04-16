@@ -12,10 +12,13 @@
 5. 确保只分析灰质区域
 """
 
+import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import logging
+
+# This module is a configuration helper. Keep it lightweight and easy to override.
 
 @dataclass
 class OptimizedMVPAConfig:
@@ -31,14 +34,15 @@ class OptimizedMVPAConfig:
         
         # === 路径配置 ===
         # 修正LSS数据路径 - 使用相对路径避免路径错误
-        self.lss_root = Path(overrides.get('lss_root', "E:/python_metaphor/lss_betas_final"))
+        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        self.lss_root = Path(overrides.get('lss_root', str(base_dir / "lss_betas_final")))
         
         # 灰质mask路径 - 确保使用正确的灰质mask
         self.mask_dir = Path(overrides.get('mask_dir', "../../../data/masks"))
         self.gray_matter_mask = overrides.get('gray_matter_mask', "gray_matter_mask.nii.gz")
         
         # 结果输出路径
-        self.results_dir = Path(overrides.get('results_dir', "../../../results/searchlight_mvpa_optimized"))
+        self.results_dir = Path(overrides.get('results_dir', str(base_dir / "mvpa_searchlight_results")))
         
         # === Searchlight核心参数 ===
         self.searchlight_radius = overrides.get('searchlight_radius', 3)  # 3mm半径

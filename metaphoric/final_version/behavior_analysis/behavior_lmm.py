@@ -1,4 +1,23 @@
-﻿from __future__ import annotations
+"""
+behavior_lmm.py
+
+用途
+- 对行为数据做线性混合模型（LMM / mixed-effects model），以更稳健地处理：
+  - 被试内重复测量（subject 随机效应）
+  - item 级别差异（item 作为方差成分 vc_formula）
+
+输入
+- input_path: TSV/CSV（至少包含 subject、condition、response；item 可选）
+- --response: 因变量列名（默认 accuracy）
+- --subject-col / --item-col / --condition-col
+
+输出（output_dir）
+- `behavior_lmm_summary.txt`：statsmodels 的模型摘要
+- `behavior_lmm_params.tsv`：固定效应与随机效应参数
+- `behavior_lmm_model.json`：AIC/BIC/样本量等元信息
+"""
+
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -39,6 +58,7 @@ def main() -> None:
     if args.item_col not in frame.columns:
         frame[args.item_col] = range(1, len(frame) + 1)
 
+    # Fixed effect: condition；Random effect: subject intercept；Variance component: item intercept
     formula = f"{args.response} ~ C({args.condition_col})"
     model = smf.mixedlm(
         formula,

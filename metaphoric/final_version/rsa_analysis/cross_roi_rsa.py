@@ -1,4 +1,24 @@
-﻿from __future__ import annotations
+"""
+cross_roi_rsa.py
+
+用途
+- 做跨 ROI 的 RDM 一致性分析（ROI-to-ROI DSM correlation）：
+  在每个 ROI 内提取 trials×voxels 样本 -> 计算 DSM/RDM 向量 -> 对 ROI 对之间做相关。
+- 输出 subject-level 的 ROI 对一致性，并做 pre/post 的差异统计（以及差异中的差异）。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（包含 `pre_yy.nii.gz` 等 4D patterns）
+- roi_dir: ROI masks 目录
+- --filename-template: 默认 `{time}_{condition}.nii.gz`
+
+输出（output_dir）
+- `cross_roi_rsa_subject_metrics.tsv`：subject×roi_a×roi_b×time×condition
+- `cross_roi_rsa_group_summary.tsv`：组水平统计摘要
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from itertools import combinations

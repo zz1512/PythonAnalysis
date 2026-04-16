@@ -1,4 +1,25 @@
-﻿from __future__ import annotations
+"""
+gps_analysis.py
+
+用途
+- 在 ROI 内计算 GPS（Global Pattern Similarity，全局模式相似性/紧凑度）：
+  对 trials×voxels 样本计算 trial-by-trial 相关（Fisher-Z），每个 trial 与其他 trials 的平均相似度即 GPS。
+  GPS 越高，说明同条件 trials 的神经模式越一致/越紧凑。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（每个 sub-xx 一个目录，包含 `pre_yy.nii.gz` 等）
+- roi_dir: ROI masks 目录
+- output_dir: 输出目录
+
+输出（output_dir）
+- `gps_subject_metrics.tsv`：subject×roi×time×condition 的 GPS 值
+- `gps_group_summary.tsv`：组水平统计（post vs pre；yy vs kj；以及差异中的差异）
+- `gps_summary.json`：摘要统计
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

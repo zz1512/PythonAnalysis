@@ -6,6 +6,16 @@ RSA 结果可视化脚本
 1. 计算 Delta Similarity (Post - Pre)
 2. 绘制 ROI x Condition 交互作用图
 3. 绘制 Item-wise 漂移散点图
+
+输入（默认相对于 `${PYTHON_METAPHOR_ROOT}`）
+- `rsa_results_optimized/rsa_summary_stats.csv`
+- `rsa_results_optimized/rsa_itemwise_details.csv`
+
+输出
+- `rsa_results_optimized/figures/`：图表文件（png 等）
+
+注意
+- 如果你修改了 rsa_config.py 的输出目录，请同步修改本脚本的 RESULTS_DIR，或把 RESULTS_DIR 改成从环境变量读取。
 """
 
 import pandas as pd
@@ -16,7 +26,7 @@ from pathlib import Path
 from scipy import stats
 
 # ================= 配置 =================
-BASE_DIR = Path("E:/python_metaphor")
+BASE_DIR = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 RESULTS_DIR = BASE_DIR / "rsa_results_optimized"
 SUMMARY_FILE = RESULTS_DIR / "rsa_summary_stats.csv"
 ITEMWISE_FILE = RESULTS_DIR / "rsa_itemwise_details.csv"

@@ -36,12 +36,15 @@
 """
 
 import os, re, glob
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy import stats
 # === 分析配置参数 ===
-DATA_DIR = r"E:/python_metaphor/data_events"        # 行为数据文件目录
-OUT_DIR = r"E:/python_metaphor/behavior_results"              # 结果输出目录
+# Prefer env-var based root for portability.
+_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+DATA_DIR = os.environ.get("METAPHOR_DATA_EVENTS", str(_ROOT / "data_events"))  # 行为数据文件目录
+OUT_DIR = os.environ.get("METAPHOR_BEHAVIOR_RESULTS", str(_ROOT / "behavior_results"))  # 结果输出目录
 FILE_PATTERN = "*run-7_events.tsv"     # 文件匹配模式
 DV_COL = "action_time"                 # 因变量列名（反应时指标）
 

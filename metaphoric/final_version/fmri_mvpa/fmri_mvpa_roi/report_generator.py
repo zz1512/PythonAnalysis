@@ -1,5 +1,19 @@
-# report_generator.py
-# HTML报告生成模块
+"""
+report_generator.py
+
+用途
+- 生成 ROI-MVPA 的 HTML 报告（把统计表与图表整合成可分享的单文件/目录结果）。
+
+输入
+- MVPA pipeline 的结果表（准确率/置换检验/显著性等）
+- visualization 模块生成的图表文件（png 等）
+
+输出
+- HTML 报告（通常写入 results_dir 下，文件名以调用处为准）
+
+说明
+- 报告属于“呈现层”，不影响统计结论；如果你只需要数值结果，可跳过报告生成。
+"""
 
 import base64
 import numpy as np

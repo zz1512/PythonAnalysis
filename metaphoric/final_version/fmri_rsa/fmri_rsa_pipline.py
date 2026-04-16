@@ -1,6 +1,20 @@
-# fmri_rsa_pipeline.py
-# RSA (Representational Similarity Analysis) Pipeline
-# 基于MVPA分析的配置和数据路径结构
+"""
+fmri_rsa_pipline.py
+
+用途
+- 学习阶段（run3-4）的 RSA（Representational Similarity Analysis）pipeline：
+  在 ROI 内提取 trials×voxels 模式，构建 RDM/DSM，并做条件内/条件间/跨条件的表征距离分析。
+
+输入（相对于 `${PYTHON_METAPHOR_ROOT}`）
+- LSS 单 trial betas：`lss_betas_final/sub-xx/run-3|4/` + trial_info
+- ROI masks：`glm_analysis_fwe_final/2nd_level_CLUSTER_FWE/...` 或 `roi_masks_final/`
+
+输出
+- `${PYTHON_METAPHOR_ROOT}/rsa_learning_results/`：学习阶段 RSA 结果表、图表与 HTML 报告（以脚本实际输出为准）
+
+说明
+- 该脚本是“学习阶段表征结构”的补充证据；前后测 RSA 主线使用 `rsa_analysis/run_rsa_optimized.py`。
+"""
 
 import numpy as np
 import pandas as pd
@@ -23,6 +37,7 @@ warnings.filterwarnings('ignore')
 import logging
 from sklearn.metrics import pairwise_distances
 from itertools import combinations
+import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -33,9 +48,10 @@ class RSAConfig:
         # 基本参数
         self.subjects = [f"sub-{i:02d}" for i in range(1, 29) if i not in [14, 24]]
         self.runs = [3, 4]  # 支持多个run
-        self.lss_root = Path(r"E:/python_metaphor/lss_betas_final")
-        self.roi_dir = Path(r"E:/python_metaphor/glm_analysis_fwe_final/2nd_level_CLUSTER_FWE")
-        self.results_dir = Path(r"E:/python_metaphor/rsa_learning_results")
+        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        self.lss_root = base_dir / "lss_betas_final"
+        self.roi_dir = base_dir / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE"
+        self.results_dir = base_dir / "rsa_learning_results"
         
         # RSA特定参数
         self.distance_metrics = ['correlation', 'euclidean', 'cosine']  # 距离度量方法

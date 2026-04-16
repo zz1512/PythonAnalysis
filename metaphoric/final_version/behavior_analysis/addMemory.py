@@ -7,6 +7,17 @@ Run7行为数据预处理脚本
     为run-7的行为数据添加memory列，用于标识被试是否记忆了特定刺激。
     基于action列的值（3.0表示记忆）生成二进制标识。
 
+输入:
+    - `${METAPHOR_DATA_EVENTS:-${PYTHON_METAPHOR_ROOT}/data_events}/sub-xx/sub-xx_run-7_events.tsv`
+      需要包含 `action` 列。
+
+输出:
+    - 原地覆盖写回同一个 TSV 文件（新增 `memory` 列）。
+
+说明:
+    - 这是“数据清洗”步骤：只负责把 run7 的行为标签补齐，供后续行为统计脚本使用。
+    - 默认以 `action == 3.0` 作为“记忆成功”，若你的行为编码有变化请改 `MEMORY_ACTION_VALUE`。
+
 处理流程:
     1. 扫描所有被试文件夹（sub-01到sub-28）
     2. 查找每个被试的run-7事件文件
@@ -20,10 +31,12 @@ Run7行为数据预处理脚本
 
 import os
 import glob
+from pathlib import Path
 import pandas as pd
 
 # === 配置参数 ===
-BASE_DIR = r"E:/python_metaphor/data_events"  # 事件数据根目录
+_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+BASE_DIR = os.environ.get("METAPHOR_DATA_EVENTS", str(_ROOT / "data_events"))  # 事件数据根目录
 SUBJECT_RANGE = range(1, 29)     # 被试范围：sub-01到sub-28
 TARGET_RUN = 7                   # 目标run编号
 MEMORY_ACTION_VALUE = "3.0"      # 表示记忆的action值

@@ -1,3 +1,22 @@
+"""
+create_optimized_roi_masks.py
+
+用途
+- 生成用于 MVPA/RSA/RD/GPS 的 ROI masks（球形 ROI、解剖 ROI、功能簇 ROI、网络 ROI 等）。
+- 该脚本主要解决“ROI 一次性构建并可复用”的工程问题：让下游分析只需要传 `roi_dir`。
+
+输入（取决于你的配置）
+- GLM 二阶簇信息（clusters_file / cluster_report.csv 或阈值化统计图）
+- 图谱数据（Harvard-Oxford、Yeo network 等，脚本会自动下载或从 nilearn cache 读取）
+
+输出
+- ROI mask NIfTI：写入 `output_dir`（默认当前目录 `optimized_roi_masks/`，建议改到 `${PYTHON_METAPHOR_ROOT}/roi_masks_final/`）
+- 质量控制：可能包含 ROI 体素数/体积/重叠检查的日志与汇总表
+
+注意
+- 建议用“统一的 roi_masks_final 目录”管理 ROI，以免不同分析用到不同版本的 mask。
+"""
+
 import numpy as np
 import nibabel as nib
 from nilearn import datasets, image
@@ -10,6 +29,9 @@ from scipy.spatial.distance import cdist
 from scipy.ndimage import label
 import warnings
 import logging
+
+# NOTE: This file intentionally has no deep inline comments; the logic is long.
+# Keep only high-level guidance to avoid comment noise in a 1000+ line utility.
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

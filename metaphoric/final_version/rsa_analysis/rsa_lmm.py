@@ -1,4 +1,23 @@
-﻿from __future__ import annotations
+"""
+rsa_lmm.py
+
+用途
+- 对 `run_rsa_optimized.py` 输出的 item-wise RSA 明细做线性混合模型（LMM）：
+  `similarity ~ condition * time + (1|subject) + (1|item)`（item 作为方差成分）。
+
+输入
+- input_path: TSV/CSV（建议使用 `rsa_itemwise_details.csv`）
+  必须包含列：`subject`, `condition`, `time`(或 stage), `similarity`，以及 item 列（pair_id/word_label 等）
+
+输出（output_dir）
+- `rsa_lmm_summary.txt`：statsmodels 输出摘要
+- `rsa_lmm_params.tsv`：参数表
+- `rsa_lmm_model.json`：AIC/BIC/样本量等
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

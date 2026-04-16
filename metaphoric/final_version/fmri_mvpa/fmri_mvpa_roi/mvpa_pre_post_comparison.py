@@ -1,4 +1,23 @@
-﻿from __future__ import annotations
+"""
+mvpa_pre_post_comparison.py
+
+用途
+- ROI-level MVPA：分别在 pre 与 post 的 patterns 上做 yy vs kj 二分类，
+  检验“条件可解码性”是否随学习发生变化（post accuracy vs pre accuracy）。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（需有 `pre_yy.nii.gz`、`post_kj.nii.gz` 等）
+- roi_dir: ROI masks
+
+输出（output_dir）
+- `mvpa_pre_post_subject_metrics.tsv`：subject×roi×time 的 accuracy
+- `mvpa_pre_post_group_summary.tsv`：每个 ROI 的 post vs pre 配对检验摘要
+- `{roi}_mvpa_pre_post_summary.json`：单 ROI 摘要
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

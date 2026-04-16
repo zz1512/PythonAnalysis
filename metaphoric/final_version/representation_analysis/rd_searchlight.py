@@ -1,4 +1,26 @@
-﻿from __future__ import annotations
+"""
+rd_searchlight.py
+
+用途
+- 在全脑范围内做 Representational Dimensionality (RD) 的 searchlight 分析。
+- 输入为 Step 4 生成的 4D patterns（例如 `pre_yy.nii.gz`），输出为每个被试一张 3D RD map，
+  并在组水平上做配对 t 检验（post vs pre）。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（每个 sub-xx 一个目录，包含 `{time}_{condition}.nii.gz`）
+- subject_mask_root: `${SUBJECT_MASK_ROOT}`（每个 sub-xx 一个目录，包含 mask 文件）
+- output_dir: 输出根目录
+- --filename-template: 默认 `{time}_{condition}.nii.gz`
+- --mask-filename: 默认 `mask.nii`（也会自动尝试 `.nii.gz`）
+
+输出（output_dir）
+- `sub-xx/rd_{time}_{condition}.nii.gz`：个体 RD map
+- `group_yy_post_vs_pre/`、`group_kj_post_vs_pre/`：组水平统计 map 与摘要（由 common.pattern_metrics 生成）
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path
@@ -21,11 +43,25 @@ from common.final_utils import ensure_dir, save_json
 from common.pattern_metrics import compute_group_paired_map_statistics, compute_searchlight_dimension_map, save_scalar_map
 
 
-def compute_cell_maps(subject_dirs, subject_mask_root: Path, output_dir: Path, time: str, condition: str, filename_template: str, explained_threshold: float, voxel_count: int):
+def compute_cell_maps(
+    subject_dirs,
+    subject_mask_root: Path,
+    output_dir: Path,
+    time: str,
+    condition: str,
+    filename_template: str,
+    explained_threshold: float,
+    voxel_count: int,
+    mask_filename: str = "mask.nii",
+):
     paths = []
     for subject_dir in subject_dirs:
         image_path = subject_dir / filename_template.format(time=time, condition=condition)
-        subject_mask = subject_mask_root / subject_dir.name / "mask.nii"
+        subject_mask = subject_mask_root / subject_dir.name / mask_filename
+        if not subject_mask.exists() and subject_mask.suffix == ".nii":
+            alt = subject_mask.with_suffix(".nii.gz")
+            if alt.exists():
+                subject_mask = alt
         if not image_path.exists() or not subject_mask.exists():
             continue
         reference_img, mask, values = compute_searchlight_dimension_map(image_path, subject_mask, explained_threshold, voxel_count)
@@ -44,6 +80,11 @@ def main() -> None:
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     parser.add_argument("--threshold", type=float, default=80.0)
     parser.add_argument("--voxel-count", type=int, default=100)
+    parser.add_argument(
+        "--mask-filename",
+        default="mask.nii",
+        help="Mask filename under each subject folder (default: mask.nii; will also try .nii.gz).",
+    )
     args = parser.parse_args()
 
     output_dir = ensure_dir(args.output_dir)
@@ -61,6 +102,7 @@ def main() -> None:
                 args.filename_template,
                 args.threshold,
                 args.voxel_count,
+                mask_filename=args.mask_filename,
             )
 
     summaries = {

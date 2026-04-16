@@ -1,4 +1,26 @@
+"""
+fmri_mvpa_searchlight_pipeline_multi.py
+
+用途
+- 学习阶段（run3-4）的全脑 Searchlight MVPA：在每个体素周围的小球邻域做 yy vs kj 分类，
+  得到全脑“可解码性”分布图，并在组水平做统计检验（含多重比较控制）。
+
+输入（依赖你的配置/目录结构）
+- LSS 单 trial betas（学习阶段）：`${PYTHON_METAPHOR_ROOT}/lss_betas_final/sub-xx/run-3|4/`
+- 处理 mask：例如 cortical_gray_matter_mask.nii.gz（文件名由 config 指定）
+- events/labels：来自 LSS 的 trial_info 或索引表（脚本内部会读取）
+
+输出（results_dir，通常为 `${PYTHON_METAPHOR_ROOT}/mvpa_searchlight_results`）
+- 个体 level：每被试一张 searchlight accuracy map（NIfTI）
+- 组水平：阈值化 map、簇统计、summary tables、HTML 报告（由 report_generator/visualization 生成）
+
+注意
+- Searchlight 很耗时/耗内存。建议先用 QUICK/DEBUG 配置跑少量被试验证流程，再跑全样本。
+"""
+
 from __future__ import annotations
+
+
 
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed

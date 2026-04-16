@@ -2,6 +2,25 @@
 """
 run_rsa_optimized.py
 RSA 分析主程序 (Top-K & Item-wise 增强版) - 修复警告版
+
+用途
+- 对前后测（Pre: run1-2 / Post: run5-6）的 LSS 单 trial beta 做 ROI-level RSA。
+- 输出：
+  - summary 统计（用于快速看交互）
+  - item-wise 明细（用于 LMM：`similarity ~ condition * time + (1|subject) + (1|item)`）
+
+输入（来自 rsa_config.py）
+- `${PYTHON_METAPHOR_ROOT}/lss_betas_final/lss_metadata_index_final.csv`：trial 索引表
+- `${PYTHON_METAPHOR_ROOT}/stimuli_template.csv`：刺激模板（确保 trial 对齐）
+- ROI masks（例如 `${PYTHON_METAPHOR_ROOT}/roi_masks_final/*.nii.gz`）
+
+输出（来自 rsa_config.py 的 OUTPUT_DIR）
+- `rsa_itemwise_details.csv`：item-wise 数据（强烈建议保留，用于 LMM）
+- `rsa_summary_stats.csv`：汇总统计
+
+关键实现点（为什么这么写）
+- `get_sorted_files()`：严格按 `stimuli_template.csv` 的顺序取 beta 文件，避免 trial 对齐错误
+- 对未知/缺失匹配直接 raise：宁可早失败也不要悄悄错配导致假阳性
 """
 
 import numpy as np

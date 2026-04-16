@@ -1,4 +1,23 @@
-﻿from __future__ import annotations
+"""
+brain_behavior_correlation.py
+
+用途
+- 汇总多个“subject-level 指标表”（例如 RSA/RD/GPS/MVPA/行为）到同一张表，并输出相关矩阵与显著性。
+- 这个脚本主要负责“把结果拼起来”，不负责重新跑上游分析。
+
+输入
+- output_dir: 输出目录
+- metrics: 若干 TSV/CSV 文件（每个文件必须包含 `subject` 列；其他数值列会被自动汇总并加前缀）
+
+输出（output_dir）
+- `brain_behavior_merged.tsv`：合并后的 subject-level 指标表（供进一步回归/中介使用）
+- `brain_behavior_correlations.tsv`：两两相关结果（含 p 值）
+- `brain_behavior_meta.json`：元信息
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

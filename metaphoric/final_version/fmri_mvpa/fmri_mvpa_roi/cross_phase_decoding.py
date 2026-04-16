@@ -1,4 +1,23 @@
-﻿from __future__ import annotations
+"""
+cross_phase_decoding.py
+
+用途
+- 跨阶段泛化解码：在学习阶段（learn）训练 yy vs kj 分类器，在 pre/post 上测试。
+- 重点指标：post 测试准确率是否高于 pre（说明学习建立了可迁移的神经编码）。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（需要 `learn_yy/kj` + `pre_yy/kj` + `post_yy/kj`）
+- roi_dir: ROI masks
+
+输出（output_dir）
+- `cross_phase_subject_metrics.tsv`：subject×roi×time 的 accuracy（time 为 pre/post）
+- `cross_phase_group_summary.tsv`：每个 ROI 的 post vs pre 配对检验摘要
+- `{roi}_cross_phase_summary.json`：单 ROI 摘要
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

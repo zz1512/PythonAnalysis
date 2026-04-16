@@ -7,6 +7,18 @@ Run7行为数据详细信息提取脚本
     为run-7的行为数据添加详细的记忆信息，包括图片名称和记忆动作详情。
     通过匹配TSV事件文件和CSV参考文件，提取记忆测试的反应和反应时数据。
 
+输入:
+    - `${METAPHOR_DATA_EVENTS:-${PYTHON_METAPHOR_ROOT}/data_events}/sub-xx/sub-xx_run-7_events.tsv`
+    - `${METAPHOR_DATA_EVENTS:-${PYTHON_METAPHOR_ROOT}/data_events}/sub-xx/sub-xx_run-7_events.csv`
+      CSV 中需要包含响应与反应时字段（脚本内部会按列名映射）。
+
+输出:
+    - 原地覆盖写回 run-7 TSV 文件（新增/更新 `action` 与 `action_time` 列）。
+
+说明:
+    - 该脚本用于把“回忆阶段的行为响应”回填到 run-7 事件表中，供后续行为统计脚本使用。
+    - 匹配逻辑比较依赖列名与材料编码，若你的 CSV 字段发生变化，需要同步更新映射代码。
+
 处理流程:
     1. 扫描所有被试的run-7事件文件（TSV格式）
     2. 查找对应的参考文件（CSV格式）
@@ -26,10 +38,12 @@ Run7行为数据详细信息提取脚本
 
 import os
 import glob
+from pathlib import Path
 import pandas as pd
 
 # === 配置参数 ===
-BASE_DIR = r"E:/python_metaphor/data_events"  # 事件数据根目录
+_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+BASE_DIR = os.environ.get("METAPHOR_DATA_EVENTS", str(_ROOT / "data_events"))  # 事件数据根目录
 TARGET_RUN = 7                   # 目标run编号
 SUBJECT_RANGE = range(1, 29)     # 被试范围：sub-01到sub-28
 def main():

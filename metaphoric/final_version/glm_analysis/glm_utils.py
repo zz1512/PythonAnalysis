@@ -1,7 +1,41 @@
 #!/usr/bin/env python3
 """
 glm_utils.py
-通用工具函数库 (Refactored to remove duplication)
+
+用途
+- GLM/LSS 相关的通用工具函数：confounds 读取与 scrubbing、组水平 mask 生成、簇报告与 ROI mask 输出。
+
+论文意义（这一层回答什么问题）
+- 这些工具本身不产生“论文结论”，但它们决定：
+  - 你的 GLM 是否在对齐/去噪层面足够稳健（直接影响假阳性/假阴性）。
+  - 组水平推断是否在同一体素集合上比较（避免因缺失数据导致的偏差）。
+
+方法
+- `robust_load_confounds()`：从 fMRIPrep confounds 里构造 Friston-24，并生成 scrubbing 的 `sample_mask`。
+- `compute_group_mask()`：按“至少 X% 被试在该体素有有效值”生成组 mask（减少边缘缺失体素污染）。
+- `generate_cluster_report()`：基于阈值化统计图生成簇表，并用 Harvard-Oxford atlas 给峰值坐标粗标注。
+
+输入
+- confounds TSV（包含 motion 参数与可选 `motion_outlier*` 列）。
+- 对比图列表（NIfTI path 列表）。
+- 二阶统计图（NIfTI img）与阈值。
+
+输出
+- `sample_mask`：用于 nilearn GLM 的“保留时间点索引”，防止坏点驱动假阳性。
+- 组 mask NIfTI、簇报告 CSV、二值 ROI mask NIfTI。
+
+关键参数原因
+- scrubbing 扩窗：坏点前后若干 TR 常伴随瞬时伪影，扩窗可更保守地控制头动污染。
+- `threshold_ratio`：组 mask 越严格，越减少缺失体素带来的偏差，但也可能删掉真实效应的边缘区域。
+
+结果解读
+- 如果“没有任何簇”或组 mask 过小，优先检查：scrubbing 是否过强、被试缺失是否集中在某些脑区、
+  以及 confounds/events 是否对齐。
+
+常见坑
+- confounds 列名不一致（不同 fMRIPrep 版本/自定义 pipeline），导致 motion 列读取失败或静默丢列。
+- scrubbing 后有效时间点过少，模型拟合不稳定（尤其是事件密度高或回归量多时）。
+- 组 mask 按“非 0 且非 NaN”判断：若上游对比图写入方式不同（例如背景不是 0），需要同步调整阈值逻辑。
 """
 
 import pandas as pd
@@ -53,10 +87,12 @@ def robust_load_confounds(confounds_path, strategy_config):
                 is_outlier = df[outlier_cols].sum(axis=1) > 0
                 if strategy_config['scrub'] > 0:
                     iterations = int(strategy_config['scrub'] / 2)
+                    # 扩窗 scrubbing：把坏点相邻 TR 也删掉，降低头动伪影“溢出”到邻近时间点的风险。
                     is_outlier = binary_dilation(is_outlier.values, iterations=iterations)
 
                 # 生成保留索引
                 n_vols = len(df)
+                # sample_mask 是“保留的时间点索引”，与 nilearn FirstLevelModel.fit(sample_mask=...) 语义一致。
                 sample_mask = np.arange(n_vols)[~is_outlier]
 
         return final_confounds.fillna(0), sample_mask
@@ -83,6 +119,7 @@ def compute_group_mask(contrast_imgs, threshold_ratio=0.7):
         valid_count += mask.astype(np.int32)
 
     min_subjects = int(np.floor(len(contrast_imgs) * threshold_ratio))
+    # 组水平推断只在“足够多被试都有值”的体素上进行，减少因缺失/裁剪差异造成的偏差。
     group_mask_data = valid_count >= min_subjects
 
     return new_img_like(first_img, group_mask_data.astype(np.uint8))

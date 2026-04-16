@@ -2,6 +2,23 @@
 """
 main_analysis.py
 统一执行入口：支持单独或联合运行一二阶分析 (FDR/FWE 修复版)
+
+用途
+- 学习阶段（默认 run3-4）的一阶 GLM + 二阶组水平分析（FDR 或 cluster-FWE）。
+- 输出显著簇、阈值化统计图、以及用于下游 ROI 定义的 mask（如有配置）。
+
+输入（来自 glm_config.py）
+- BOLD：`${PYTHON_METAPHOR_ROOT}/Pro_proc_data/{sub}/run{run}/*.nii(.gz)`
+- events：`${PYTHON_METAPHOR_ROOT}/data_events/{sub}/{sub}_run-{run}_events.tsv`
+- confounds：`${PYTHON_METAPHOR_ROOT}/Pro_proc_data/{sub}/multi_reg/*confounds_timeseries.tsv`
+
+输出（`${PYTHON_METAPHOR_ROOT}/glm_analysis_fwe_final`）
+- 一阶：每被试对比图（effect/z/t 等，视实现）
+- 二阶：阈值化 group map、cluster 报告、日志 `analysis.log`
+
+注意
+- 该脚本是“定位哪里”的证据（Layer 1），不直接做表征几何/RSA。
+- 如果你想把前后测也纳入 GLM，需要在 glm_config.py 扩展 RUNS 与对比定义。
 """
 
 import sys

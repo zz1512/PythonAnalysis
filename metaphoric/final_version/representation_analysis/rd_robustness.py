@@ -1,4 +1,25 @@
-﻿from __future__ import annotations
+"""
+rd_robustness.py
+
+用途
+- RD（Representational Dimensionality）稳健性检验套件（ROI-level）：
+  通过改变解释方差阈值、是否做 demean、是否做 trial 数等量化重采样，
+  检验 RD 结论是否对这些实现选择敏感。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（包含 pre/post 的 4D patterns）
+- roi_dir: ROI masks
+- --thresholds: 解释方差阈值列表（默认 70/75/80/85/90）
+- --demean: 是否对 yy/kj 样本做合并去均值（消除均值差异驱动）
+- --equalize: 是否把两条件 trial 数等量化（避免 trial 数差异驱动）
+
+输出（output_dir）
+- `rd_robustness_metrics.tsv`：逐 subject×roi×time×threshold×condition 的 RD 值
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

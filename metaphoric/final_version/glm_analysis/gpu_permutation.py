@@ -2,6 +2,41 @@
 gpu_permutation.py (Memory Optimized Edition)
 修复 CUDA OOM 问题：引入 Batching 分批计算机制。
 将 5000 次置换拆分为小批次（如 1000 次/批），降低峰值显存占用。
+
+用途
+- 为二阶 GLM 提供基于置换的 cluster-FWE 推断：输出 cluster-level FWE 的 `-log10(p)` 图，
+  以及对应的原始 T 统计图（用于可视化与阈值化）。
+
+论文意义（这一层回答什么问题）
+- 在“定位哪里”的层面上，通过非参数置换来控制全脑多重比较，回答：
+  在 yy vs kj 对比下，哪些空间连续的簇在组水平上可靠显著（而非偶然噪声团块）。
+
+方法
+- 一样本 sign-flip 置换（每次对被试对比图随机乘以 ±1），在零假设（均值为 0）下生成最大簇大小分布。
+- 以 cluster-forming 阈值（`cluster_p_thresh` -> t 阈值）先二值化，再用“最大簇大小”做 FWE 校正（max-statistic）。
+- GPU 负责批量计算每次置换的体素 t 值；CPU 并行负责每个置换的 3D 聚类与最大簇提取。
+
+输入
+- `input_imgs`：每被试一张对比图（通常为一阶 GLM contrast 的 effect/t/z 图之一，具体由上游决定）。
+- `mask_img`：组水平分析 mask（确保体素对齐且避免无效区域）。
+
+输出
+- `log_p_img`：cluster-level FWE 的 `-log10(p)` 图（同空间、同 mask）。
+- `raw_t_img`：未阈值化的原始 T 图（用于绘图/QC）。
+
+关键参数为何这样设
+- `n_perms=5000`：经验上在计算成本与 p 值分辨率间折中（最小可达约 1/(n_perms+1)）。
+- `cluster_p_thresh=0.001`：更严格的 cluster-forming 阈值，降低“噪声连成片”造成的假簇。
+- `BATCH_SIZE=1000`：显存峰值控制参数；值越大越快但更易 OOM。
+
+结果解读
+- `log_p_img` 中值越大表示簇级 FWE p 越小；例如 `> -log10(0.05)≈1.3` 可作为显著性参考线。
+- `raw_t_img` 可用于查看效应方向与峰值位置，但显著性应以 cluster-FWE 校正结果为准。
+
+常见坑
+- mask 与输入图的 affine/shape 不一致会导致体素错位（NiftiMasker 会报错或产生不可比结果）。
+- `n_subs` 很小时（例如 < 10）置换分布不稳定，簇推断结果高度依赖阈值与样本。
+- 将“定义 ROI 的同一对比图”再用于 ROI 内解释同一效应，会引入选择偏差；若要严格推断，需独立数据或 CV。
 """
 
 import time
@@ -114,6 +149,7 @@ def run_permutation(input_imgs, mask_img, n_perms=5000, cluster_p_thresh=0.001, 
                                   device=device, dtype=torch.float32) * 2 - 1
 
         # 强制第一个置换为原始数据 (真实标签)
+        # 这样可以在同一次循环里同时得到“真实 T 图”和置换分布，避免再跑一遍。
         if i == 0:
             signs_batch[0, :] = 1.0
 
@@ -161,6 +197,7 @@ def run_permutation(input_imgs, mask_img, n_perms=5000, cluster_p_thresh=0.001, 
         return _find_max_cluster(vol, structure)
 
     # 这里的 max_sizes 可能很大，注意 CPU 内存
+    # max-statistic：每次置换只保留“最大簇大小”，用于 cluster-level FWE 控制（全脑多重比较）。
     max_sizes = Parallel(n_jobs=n_jobs, batch_size=100)(
         delayed(_process_perm)(row) for row in thresholded_maps_cpu
     )

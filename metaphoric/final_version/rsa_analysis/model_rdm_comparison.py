@@ -1,4 +1,25 @@
-﻿from __future__ import annotations
+"""
+model_rdm_comparison.py
+
+用途
+- 模型 RDM 比较（Model RSA）：把神经 RDM 与若干“理论/行为模型 RDM”做相关，检验哪些模型更能解释表征结构。
+- 当前实现支持两类模型：
+  - condition 模型：同条件 vs 跨条件（0/1）
+  - numeric 模型：连续变量差的绝对值（例如 novelty/familiarity/behavior rating）
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（4D patterns）
+- roi_dir: ROI masks
+- metadata：来自 `stack_patterns.py` 的 `*_metadata.tsv`（如果你要 numeric 模型，需在 metadata 中提供对应列）
+
+输出（output_dir）
+- `model_rdm_results.tsv`：每个 ROI/subject/time/condition 的模型相关结果
+- `model_rdm_summary.json`：摘要
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

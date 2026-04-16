@@ -1,4 +1,25 @@
-﻿from __future__ import annotations
+"""
+seed_connectivity.py
+
+用途
+- 在全脑范围内做“种子表征几何连接性”的 searchlight 分析：
+  不是传统相关/功能连接，而是比较 seed ROI 与每个局部 searchlight 球内的 PCA 几何成分相似性。
+- 输出 seed-connectivity map，并在组水平做 post vs pre 的配对统计。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（每个 sub-xx 一个目录，包含 `{time}_{condition}.nii.gz`）
+- subject_mask_root: `${SUBJECT_MASK_ROOT}`（每个 sub-xx 一个目录，包含 mask 文件）
+- seed_mask_path: 种子 ROI mask（NIfTI）
+- output_dir: 输出根目录
+
+输出（output_dir）
+- `sub-xx/seed_{time}_{condition}.nii.gz`：个体 seed-connectivity map
+- `group_yy_post_vs_pre/`、`group_kj_post_vs_pre/`：组水平统计 map 与摘要（由 common.pattern_metrics 生成）
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

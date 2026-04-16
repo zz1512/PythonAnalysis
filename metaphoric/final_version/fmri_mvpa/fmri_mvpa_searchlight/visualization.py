@@ -1,5 +1,16 @@
-# visualization.py
-# 可视化模块 - Searchlight版本
+"""
+visualization.py (Searchlight)
+
+用途
+- Searchlight MVPA 的可视化：绘制组水平 accuracy 分布、显著簇、个体散点、效应量等图表。
+
+输入
+- searchlight pipeline 的结果表（accuracy/p-values/cluster summary 等）
+
+输出
+- 图片文件（png 等），并可被 report_generator 嵌入 HTML 报告
+"""
+
 import matplotlib
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Noto Sans CJK SC']
 matplotlib.rcParams['axes.unicode_minus'] = False

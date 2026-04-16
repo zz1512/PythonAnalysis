@@ -1,5 +1,18 @@
-# visualization.py
-# 可视化模块
+"""
+visualization.py
+
+用途
+- ROI-MVPA 结果可视化：把 ROI 级分类准确率、显著性、效应量等画成易读的图表（用于论文与报告）。
+
+输入
+- MVPA pipeline 输出的结果表（DataFrame 或 TSV/CSV）
+
+输出
+- PNG/SVG 等静态图片（具体由调用方决定输出目录与文件名）
+
+说明
+- 可视化属于呈现层；统计推断应以置换检验/组水平检验为准。
+"""
 
 import numpy as np
 import matplotlib.pyplot as plt

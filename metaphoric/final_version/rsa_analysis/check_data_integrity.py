@@ -3,6 +3,21 @@
 check_data_integrity.py (Fix Version)
 RSA 数据严格校验脚本 - 修复版
 修复了 "yyw_1" 会错误匹配到 "yyw_10" 的子串匹配问题，改为精确全词匹配。
+
+用途
+- 在正式跑 `run_rsa_optimized.py` 之前做“强校验”，确保：
+  - 每个 subject 在 pre/post 需要的 trial 都存在
+  - `unique_label` 与 `stimuli_template.csv` 能一一匹配（避免错配造成假阳性）
+
+输入（来自 rsa_config.py）
+- `LSS_META_FILE`：LSS trial 索引表（应包含 subject/run/unique_label/beta_file 等）
+- `STIMULI_TEMPLATE`：刺激模板（word_label/condition/type 等列）
+
+输出
+- 控制台日志 + 校验报告（如脚本后续写文件，以实际实现为准）
+
+关键实现点
+- “精确匹配”而不是 contains：避免 `yyw_1` 匹配到 `yyw_10` 这类子串 bug
 """
 
 import pandas as pd

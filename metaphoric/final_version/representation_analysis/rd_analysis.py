@@ -1,4 +1,25 @@
-﻿from __future__ import annotations
+"""
+rd_analysis.py
+
+用途
+- 在 ROI 内计算表征维度 RD（Representational Dimensionality）：
+  对每个 subject、每个 time（pre/post）、每个 condition（yy/kj）的 4D patterns 提取 trials×voxels 样本，
+  计算达到给定解释方差阈值所需的 PCA 成分数（或协方差特征值版本），作为“表征几何复杂度/压缩程度”的指标。
+
+输入
+- pattern_root: `${PATTERN_ROOT}`（每个 sub-xx 一个目录，包含 `pre_yy.nii.gz` 等）
+- roi_dir: ROI masks 目录（`*.nii` 或 `*.nii.gz`）
+- output_dir: 输出目录
+
+输出（output_dir）
+- `rd_subject_metrics.tsv`：subject×roi×time×condition 的 RD 值
+- `rd_group_summary.tsv`：组水平统计（post vs pre；yy vs kj；以及差异中的差异）
+- `rd_summary.json`：包含 ANOVA（若 statsmodels 可用）与摘要统计
+"""
+
+from __future__ import annotations
+
+
 
 import argparse
 from pathlib import Path

@@ -19,6 +19,20 @@ fMRI MVPA ROI Pipeline - 完整版本（带特征选择）
 使用方法：
     python fmri_mvpa_roi_pipeline_merged.py
 
+用途（主线定位）
+- 学习阶段（run3-4）的 ROI-level MVPA：检验特定 ROI 是否包含可区分 yy vs kj 的多体素信息。
+- 输出每个 ROI 的分类准确率、置换检验与组水平统计，并生成可视化与 HTML 报告。
+
+输入（默认相对于 `${PYTHON_METAPHOR_ROOT}`）
+- LSS 单 trial betas（学习阶段）：`lss_betas_final/sub-xx/run-3|4/` + `trial_info.csv`
+- ROI masks：`glm_analysis_fwe_final/2nd_level_CLUSTER_FWE/...` 或 `roi_masks_final/`
+
+输出（默认 `${PYTHON_METAPHOR_ROOT}/mvpa_roi_results`）
+- `mvpa_subject_metrics.tsv/csv`（以脚本实际命名为准）：subject×roi 的准确率与诊断信息
+- `mvpa_group_summary.tsv`：组水平统计与显著性
+- `analysis.log`：日志
+- `report.html` + 图表文件（由 visualization/report_generator 生成）
+
 作者: AI Assistant
 日期: 2024
 """
@@ -53,9 +67,10 @@ class MVPAConfig:
         # 基本参数
         self.subjects = [f"sub-{i:02d}" for i in range(1, 29)]
         self.runs = [3, 4]  # 支持多个run
-        self.lss_root = Path(r"E:/python_metaphor/lss_betas_final")
-        self.roi_dir = Path(r"E:/python_metaphor/glm_analysis_fwe_final/2nd_level_CLUSTER_FWE")
-        self.results_dir = Path(r"E:/python_metaphor/mvpa_roi_results")
+        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        self.lss_root = base_dir / "lss_betas_final"
+        self.roi_dir = base_dir / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE"
+        self.results_dir = base_dir / "mvpa_roi_results"
 
         # 分类器参数
         self.svm_params = {
@@ -672,5 +687,4 @@ def load_lss_trial_data(subject, run, config):
     log(f"?? {subject} run-{run}: {len(beta_images)}?trial (??: {lss_dir.name})", config)
 
     return beta_images, valid_trials_df
-
 

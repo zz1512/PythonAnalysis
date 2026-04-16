@@ -1,4 +1,31 @@
-﻿from __future__ import annotations
+"""
+pattern_metrics.py
+
+用途
+- final_version 中“模式/表征”分析的底层数值计算库：
+  - 从 4D NIfTI + mask 提取 trials×voxels 样本
+  - 计算 RDM/DSM、RD（表征维度）、GPS（紧凑度）
+  - searchlight（RD、seed connectivity）所需的局部邻域计算与组水平统计
+
+设计原则
+- 只做“数学/数组计算”，不关心实验业务逻辑（yy/kj/pre/post 等在上层脚本处理）。
+
+论文意义
+- 这些指标支撑“表征几何如何变化”的论证：不仅看激活强弱，还看模式之间的相似性结构、
+  维度复杂度（RD）与紧凑度/一致性（GPS），以及它们在空间上的分布（searchlight）。
+
+结果解读（常见方向性）
+- RD（维度）更高通常表示表征更复杂/更分散；但也可能反映噪声或试次数不足。
+- GPS（平均 Fisher-z 相似度）更高通常表示同一 ROI/邻域内模式更一致或更“聚合”。
+- DSM/RDM 相关（`dsm_correlation`）更高表示两个表征空间的几何更一致（例如 pre vs post，或 neural vs model RDM）。
+
+常见坑
+- image/mask 的 shape/affine 不一致会直接导致样本错位（`load_masked_samples` 会报错）。
+- trial 数量太少或样本为常数向量会让相关距离不可用（这时 RD/GPS 也不可信）。
+- searchlight 局部邻域过小会高方差，过大则会把不同功能区混在一起；需要和体素分辨率/平滑策略一起权衡。
+"""
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Sequence

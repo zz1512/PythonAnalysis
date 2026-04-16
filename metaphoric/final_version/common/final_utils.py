@@ -1,4 +1,27 @@
-﻿from __future__ import annotations
+"""
+final_utils.py
+
+用途
+- final_version 各分析脚本共享的通用工具函数（文件读写、统计摘要、差异中的差异等）。
+- 尽量保持“轻依赖、可复用、可读”，让上层脚本只关注业务逻辑。
+
+常见输入/输出
+- 输入多为 TSV/CSV（`read_table()`），输出多为 TSV/CSV/JSON（`write_table()` / `save_json()`）。
+
+论文意义
+- 这类工具不直接产生“显著性结论”，但它们决定你的结果表是否可复现、统计摘要是否一致、
+  以及各模块输出能否被后续步骤可靠读取（避免因为 IO/格式问题造成的隐性错误）。
+
+结果解读
+- `paired_t_summary()` / `one_sample_t_summary()` 等返回的是“快速 sanity check”的统计摘要。
+  若要写入论文，仍应回到主分析脚本中确认模型设定、数据过滤与多重比较策略。
+
+常见坑
+- TSV/CSV 分隔符混用导致列读错（建议统一使用 `read_table()`/`write_table()`）。
+- `save_json()` 默认 `ensure_ascii=False`，便于中文元信息；但跨语言环境读取时要确保 UTF-8。
+"""
+
+from __future__ import annotations
 
 import json
 import math
