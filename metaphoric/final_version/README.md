@@ -226,7 +226,15 @@ python main_analysis.py
 
 产出：
 - `lss_betas_final/sub-xx/run-3/`、`run-4/`：学习阶段单 trial beta maps
+- 每个 `run-3/4` 目录还会包含 `trial_info.csv` 和 `mask.nii.gz`
+- 根目录会写出 `lss_betas_final/processing_results.csv`，用于汇总每个 `(subject, run)` 的处理状态
 - `glm_analysis_fwe_final/`：学习阶段 GLM 一阶/二阶结果（含 cluster-FWE）
+
+运行说明：
+- `fmri_lss_enhance.py` 现在默认按低 I/O 模式运行，默认 `LSS_N_JOBS=1`
+- 重跑时会优先复用已存在的 `mask.nii.gz`
+- 已有 beta 只有在 Nilearn 可正常读取时才会跳过；损坏 beta 会删除后重算
+- 可通过 `LSS_N_JOBS`、`LSS_BATCH_SIZE`、`LSS_SKIP_EXISTING` 调整并行数、批大小和断点续跑行为
 
 （可选）生成 ROI masks：
 ```bash

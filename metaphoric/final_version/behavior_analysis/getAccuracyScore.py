@@ -13,21 +13,24 @@
     3. 效应量计算：Cohen's dz（配对）和Hedges' g（独立）
     4. 正态性检验：Shapiro-Wilk检验
 
-预期结果示例:
+正确率结果:YY 条件的正确率显著高于 KJ
     被试数 n = 27
     YY 平均(被试级) = 0.6799 ± 0.1713
     KJ 平均(被试级) = 0.5878 ± 0.2350
     差值(YY-KJ) = 0.0921 95%CI [0.0473, 0.1369]
     t(26) = 4.2232, p = 0.000261
     Cohen's dz = 0.813
+    Shapiro 正态性（差值）：W = 0.9508, p = 0.224628  (p>0.05 则差值近似正态)
+    独立样本 Welch t（补充，不按被试配对聚合）
+    YY 试次数 = 1890, KJ 试次数 = 1890
+    t ≈ 5.9001, p = 0.000000, Hedges' g = 0.192
+
+正确率行为结果总结：
+在 27 名被试中，YY 条件下的平均正确率（M = 0.680, SD = 0.171）显著高于 KJ 条件（M = 0.588, SD = 0.235），配对样本 t 检验显示两者差异显著，t(26) = 4.22, p < .001, Cohen's dz = 0.81。平均差值为 0.092，95% CI [0.047, 0.137]。差值分布近似正态（Shapiro-Wilk p = .225）。
 
 注意事项:
     - 第12个被试没有行为数据，实际分析被试数为27
     - 需要确保数据文件包含'trial_type'和'memory'列
-
-作者: 研究团队
-版本: 1.0
-日期: 2024
 """
 
 import os, re, glob
@@ -39,6 +42,7 @@ from scipy import stats
 # Prefer env-var based root for portability.
 _ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 DATA_DIR = os.environ.get("METAPHOR_DATA_EVENTS", str(_ROOT / "data_events"))  # 行为数据文件目录
+OUT_DIR = os.environ.get("METAPHOR_BEHAVIOR_RESULTS", str(_ROOT / "behavior_results"))  # 结果输出目录
 FILE_PATTERN = "*run-7_events.tsv"     # 文件匹配模式
 DV_COL = "memory"                      # 因变量列名（记忆效果指标）
 
@@ -153,7 +157,7 @@ if sub_df.empty:
     raise RuntimeError("没有找到同时含有 YY 与 KJ 条件的被试，无法进行成对 t 检验。")
 
 sub_df["diff"] = sub_df["YY_mean"] - sub_df["KJ_mean"]
-sub_df.to_csv(os.path.join(DATA_DIR, "run7行为结果数据.csv"), index=False, encoding="utf-8-sig")
+sub_df.to_csv(os.path.join(OUT_DIR, "run7行为结果数据.csv"), index=False, encoding="utf-8-sig")
 
 # ========= 成对样本 t 检验（主分析） =========
 yy = sub_df["YY_mean"].values
@@ -213,4 +217,4 @@ if welch is not None:
 else:
     print("\n（未执行 Welch 独立样本 t，因为逐试次数据不足或不存在。）")
 
-print(f"\n已导出被试级均值表：{os.path.join(DATA_DIR, 'run7行为结果数据.csv')}")
+print(f"\n已导出被试级均值表：{os.path.join(OUT_DIR, 'run7行为结果数据.csv')}")

@@ -522,17 +522,24 @@
 输出：
 - `lss_betas_final/sub-xx/run-3/`
 - `lss_betas_final/sub-xx/run-4/`
+- 每个 run 目录下还会保存 `trial_info.csv` 和 `mask.nii.gz`
+- 根目录会保存 `lss_betas_final/processing_results.csv`
 
 结果怎么读：
 - 和 Step 2 一样，它主要是中间层产物，不是最后论文证据
+- 这个版本现在偏向“低 I/O + 可续跑”：同一个 run 的 fMRI 只加载一次，重跑优先复用已有 mask
 
 常见坑：
 - 把学习阶段和前后测混为一谈
 - 用学习阶段 LSS 的结果去替代前后测 RSA 主线输入
+- 看到 `Computing mask...` 以为卡死；很多时候其实是不同 `(subject, run)` 的日志交错，或者第一次为该 run 生成 mask
+- 直接信任已有 beta；现在脚本会先验证 beta 是否可读，坏文件会删掉后重算
 
 最小 QC：
 - `run-3/4` 目录存在
 - trial 数量和 events 数量大体相符
+- `trial_info.csv` 的行数应和该 run 实际可用 beta 数量一致
+- 重跑后若日志提示某个 beta 损坏被重算，最终 `trial_info.csv` 仍应完整覆盖该 run
 
 #### Step 3B：`main_analysis.py`
 
