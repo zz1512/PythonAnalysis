@@ -90,32 +90,49 @@ def get_sorted_files(sub, stage, lss_df, template_df):
     return sorted_files
 
 
+def build_condition_pairs(template_df, condition_name):
+    subset = template_df[template_df['condition'] == condition_name].copy()
+    if subset.empty:
+        return []
+
+    sort_col = 'sort_id' if 'sort_id' in subset.columns else None
+    pair_specs = []
+    for pair_id, pair_rows in subset.groupby('pair_id', sort=False):
+        if sort_col is not None:
+            pair_rows = pair_rows.sort_values(sort_col)
+        indices = pair_rows.index.to_list()
+        if len(indices) != 2:
+            raise ValueError(
+                f"Template pair_id={pair_id} under {condition_name} must contain exactly 2 rows, got {len(indices)}."
+            )
+        pair_specs.append(
+            {
+                'pair_id': pair_id,
+                'index_a': int(indices[0]),
+                'index_b': int(indices[1]),
+                'word_label': str(pair_rows.iloc[0]['word_label']),
+                'partner_label': str(pair_rows.iloc[1]['word_label']),
+            }
+        )
+    return pair_specs
+
+
 def extract_itemwise_data(sim_mat, template_df, condition_name):
     """
     [新增] 提取项目级 (Item-wise) 数据
     返回: list of dicts [{'pair_id': 1, 'similarity': 0.5}, ...]
     """
-    indices = template_df[template_df['condition'] == condition_name].index.tolist()
-    if not indices: return []
-
-    # 获取 pair_id 列表 (假设每两个是一个pair)
-    # 取步长为2，获取 Topic 的行号
-    topic_indices = indices[0::2]
+    pair_specs = build_condition_pairs(template_df, condition_name)
+    if not pair_specs:
+        return []
 
     item_data = []
-    for idx_in_matrix in topic_indices:
-        # 获取矩阵中该 Topic 的 Pair_ID
-        # 注意 template_df 的 index 可能和矩阵 index (0-179) 对应
-        # template_df.iloc[idx_in_matrix] 是第 idx 行
-        pair_id = template_df.iloc[idx_in_matrix]['pair_id']
-        word_label = template_df.iloc[idx_in_matrix]['word_label']
-
-        # 提取相似度: (i, i+1)
-        sim_val = sim_mat[idx_in_matrix, idx_in_matrix + 1]
-
+    for pair_spec in pair_specs:
+        sim_val = sim_mat[pair_spec['index_a'], pair_spec['index_b']]
         item_data.append({
-            'pair_id': pair_id,
-            'word_label': word_label,  # 记录 Topic 的词，方便认
+            'pair_id': pair_spec['pair_id'],
+            'word_label': pair_spec['word_label'],
+            'partner_label': pair_spec['partner_label'],
             'similarity': sim_val
         })
 
@@ -198,6 +215,7 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
                         'condition': cond,
                         'pair_id': item['pair_id'],
                         'word_label': item['word_label'],
+                        'partner_label': item['partner_label'],
                         'similarity': item['similarity']
                     })
 
@@ -241,7 +259,7 @@ def main():
 
     lss_df = pd.read_csv(cfg.LSS_META_FILE)
     lss_df['unique_label'] = lss_df['unique_label'].astype(str)
-    template_df = pd.read_csv(cfg.STIMULI_TEMPLATE)
+    template_df = pd.read_csv(cfg.STIMULI_TEMPLATE).reset_index(drop=True)
 
     tasks = []
     for sub in cfg.SUBJECTS:

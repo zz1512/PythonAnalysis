@@ -49,7 +49,7 @@ class AnalysisConfig:
         # =========================
         # 1. 任务控制开关 (Action Flags)
         # =========================
-        self.RUN_FIRST_LEVEL = True  # 是否执行一阶分析
+        self.RUN_FIRST_LEVEL = False  # 是否执行一阶分析
         self.RUN_SECOND_LEVEL = True  # 是否执行二阶分析
 
         # --- 二阶分析方法选择 ---

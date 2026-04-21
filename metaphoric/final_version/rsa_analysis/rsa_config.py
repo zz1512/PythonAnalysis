@@ -37,17 +37,29 @@ rsa_config.py (优化版)
 """
 import os
 from pathlib import Path
+import sys
 
-# ... (保持原有的 BASE_DIR, LSS_META_FILE, STIMULI_TEMPLATE, ROI_MASKS 配置不变) ...
+CURRENT_FILE = Path(__file__).resolve()
+FINAL_ROOT = CURRENT_FILE.parents[1]
+if str(FINAL_ROOT) not in sys.path:
+    sys.path.append(str(FINAL_ROOT))
+
+from common.roi_library import select_roi_masks
+
 BASE_DIR = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 LSS_META_FILE = BASE_DIR / "lss_betas_final/lss_metadata_index_final.csv"
 STIMULI_TEMPLATE = BASE_DIR / "stimuli_template.csv"
+ROI_LIBRARY_DIR = BASE_DIR / "roi_library"
+ROI_MANIFEST = ROI_LIBRARY_DIR / "manifest.tsv"
+ROI_SET = os.environ.get("METAPHOR_ROI_SET", "main_functional")
 
-# ROI 定义 (Group Level Mask)
-ROI_MASKS = {
-    "Metaphor_gt_Spatial": BASE_DIR / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE/Metaphor_gt_Spatial/Metaphor_gt_Spatial_roi_mask.nii.gz",
-    "Spatial_gt_Metaphor": BASE_DIR / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE/Spatial_gt_Metaphor/Spatial_gt_Metaphor_roi_mask.nii.gz",
-}
+if ROI_MANIFEST.exists():
+    ROI_MASKS = select_roi_masks(ROI_MANIFEST, roi_set=ROI_SET, include_flag="include_in_rsa")
+else:
+    ROI_MASKS = {
+        "Metaphor_gt_Spatial": BASE_DIR / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE/Metaphor_gt_Spatial/Metaphor_gt_Spatial_roi_mask.nii.gz",
+        "Spatial_gt_Metaphor": BASE_DIR / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE/Spatial_gt_Metaphor/Spatial_gt_Metaphor_roi_mask.nii.gz",
+    }
 
 # ================= 新增配置 =================
 

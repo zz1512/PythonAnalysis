@@ -245,6 +245,18 @@ python create_optimized_roi_masks.py
 产出（推荐放到统一目录）：
 - `roi_masks_final/*.nii.gz`：解剖/网络/功能簇 ROI masks（供 MVPA/RSA/RD/GPS 使用）
 
+（推荐）构建统一 ROI library：
+```bash
+cd ../roi_management
+python build_roi_library.py
+```
+
+产出：
+- `roi_library/masks/main_functional/*.nii.gz`
+- `roi_library/masks/literature/*.nii.gz`
+- `roi_library/masks/atlas_robustness/*.nii.gz`
+- `roi_library/manifest.tsv`：统一 ROI 清单，供 RSA/RD/GPS/MVPA 复用
+
 ### Step 4（必跑）：模式堆叠（生成 pattern_root）
 ```bash
 cd ../../representation_analysis
@@ -262,6 +274,16 @@ cd ../rsa_analysis
 python check_data_integrity.py
 python run_rsa_optimized.py
 python rsa_lmm.py INPUT.tsv OUT_DIR
+```
+
+可选：切换不同 ROI 层级
+```bash
+set METAPHOR_ROI_SET=main_functional
+python run_rsa_optimized.py
+set METAPHOR_ROI_SET=literature
+python run_rsa_optimized.py
+set METAPHOR_ROI_SET=atlas_robustness
+python run_rsa_optimized.py
 ```
 
 产出（核心论文证据）：

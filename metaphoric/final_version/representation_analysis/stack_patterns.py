@@ -6,7 +6,7 @@ stack_patterns.py
 - 这是 final_version 里“主线粘合点”：下游 RD/GPS/RSA/MVPA 依赖这里生成的固定文件名。
 
 输入
-- metadata_path: TSV/CSV（通常是 `${PYTHON_METAPHOR_ROOT}/lss_betas_final/lss_metadata_index_final.csv`）
+- metadata_path: TSV/CSV（默认 `${PYTHON_METAPHOR_ROOT}/lss_betas_final/lss_metadata_index_final.csv`）
   必需字段（列名可有别名，会在 normalize_metadata 中统一）：
   - subject: `sub-01` 形式
   - beta_path 或 beta_file: 单 trial beta 的路径
@@ -20,6 +20,7 @@ stack_patterns.py
 
 关键约定
 - 会把 `yyw/yyew -> yy`、`kjw/kjew -> kj`，避免生成下游找不到的文件名（如 pre_yyw）。
+- 会把前后测中的 `jx -> baseline`、`jc -> fake`，以支持 baseline 控制验证。
 - 默认排除 `fake`（可用 `--exclude-conditions` 调整）。
 """
 
@@ -50,6 +51,11 @@ from common.final_utils import ensure_dir, read_table, write_table
 from common.pattern_metrics import concat_images
 
 
+PYTHON_METAPHOR_ROOT = Path(r"E:\python_metaphor")
+DEFAULT_METADATA_PATH = PYTHON_METAPHOR_ROOT / "lss_betas_final" / "lss_metadata_index_final.csv"
+DEFAULT_OUTPUT_ROOT = PYTHON_METAPHOR_ROOT / "pattern_root"
+
+
 CONDITION_MAP = {
     "metaphor": "yy",
     "yy": "yy",
@@ -67,7 +73,9 @@ CONDITION_MAP = {
     "nonlink": "baseline",
     "no_link": "baseline",
     "unlinked": "baseline",
+    "jx": "baseline",
     "fake": "fake",
+    "jc": "fake",
     "pseudoword": "fake",
     "pseudo": "fake",
     "nonword": "fake",
@@ -94,12 +102,37 @@ def normalize_label(value: str, mapping: dict[str, str], default: str | None = N
         return "yy"
     if text.startswith("kj"):
         return "kj"
+    if text == "jx":
+        return "baseline"
     if "base" in text or text.startswith("bl"):
         return "baseline"
+    if text == "jc":
+        return "fake"
     if "fake" in text or "pseudo" in text or "nonword" in text or "jia" in text:
         return "fake"
 
     return default if default is not None else text
+
+
+def resolve_beta_path(beta_value: str, metadata_path: Path, subject: str, run: int) -> str:
+    beta_text = str(beta_value).strip()
+    beta_path = Path(beta_text)
+    if beta_path.is_absolute():
+        return str(beta_path.resolve())
+
+    candidates = []
+    if beta_path.parent == Path("."):
+        candidates.append(metadata_path.parent / subject / f"run-{run}" / beta_path.name)
+    candidates.append(metadata_path.parent / beta_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate.resolve())
+
+    # Fall back to the most likely layout used by lss_betas_final.
+    if beta_path.parent == Path("."):
+        return str((metadata_path.parent / subject / f"run-{run}" / beta_path.name).resolve())
+    return str((metadata_path.parent / beta_path).resolve())
 
 
 def normalize_metadata(frame: pd.DataFrame, metadata_path: Path) -> pd.DataFrame:
@@ -124,7 +157,10 @@ def normalize_metadata(frame: pd.DataFrame, metadata_path: Path) -> pd.DataFrame
     frame["run"] = frame["run"].astype(int)
     frame["condition"] = frame["condition"].map(lambda item: normalize_label(item, CONDITION_MAP))
     frame["phase"] = frame["phase"].map(lambda item: normalize_label(item, PHASE_MAP))
-    frame["beta_path"] = frame["beta_path"].map(lambda item: str((metadata_path.parent / str(item)).resolve()) if not Path(str(item)).is_absolute() else str(Path(str(item)).resolve()))
+    frame["beta_path"] = [
+        resolve_beta_path(beta_value, metadata_path, subject, run)
+        for beta_value, subject, run in zip(frame["beta_path"], frame["subject"], frame["run"])
+    ]
     if "trial_id" not in frame.columns:
         frame["trial_id"] = range(1, len(frame) + 1)
     return frame
@@ -145,8 +181,20 @@ def stack_subject(frame: pd.DataFrame, output_dir: Path, exclude_conditions: set
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stack single-trial beta maps into phase x condition 4D images.")
-    parser.add_argument("metadata_path", type=Path, help="Trial-level metadata TSV/CSV with beta map paths.")
-    parser.add_argument("output_root", type=Path, help="Output root, one folder per subject.")
+    parser.add_argument(
+        "metadata_path",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_METADATA_PATH,
+        help=f"Trial-level metadata TSV/CSV with beta map paths (default: {DEFAULT_METADATA_PATH}).",
+    )
+    parser.add_argument(
+        "output_root",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT,
+        help=f"Output root, one folder per subject (default: {DEFAULT_OUTPUT_ROOT}).",
+    )
     parser.add_argument(
         "--exclude-conditions",
         nargs="*",
@@ -154,6 +202,9 @@ def main() -> None:
         help="Condition labels to exclude from stacking (default: fake).",
     )
     args = parser.parse_args()
+
+    if not args.metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {args.metadata_path}")
 
     metadata = normalize_metadata(read_table(args.metadata_path), args.metadata_path)
     exclude_conditions = {str(item).strip().lower() for item in args.exclude_conditions if str(item).strip()}

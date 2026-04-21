@@ -74,10 +74,39 @@ def save_scalar_map(reference_img: nib.Nifti1Image, mask: np.ndarray, values: np
 
 
 def concat_images(image_paths: Sequence[str | Path], output_path: str | Path) -> None:
+    if not image_paths:
+        raise ValueError("No images provided for concatenation.")
+
     images = [nib.load(str(path)) for path in image_paths]
+    first = images[0]
+    first_data = np.asarray(first.get_fdata(), dtype=np.float32)
+    if first_data.ndim == 3:
+        first_data = first_data[..., np.newaxis]
+    if first_data.ndim != 4:
+        raise ValueError(f"Expected 3D or 4D image, got shape {first.shape} from {image_paths[0]}")
+
+    volumes = [first_data]
+    ref_shape = first_data.shape[:3]
+    ref_affine = first.affine
+
+    for path, img in zip(image_paths[1:], images[1:]):
+        data = np.asarray(img.get_fdata(), dtype=np.float32)
+        if data.ndim == 3:
+            data = data[..., np.newaxis]
+        if data.ndim != 4:
+            raise ValueError(f"Expected 3D or 4D image, got shape {img.shape} from {path}")
+        if data.shape[:3] != ref_shape:
+            raise ValueError(f"Image shape mismatch during concatenation: {path} has {data.shape[:3]}, expected {ref_shape}")
+        if not np.allclose(img.affine, ref_affine):
+            raise ValueError(f"Image affine mismatch during concatenation: {path}")
+        volumes.append(data)
+
+    stacked = np.concatenate(volumes, axis=3)
     output_path = Path(output_path)
     ensure_dir(output_path.parent)
-    nib.concat_images(images, axis=3).to_filename(output_path)
+    header = first.header.copy()
+    header.set_data_dtype(np.float32)
+    nib.save(nib.Nifti1Image(stacked, ref_affine, header), str(output_path))
 
 
 def correlation_distance_rdm(samples: np.ndarray) -> np.ndarray:

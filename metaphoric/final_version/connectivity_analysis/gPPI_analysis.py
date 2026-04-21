@@ -33,6 +33,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import nibabel as nib
 import numpy as np
 import pandas as pd
 from nilearn.glm.first_level.hemodynamic_models import compute_regressor
@@ -71,13 +72,24 @@ def build_psych_regressor(events: pd.DataFrame, frame_times: np.ndarray, *, tr: 
     Psychological regressor: +1 for yy, -1 for kj during learning runs.
     Convolved with HRF via compute_regressor.
     """
-    work = events[events["trial_type"].isin(["yy", "kj"])].copy()
+    trial_type = events["trial_type"].astype(str).str.lower()
+    work = events.loc[trial_type.isin(["yy", "kj"])].copy()
     if work.empty:
         return np.zeros((frame_times.size, 1), dtype=float)
     amplitudes = np.where(work["trial_type"].astype(str).str.lower() == "yy", 1.0, -1.0)
     exp = np.column_stack([work["onset"].to_numpy(float), work["duration"].to_numpy(float), amplitudes.astype(float)])
     reg, _ = compute_regressor(exp, hrf_model="spm", frame_times=frame_times, con_id="psych")
     return reg.reshape(-1, 1)
+
+
+def apply_sample_mask(values, sample_mask):
+    if sample_mask is None:
+        return values
+    keep = np.asarray(sample_mask, dtype=int)
+    if isinstance(values, pd.DataFrame):
+        return values.iloc[keep].reset_index(drop=True)
+    array = np.asarray(values)
+    return array[keep]
 
 
 def main() -> None:
@@ -114,21 +126,24 @@ def main() -> None:
 
             confounds, sample_mask = glm_utils.robust_load_confounds(str(confounds_path), config.DENOISE_STRATEGY)
             tr = float(getattr(config, "TR", 2.0))
+            full_n_scans = int(nib.load(str(fmri_path)).shape[3])
 
             seed_masker = NiftiMasker(mask_img=str(args.seed_mask), standardize=True, t_r=tr)
             seed_ts = seed_masker.fit_transform(str(fmri_path), confounds=confounds, sample_mask=sample_mask).ravel()
             n_scans = seed_ts.size
-            frame_times = np.arange(n_scans, dtype=float) * tr
+            frame_times_full = np.arange(full_n_scans, dtype=float) * tr
 
-            psych = build_psych_regressor(events, frame_times, tr=tr).ravel()
+            psych_full = build_psych_regressor(events, frame_times_full, tr=tr).ravel()
+            psych = np.asarray(apply_sample_mask(psych_full, sample_mask), dtype=float).ravel()
+            confounds_kept = apply_sample_mask(confounds, sample_mask)
             seed_z = zscore(seed_ts)
             psych_z = zscore(psych)
             interaction = zscore(seed_z * psych_z)
 
             # Design: intercept + seed + psych + interaction + confounds
             base = np.column_stack([np.ones(n_scans), seed_z, psych_z, interaction])
-            if confounds is not None and len(confounds) == n_scans:
-                design = np.column_stack([base, np.asarray(confounds, dtype=float)])
+            if confounds_kept is not None and len(confounds_kept) == n_scans:
+                design = np.column_stack([base, np.asarray(confounds_kept, dtype=float)])
             else:
                 design = base
 

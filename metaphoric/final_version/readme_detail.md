@@ -590,6 +590,20 @@
 - mask 文件能在脑空间里正常打开
 - ROI 不是空的，也不是整个脑都被选中
 
+#### 推荐：`roi_management/build_roi_library.py`
+
+为什么做：
+- 把 ROI 管理成统一资产，而不是每个脚本各自写路径
+- 一次性生成三层 ROI：`main_functional`、`literature`、`atlas_robustness`
+
+最关键产出：
+- `roi_library/masks/.../*.nii.gz`
+- `roi_library/manifest.tsv`
+
+后续怎么用：
+- RSA 默认会优先读取 `roi_library/manifest.tsv`
+- 可通过环境变量 `METAPHOR_ROI_SET` 切换 ROI 层级，例如 `main_functional`、`literature`、`atlas_robustness`
+
 ---
 
 ### Step 4：模式堆叠 `stack_patterns.py`
