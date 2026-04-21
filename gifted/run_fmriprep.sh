@@ -9,9 +9,9 @@ export TEMPLATEFLOW_AWS_S3_NO_SIGN_REQUEST=YES
 export TEMPLATEFLOW_TIMEOUT=300
 
 # ===================== 【核心路径配置：已适配新版BIDS】 =====================
-BIDS_ROOT="/home/zhangze/data/gifted_fMRI_BIDS"
+BIDS_ROOT="/home/zhangze/data/gifted_BIDS"
 inputdir="${BIDS_ROOT}"
-outputdir="${BIDS_ROOT}/derivatives/fmriprep"
+outputdir="${BIDS_ROOT}/fmriprep"
 fslicense="${BIDS_ROOT}/license.txt"
 workingdir="${BIDS_ROOT}/tmp/fmriprep_wd"
 TEMPLATEFLOW_DIR="${BIDS_ROOT}/templateflow"
@@ -20,10 +20,10 @@ participant_files="${BIDS_ROOT}/code/participants.txt"
 bids_filter_file="${BIDS_ROOT}/code/bids_filters.json"
 
 # ===================== 【资源配置：可根据服务器调整】 =====================
-num_cores=4
-nthreads=3
-memMB=16000
-parallel_jobs=3
+num_cores=6
+nthreads=4
+memMB=24000
+parallel_jobs=2
 
 # ===================== 【目录创建与权限】 =====================
 mkdir -p "${outputdir}/logs" "${workingdir}" "${TEMPLATEFLOW_DIR}"
@@ -85,7 +85,6 @@ parallel -j ${parallel_jobs} --linebuffer '
         --fs-license-file /opt/freesurfer/license.txt
         --output-spaces MNI152NLin2009cAsym:res-2 fsLR:den-91k
         --skull-strip-template MNI152NLin2009cAsym
-        --cifti-output 91k
         --use-syn-sdc warn
         --fd-spike-threshold 0.5
         --dvars-spike-threshold 1.5
