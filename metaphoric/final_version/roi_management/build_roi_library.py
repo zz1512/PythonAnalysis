@@ -10,7 +10,7 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from nilearn import datasets
-from nilearn.image import load_img
+from nilearn.image import load_img, resample_to_img
 from scipy import ndimage
 
 
@@ -44,7 +44,7 @@ PEAK_MAX_DISTANCE_MM = 8.0
 MIN_ATLAS_VOXELS = 50
 
 # pattern_root 用于 affine/shape 对齐 QC（默认读环境变量，找不到则跳过）。
-DEFAULT_PATTERN_ROOT = Path(os.environ.get("PATTERN_ROOT", str(BASE_DIR / "patterns")))
+DEFAULT_PATTERN_ROOT = Path(os.environ.get("PATTERN_ROOT", str(BASE_DIR / "pattern_root")))
 
 
 FUNCTIONAL_SPECS = [
@@ -274,6 +274,20 @@ def save_mask(mask: np.ndarray, reference_img: nib.Nifti1Image, output_path: Pat
     return voxel_count, volume_mm3
 
 
+def save_mask_image(mask_img: nib.Nifti1Image, output_path: Path) -> tuple[int, float]:
+    output_path = Path(output_path)
+    ensure_dir(output_path.parent)
+    data = (np.asarray(mask_img.get_fdata()) > 0).astype(np.uint8)
+    header = mask_img.header.copy()
+    header.set_data_dtype(np.uint8)
+    clean_img = nib.Nifti1Image(data, mask_img.affine, header)
+    nib.save(clean_img, str(output_path))
+    voxel_count = int(data.sum())
+    zooms = clean_img.header.get_zooms()[:3]
+    volume_mm3 = float(voxel_count * float(np.prod(zooms)))
+    return voxel_count, volume_mm3
+
+
 def world_to_voxel(affine: np.ndarray, xyz: tuple[float, float, float]) -> tuple[int, int, int]:
     ijk = nib.affines.apply_affine(np.linalg.inv(affine), np.asarray(xyz, dtype=float))
     rounded = np.rint(ijk).astype(int)
@@ -457,6 +471,14 @@ def atlas_label_lookup(labels: list[str] | tuple[str, ...]) -> dict[str, int]:
     return lookup
 
 
+def has_explicit_hemisphere(labels: list[str]) -> bool:
+    for label in labels:
+        label_lower = str(label).lower()
+        if "left" in label_lower or "right" in label_lower or label_lower.endswith("_l") or label_lower.endswith("_r"):
+            return True
+    return False
+
+
 def match_label_indices(
     label_to_index: dict[str, int],
     requested_labels: list[str],
@@ -495,10 +517,46 @@ def create_atlas_mask(
     hemisphere: str | None = None,
 ) -> np.ndarray:
     indices = match_label_indices(label_to_index, labels, hemisphere=hemisphere)
-    return np.isin(atlas_data, indices)
+    mask = np.isin(atlas_data, indices)
+    if hemisphere in {"L", "R"} and not has_explicit_hemisphere(labels):
+        coords = np.argwhere(mask)
+        hemi_mask = np.zeros_like(mask, dtype=bool)
+        if coords.size == 0:
+            return hemi_mask
+        world = nib.affines.apply_affine(atlas_img.affine, coords)
+        if hemisphere == "L":
+            keep = world[:, 0] < 0
+        else:
+            keep = world[:, 0] > 0
+        kept_coords = coords[keep]
+        if kept_coords.size > 0:
+            hemi_mask[tuple(kept_coords.T)] = True
+        return hemi_mask
+    return mask
 
 
-def build_harvard_oxford_rois(mask_root: Path) -> list[dict[str, object]]:
+def get_reference_pattern_image(pattern_root: Path) -> tuple[nib.Nifti1Image | None, str | None]:
+    if pattern_root.exists():
+        candidates = sorted(pattern_root.glob("sub-*/pre_yy.nii.gz"))
+        if not candidates:
+            candidates = sorted(pattern_root.glob("sub-*/*.nii.gz"))
+        if candidates:
+            return nib.load(str(candidates[0])), str(candidates[0])
+    return None, None
+
+
+def maybe_resample_mask_to_reference(mask: np.ndarray, atlas_img: nib.Nifti1Image, reference_img: nib.Nifti1Image | None) -> nib.Nifti1Image:
+    header = atlas_img.header.copy()
+    header.set_data_dtype(np.uint8)
+    mask_img = nib.Nifti1Image(mask.astype(np.uint8), atlas_img.affine, header)
+    if reference_img is None:
+        return mask_img
+    if tuple(mask_img.shape[:3]) == tuple(reference_img.shape[:3]) and np.allclose(mask_img.affine, reference_img.affine, atol=1e-4):
+        return mask_img
+    return resample_to_img(mask_img, reference_img, interpolation="nearest", force_resample=True, copy_header=True)
+
+
+def build_harvard_oxford_rois(mask_root: Path, reference_img: nib.Nifti1Image | None = None) -> list[dict[str, object]]:
     output_dir = ensure_dir(mask_root / "literature")
     qc_dir = ensure_dir(mask_root.parent / "qc")
     atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
@@ -517,7 +575,8 @@ def build_harvard_oxford_rois(mask_root: Path) -> list[dict[str, object]]:
             hemisphere=spec["hemisphere"],
         )
         output_path = output_dir / f"{spec['roi_name']}.nii.gz"
-        voxel_count, volume_mm3 = save_mask(mask, atlas_img, output_path)
+        mask_img = maybe_resample_mask_to_reference(mask, atlas_img, reference_img)
+        voxel_count, volume_mm3 = save_mask_image(mask_img, output_path)
         is_valid = voxel_count >= MIN_ATLAS_VOXELS
         atlas_qc.append({
             "roi_name": spec["roi_name"],
@@ -557,7 +616,7 @@ def build_harvard_oxford_rois(mask_root: Path) -> list[dict[str, object]]:
     return manifest_rows
 
 
-def build_aal_rois(mask_root: Path) -> list[dict[str, object]]:
+def build_aal_rois(mask_root: Path, reference_img: nib.Nifti1Image | None = None) -> list[dict[str, object]]:
     output_dir = ensure_dir(mask_root / "atlas_robustness")
     qc_dir = ensure_dir(mask_root.parent / "qc")
     atlas = datasets.fetch_atlas_aal()
@@ -571,7 +630,8 @@ def build_aal_rois(mask_root: Path) -> list[dict[str, object]]:
         indices = match_label_indices(label_to_index, spec["labels"], hemisphere=spec["hemisphere"])
         mask = np.isin(atlas_data, indices)
         output_path = output_dir / f"{spec['roi_name']}.nii.gz"
-        voxel_count, volume_mm3 = save_mask(mask, atlas_img, output_path)
+        mask_img = maybe_resample_mask_to_reference(mask, atlas_img, reference_img)
+        voxel_count, volume_mm3 = save_mask_image(mask_img, output_path)
         is_valid = voxel_count >= MIN_ATLAS_VOXELS
         atlas_qc.append({
             "roi_name": spec["roi_name"],
@@ -637,16 +697,7 @@ def run_roi_alignment_qc(manifest: pd.DataFrame, output_dir: Path, pattern_root:
     - 不一致的 ROI 不会被自动重采样；仅在 `roi_alignment_qc.tsv` 里标红，提示下游需要显式 resample。
     """
     qc_dir = ensure_dir(output_dir / "qc")
-    ref_img = None
-    ref_source = None
-    if pattern_root.exists():
-        # 寻找第一个 pre_yy.nii.gz 作为参考，否则任一 nii.gz
-        candidates = sorted(pattern_root.glob("sub-*/pre_yy.nii.gz"))
-        if not candidates:
-            candidates = sorted(pattern_root.glob("sub-*/*.nii.gz"))
-        if candidates:
-            ref_img = nib.load(str(candidates[0]))
-            ref_source = str(candidates[0])
+    ref_img, ref_source = get_reference_pattern_image(pattern_root)
 
     if ref_img is None:
         save_json(
@@ -710,11 +761,12 @@ def build_roi_library(
     output_dir = ensure_dir(output_dir)
     ensure_dir(output_dir / "masks")
     ensure_dir(output_dir / "qc")
+    reference_img, _ = get_reference_pattern_image(pattern_root)
 
     rows: list[dict[str, object]] = []
     rows.extend(build_functional_rois(output_dir / "masks"))
-    rows.extend(build_harvard_oxford_rois(output_dir / "masks"))
-    rows.extend(build_aal_rois(output_dir / "masks"))
+    rows.extend(build_harvard_oxford_rois(output_dir / "masks", reference_img=reference_img))
+    rows.extend(build_aal_rois(output_dir / "masks", reference_img=reference_img))
 
     manifest = pd.DataFrame(rows).sort_values(["roi_set", "roi_name"]).reset_index(drop=True)
     write_table(manifest, manifest_path)

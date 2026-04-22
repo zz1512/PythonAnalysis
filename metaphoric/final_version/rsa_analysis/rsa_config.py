@@ -54,7 +54,7 @@ STIMULI_TEMPLATE = BASE_DIR / "stimuli_template.csv"
 ROI_LIBRARY_DIR = BASE_DIR / "roi_library"
 ROI_MANIFEST = ROI_LIBRARY_DIR / "manifest.tsv"
 # ROI_SET可以手动指定：main_functional（主结果）、literature（文献）、atlas_robustness（稳健补充）
-ROI_SET = os.environ.get("METAPHOR_ROI_SET", "main_functional")
+ROI_SET = os.environ.get("METAPHOR_ROI_SET", "literature")
 
 if ROI_MANIFEST.exists():
     ROI_MASKS = select_roi_masks(ROI_MANIFEST, roi_set=ROI_SET, include_flag="include_in_rsa")
