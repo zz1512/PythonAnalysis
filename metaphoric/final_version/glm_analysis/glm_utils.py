@@ -44,7 +44,7 @@ from pathlib import Path
 from nilearn import image, datasets
 from nilearn.image import new_img_like, math_img
 from nilearn.reporting import get_clusters_table
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import binary_dilation, label as ndi_label
 import logging
 
 logger = logging.getLogger(__name__)
@@ -125,9 +125,52 @@ def compute_group_mask(contrast_imgs, threshold_ratio=0.7):
     return new_img_like(first_img, group_mask_data.astype(np.uint8))
 
 
+def _lookup_atlas_label(atlas_data, affine_inv, labels, xyz):
+    """在给定 atlas 上查峰值坐标的标签；命中背景/越界返回 None。"""
+    from nilearn.image import coord_transform
+    vox = coord_transform(xyz[0], xyz[1], xyz[2], affine_inv)
+    vox = [int(round(v)) for v in vox]
+    if not (0 <= vox[0] < atlas_data.shape[0]
+            and 0 <= vox[1] < atlas_data.shape[1]
+            and 0 <= vox[2] < atlas_data.shape[2]):
+        return None
+    idx = int(atlas_data[vox[0], vox[1], vox[2]])
+    if idx <= 0:
+        return None
+    if 0 <= idx < len(labels):
+        name = str(labels[idx]).strip()
+        if name and name.lower() != "background":
+            return name
+    return None
+
+
+def _lookup_aal_label(atlas_data, affine_inv, label_to_name, xyz):
+    """AAL atlas 的标签是稀疏整数 id（非连续），需要用 dict 查。"""
+    from nilearn.image import coord_transform
+    vox = coord_transform(xyz[0], xyz[1], xyz[2], affine_inv)
+    vox = [int(round(v)) for v in vox]
+    if not (0 <= vox[0] < atlas_data.shape[0]
+            and 0 <= vox[1] < atlas_data.shape[1]
+            and 0 <= vox[2] < atlas_data.shape[2]):
+        return None
+    idx = int(atlas_data[vox[0], vox[1], vox[2]])
+    if idx <= 0:
+        return None
+    name = label_to_name.get(idx)
+    if name:
+        return str(name).strip()
+    return None
+
+
 def generate_cluster_report(stat_img, threshold, output_path, min_voxels=20, atlas_name='cort-maxprob-thr25-2mm'):
     """
-    生成聚类表格并自动标注脑区
+    生成聚类表格并自动标注脑区。
+
+    标注策略（四级 fallback）
+    1. Harvard-Oxford cortical (`atlas_name`)
+    2. Harvard-Oxford subcortical (`sub-maxprob-thr25-2mm`)
+    3. AAL
+    4. fallback 为 `Unknown_<hemi>_<near_label>`（仅给半球 + 最近非零标签，避免下游文件名 `cluster_XX`）
     """
     try:
         table = get_clusters_table(
@@ -140,35 +183,85 @@ def generate_cluster_report(stat_img, threshold, output_path, min_voxels=20, atl
     if table is None or table.empty:
         return
 
-    # 加载 Atlas
-    atlas = datasets.fetch_atlas_harvard_oxford(atlas_name)
-    atlas_data = atlas.maps.get_fdata()
-    labels = atlas.labels
-    affine_inv = np.linalg.inv(atlas.maps.affine)
+    # 一级：H-O cort
+    cort = datasets.fetch_atlas_harvard_oxford(atlas_name)
+    cort_data = cort.maps.get_fdata()
+    cort_labels = cort.labels
+    cort_affine_inv = np.linalg.inv(cort.maps.affine)
+
+    # 二级：H-O subcortical
+    try:
+        sub = datasets.fetch_atlas_harvard_oxford('sub-maxprob-thr25-2mm')
+        sub_data = sub.maps.get_fdata()
+        sub_labels = sub.labels
+        sub_affine_inv = np.linalg.inv(sub.maps.affine)
+    except Exception as e:
+        logger.warning(f"Could not load Harvard-Oxford subcortical atlas: {e}")
+        sub_data = sub_labels = sub_affine_inv = None
+
+    # 三级：AAL
+    try:
+        aal = datasets.fetch_atlas_aal()
+        aal_data = np.asarray(aal.maps.get_fdata()).astype(int) \
+            if hasattr(aal, 'maps') else np.asarray(image.load_img(aal['maps']).get_fdata()).astype(int)
+        aal_affine_inv = np.linalg.inv(
+            aal.maps.affine if hasattr(aal, 'maps') else image.load_img(aal['maps']).affine
+        )
+        aal_label_to_name = {int(idx): str(lab) for lab, idx in zip(aal['labels'], aal['indices'])}
+    except Exception as e:
+        logger.warning(f"Could not load AAL atlas: {e}")
+        aal_data = aal_label_to_name = aal_affine_inv = None
 
     regions = []
-    from nilearn.image import coord_transform
-
     for _, row in table.iterrows():
-        vox = coord_transform(row['X'], row['Y'], row['Z'], affine_inv)
-        vox = [int(round(v)) for v in vox]
+        xyz = (row['X'], row['Y'], row['Z'])
 
-        region_name = "Unknown"
-        # 边界检查
-        if (0 <= vox[0] < atlas_data.shape[0] and
-                0 <= vox[1] < atlas_data.shape[1] and
-                0 <= vox[2] < atlas_data.shape[2]):
-            idx = int(atlas_data[vox[0], vox[1], vox[2]])
-            if 0 <= idx < len(labels):
-                region_name = labels[idx]
+        name = _lookup_atlas_label(cort_data, cort_affine_inv, cort_labels, xyz)
+        source = "HO_cort"
 
-        regions.append(region_name)
+        if name is None and sub_data is not None:
+            name = _lookup_atlas_label(sub_data, sub_affine_inv, sub_labels, xyz)
+            source = "HO_sub"
+
+        if name is None and aal_data is not None:
+            name = _lookup_aal_label(aal_data, aal_affine_inv, aal_label_to_name, xyz)
+            source = "AAL"
+
+        if name is None:
+            hemi = "L" if float(row['X']) < 0 else ("R" if float(row['X']) > 0 else "M")
+            name = f"Unknown_{hemi}_x{int(round(row['X']))}_y{int(round(row['Y']))}_z{int(round(row['Z']))}"
+            source = "fallback"
+
+        regions.append(f"{name}|{source}")
 
     table.insert(0, 'Region', regions)
     table.to_csv(output_path, index=False)
     logger.info(f"Report saved: {output_path}")
 
 
-def save_binary_mask(stat_img, threshold, output_path):
-    mask = math_img(f'img > {threshold}', img=stat_img)
-    mask.to_filename(output_path)
+def save_binary_mask(stat_img, threshold, output_path, min_cluster_voxels: int = 0):
+    """
+    保存阈值化的二值 ROI mask。
+
+    关键改动
+    - 增加 `min_cluster_voxels` 参数，与 `generate_cluster_report` 的 `cluster_threshold`
+      口径对齐，避免 mask 里保留了小于最小 cluster 体素数的零散显著碎片，
+      导致下游 ROI 切分看到的体素集合与 cluster_report.csv 不一致。
+
+    参数
+    - stat_img: 统计图（例如 -log10(p) map）。
+    - threshold: 阈值（体素 > threshold 视为显著）。
+    - output_path: 输出 NIfTI 路径。
+    - min_cluster_voxels: 最小 cluster 体素数（<= 0 表示不做 cluster 过滤，向后兼容）。
+    """
+    mask_img = math_img(f'img > {threshold}', img=stat_img)
+    if min_cluster_voxels and min_cluster_voxels > 0:
+        mask_data = np.asarray(mask_img.get_fdata()) > 0
+        labeled, n_components = ndi_label(mask_data)
+        if n_components > 0:
+            sizes = np.bincount(labeled.ravel())
+            # sizes[0] 是背景；从 id=1 开始比较
+            keep_ids = np.where(sizes[1:] >= int(min_cluster_voxels))[0] + 1
+            filtered = np.isin(labeled, keep_ids)
+            mask_img = new_img_like(mask_img, filtered.astype(np.uint8))
+    mask_img.to_filename(output_path)

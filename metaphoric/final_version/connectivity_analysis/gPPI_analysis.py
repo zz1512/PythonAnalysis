@@ -54,6 +54,7 @@ if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
 from common.final_utils import ensure_dir, save_json, write_table  # noqa: E402
+from common.roi_library import default_roi_tagged_out_dir  # noqa: E402
 from glm_config import config  # noqa: E402
 import glm_utils  # noqa: E402
 
@@ -96,13 +97,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ROI-to-ROI gPPI (seed x psych) during learning runs (run3-4).")
     parser.add_argument("seed_mask", type=Path, help="Seed ROI mask NIfTI.")
     parser.add_argument("target_roi_dir", type=Path, help="Target ROI directory (NIfTI masks).")
-    parser.add_argument("output_dir", type=Path)
+    # output_dir 为可选；默认 `${PYTHON_METAPHOR_ROOT}/gppi_results_<seed_stem>_<ROI_SET>`，
+    # 可通过环境变量 METAPHOR_GPPI_OUT_DIR 强制覆盖。
+    parser.add_argument("output_dir", type=Path, nargs="?", default=None)
     parser.add_argument("--subjects", nargs="*", default=None, help="Default: glm_config.SUBJECTS")
     parser.add_argument("--runs", nargs="*", type=int, default=[3, 4])
     args = parser.parse_args()
 
-    output_dir = ensure_dir(args.output_dir)
     base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", str(getattr(config, "BASE_DIR", "E:/python_metaphor"))))
+    if args.output_dir is None:
+        seed_tag = args.seed_mask.stem.replace(".nii", "") or "seed"
+        args.output_dir = default_roi_tagged_out_dir(
+            base_dir, f"gppi_results_{seed_tag}", override_env="METAPHOR_GPPI_OUT_DIR"
+        )
+    output_dir = ensure_dir(args.output_dir)
 
     subjects = args.subjects or getattr(config, "SUBJECTS", [f"sub-{i:02d}" for i in range(1, 29)])
     target_rois = sorted(args.target_roi_dir.glob("*.nii*"))

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 
 import argparse
+import os
 from itertools import permutations
 from pathlib import Path
 import sys
@@ -51,6 +52,7 @@ if str(FINAL_ROOT) not in sys.path:
 
 from common.final_utils import ensure_dir, one_sample_t_summary, save_json, write_table  # noqa: E402
 from common.pattern_metrics import load_masked_samples  # noqa: E402
+from common.roi_library import default_roi_tagged_out_dir  # noqa: E402
 
 
 def beta_series_mean(samples: np.ndarray) -> np.ndarray:
@@ -85,12 +87,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Simplified effective connectivity via multivariate regression on beta-series.")
     parser.add_argument("pattern_root", type=Path)
     parser.add_argument("roi_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
+    # output_dir 为可选；默认 `${PYTHON_METAPHOR_ROOT}/effective_conn_<ROI_SET>`，
+    # 可通过环境变量 METAPHOR_EFFECTIVE_CONN_OUT_DIR 强制覆盖。
+    parser.add_argument("output_dir", type=Path, nargs="?", default=None)
     parser.add_argument("--time", default="learn", choices=["pre", "post", "learn"])
     parser.add_argument("--condition", default="yy", help="Which condition file to use (default: yy).")
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     args = parser.parse_args()
 
+    if args.output_dir is None:
+        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        args.output_dir = default_roi_tagged_out_dir(
+            base_dir, f"effective_conn_{args.time}_{args.condition}",
+            override_env="METAPHOR_EFFECTIVE_CONN_OUT_DIR",
+        )
     output_dir = ensure_dir(args.output_dir)
     roi_paths = sorted(args.roi_dir.glob("*.nii*"))
     subject_dirs = sorted([p for p in args.pattern_root.iterdir() if p.is_dir() and p.name.startswith("sub-")])

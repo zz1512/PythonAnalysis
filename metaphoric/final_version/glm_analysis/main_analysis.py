@@ -291,7 +291,8 @@ def run_second_level_stage():
             )
 
             glm_utils.save_binary_mask(
-                log_p_map, viz_thresh, out_dir / f"{con_name}_roi_mask.nii.gz"
+                log_p_map, viz_thresh, out_dir / f"{con_name}_roi_mask.nii.gz",
+                min_cluster_voxels=config.REPORT_PARAMS['min_cluster_voxels']
             )
 
             try:

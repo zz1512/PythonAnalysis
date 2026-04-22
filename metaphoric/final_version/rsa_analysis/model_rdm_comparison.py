@@ -2,24 +2,38 @@
 model_rdm_comparison.py
 
 用途
-- 模型 RDM 比较（Model RSA）：把神经 RDM 与若干“理论/行为模型 RDM”做相关，检验哪些模型更能解释表征结构。
-- 当前实现支持两类模型：
-  - condition 模型：同条件 vs 跨条件（0/1）
-  - numeric 模型：连续变量差的绝对值（例如 novelty/familiarity/behavior rating）
+- 模型 RDM 比较（Model RSA）：把神经 RDM 与若干"理论/行为模型 RDM"做相关，
+  检验哪些模型最能解释表征结构。
+- 升级后支持四大核心模型：
+  - M1: 条件类别（多水平，默认 yy/kj/baseline）
+  - M2: 配对身份（同 pair_id=0，其余=1）
+  - M3: 预训练语义（来自 BERT/word2vec 的 cosine distance；通过外部 embedding 表接入）
+  - M7: 被试回忆强度（per-subject |recall_i - recall_j|）
+- 同时保留 numeric 模型（novelty/familiarity 等连续变量的差的绝对值）。
+
+核心统计
+- 单模型 Spearman ρ
+- `--partial-correlation`：多模型 Spearman 偏相关（残差法），区分"预存语义"和"学习配对"
+- `--partial-correlation` 开启后自动生成模型共线性报告（|ρ|>0.7 标注 high）
 
 输入
 - pattern_root: `${PATTERN_ROOT}`（4D patterns）
 - roi_dir: ROI masks
-- metadata：来自 `stack_patterns.py` 的 `*_metadata.tsv`（如果你要 numeric 模型，需在 metadata 中提供对应列）
+- metadata：来自 `stack_patterns.py` 的 `*_metadata.tsv`
+- `--embedding-file`：`build_stimulus_embeddings.py` 产出的 TSV（word_label + dim_*）
+- `--memory-strength-dir`：`build_memory_strength_table.py` 产出的 per-subject TSV 目录
+- `--conditions`：默认 yy/kj/baseline，可显式覆盖
+- `--pair-id-col`：默认 `pair_id`，回退 `pic_num`
 
-输出（output_dir）
-- `model_rdm_results.tsv`：每个 ROI/subject/time/condition 的模型相关结果
-- `model_rdm_summary.json`：摘要
+输出（自动加 ROI_SET 后缀，可用 METAPHOR_MODEL_RDM_OUT_DIR 覆盖）
+- `model_rdm_subject_metrics.tsv`：每个 subject/roi/time/model 的 Spearman ρ
+- `model_rdm_partial_metrics.tsv`（可选）：多模型偏相关
+- `model_collinearity.tsv`（可选）：模型 RDM 两两 Spearman ρ，flag=high 当 |ρ|>0.7
+- `model_rdm_group_summary.tsv`：ROI×模型水平的 pre vs post 配对 t 检验
+- `<roi>_<model>_rdm_summary.json`：单个 ROI×模型的配对 t 摘要
 """
 
 from __future__ import annotations
-
-
 
 import argparse
 from pathlib import Path
@@ -42,44 +56,222 @@ FINAL_ROOT = _final_root()
 if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
-from common.final_utils import ensure_dir, paired_t_summary, save_json, write_table
-from common.pattern_metrics import load_masked_samples, neural_rdm_vector
+from common.final_utils import ensure_dir, paired_t_summary, save_json, write_table  # noqa: E402
+from common.pattern_metrics import load_masked_samples, neural_rdm_vector  # noqa: E402
+from common.roi_library import default_roi_tagged_out_dir  # noqa: E402
 
 
-def model_from_condition(metadata: pd.DataFrame) -> np.ndarray:
+# ---------- 模型 RDM 构造 ----------
+
+
+def model_from_condition_multi(metadata: pd.DataFrame) -> np.ndarray:
+    """M1: 多水平条件 RDM。同条件=0，跨条件=1。"""
     labels = metadata["condition"].astype(str).to_numpy()
     matrix = (labels[:, None] != labels[None, :]).astype(float)
     return matrix[np.triu_indices_from(matrix, k=1)]
 
 
+def model_from_pair_identity(metadata: pd.DataFrame, pair_col: str = "pair_id") -> np.ndarray:
+    """M2: 配对身份 RDM。同 pair_id=0，其余=1。"""
+    col = pair_col if pair_col in metadata.columns else None
+    if col is None and "pic_num" in metadata.columns:
+        col = "pic_num"
+    if col is None:
+        raise ValueError("M2 requires pair_id or pic_num column in metadata.")
+    values = metadata[col].astype(str).to_numpy()
+    matrix = (values[:, None] != values[None, :]).astype(float)
+    return matrix[np.triu_indices_from(matrix, k=1)]
+
+
+def model_from_embedding(metadata: pd.DataFrame, embeddings: pd.DataFrame,
+                         word_col: str = "word_label") -> np.ndarray:
+    """M3: 预训练语义 cosine distance RDM。缺词对应行列置 NaN。"""
+    if word_col not in metadata.columns:
+        raise ValueError(f"Metadata missing '{word_col}' column required for M3 embedding lookup.")
+    if embeddings["word_label"].duplicated().any():
+        embeddings = embeddings.drop_duplicates(subset="word_label", keep="first")
+    emb_map = embeddings.set_index("word_label")
+    labels = metadata[word_col].astype(str).to_list()
+    dim_cols = [c for c in emb_map.columns if c.startswith("dim_")]
+    if not dim_cols:
+        raise ValueError("Embedding file must contain columns prefixed with 'dim_'.")
+    n_trials = len(labels)
+    vectors = np.full((n_trials, len(dim_cols)), np.nan, dtype=float)
+    for idx, lab in enumerate(labels):
+        if lab in emb_map.index:
+            row = emb_map.loc[lab, dim_cols]
+            vectors[idx] = np.asarray(row, dtype=float).ravel()[: len(dim_cols)]
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        normalized = vectors / norms
+    cosine_sim = normalized @ normalized.T
+    cosine_sim = np.clip(cosine_sim, -1.0, 1.0)
+    rdm = 1.0 - cosine_sim
+    missing = np.isnan(vectors).any(axis=1) | (norms.squeeze(axis=1) == 0)
+    if missing.any():
+        rdm[missing, :] = np.nan
+        rdm[:, missing] = np.nan
+    return rdm[np.triu_indices_from(rdm, k=1)]
+
+
+def model_from_subject_numeric(metadata: pd.DataFrame, table: pd.DataFrame,
+                               value_col: str = "recall_score",
+                               word_col: str = "word_label") -> np.ndarray:
+    """M7: 被试维度 numeric 差 RDM（例如回忆强度）。"""
+    if word_col not in metadata.columns:
+        raise ValueError(f"Metadata missing '{word_col}' column required for subject numeric RDM.")
+    lookup = table.set_index("word_label")[value_col]
+    values = np.asarray([lookup.get(lab, np.nan) for lab in metadata[word_col].astype(str)], dtype=float)
+    diff = np.abs(values[:, None] - values[None, :])
+    return diff[np.triu_indices_from(diff, k=1)]
+
+
 def model_from_numeric(metadata: pd.DataFrame, column: str) -> np.ndarray:
-    values = metadata[column].to_numpy(dtype=float)
+    """保留的通用 numeric 模型（novelty/familiarity 等）。"""
+    values = pd.to_numeric(metadata[column], errors="coerce").to_numpy(dtype=float)
     matrix = np.abs(values[:, None] - values[None, :])
     return matrix[np.triu_indices_from(matrix, k=1)]
 
 
+# ---------- 统计工具 ----------
+
+
+def _safe_spearman(neural: np.ndarray, model_vec: np.ndarray) -> tuple[float, float, int]:
+    mask = np.isfinite(neural) & np.isfinite(model_vec)
+    if mask.sum() < 3:
+        return float("nan"), float("nan"), int(mask.sum())
+    rho, pvalue = stats.spearmanr(neural[mask], model_vec[mask])
+    return float(rho), float(pvalue), int(mask.sum())
+
+
+def _rank_ignore_nan(vec: np.ndarray) -> np.ndarray:
+    """Rank with NaN preserved (utility helper, reserved for future NaN-aware paths)."""
+    ranks = np.full_like(vec, np.nan, dtype=float)
+    mask = np.isfinite(vec)
+    if mask.any():
+        ranks[mask] = stats.rankdata(vec[mask])
+    return ranks
+
+
+def _partial_spearman(neural: np.ndarray, target: np.ndarray,
+                      controls: list[np.ndarray]) -> tuple[float, float, int]:
+    stacked = np.column_stack([target] + controls + [neural])
+    valid = np.all(np.isfinite(stacked), axis=1)
+    if valid.sum() < 5:
+        return float("nan"), float("nan"), int(valid.sum())
+    subset = stacked[valid]
+    ranked = np.apply_along_axis(stats.rankdata, 0, subset)
+    target_r = ranked[:, 0]
+    controls_r = ranked[:, 1:1 + len(controls)]
+    neural_r = ranked[:, -1]
+
+    def _residual(y: np.ndarray, X: np.ndarray) -> np.ndarray:
+        if X.shape[1] == 0:
+            return y - y.mean()
+        X_design = np.column_stack([np.ones(X.shape[0]), X])
+        beta, *_ = np.linalg.lstsq(X_design, y, rcond=None)
+        return y - X_design @ beta
+
+    target_res = _residual(target_r, controls_r)
+    neural_res = _residual(neural_r, controls_r)
+    if np.allclose(target_res.std(), 0) or np.allclose(neural_res.std(), 0):
+        return float("nan"), float("nan"), int(valid.sum())
+    rho, pvalue = stats.pearsonr(target_res, neural_res)
+    return float(rho), float(pvalue), int(valid.sum())
+
+
+def _build_collinearity_report(model_vectors: dict[str, np.ndarray],
+                               threshold: float = 0.7) -> pd.DataFrame:
+    rows = []
+    names = list(model_vectors.keys())
+    for i, name_a in enumerate(names):
+        for name_b in names[i + 1:]:
+            vec_a = model_vectors[name_a]
+            vec_b = model_vectors[name_b]
+            mask = np.isfinite(vec_a) & np.isfinite(vec_b)
+            if mask.sum() < 3:
+                rho = float("nan")
+            else:
+                rho, _ = stats.spearmanr(vec_a[mask], vec_b[mask])
+            flag = "high" if np.isfinite(rho) and abs(rho) > threshold else "ok"
+            rows.append({"model_a": name_a, "model_b": name_b,
+                         "spearman_rho": float(rho) if np.isfinite(rho) else float("nan"),
+                         "flag": flag})
+    return pd.DataFrame(rows)
+
+
+# ---------- 主流程 ----------
+
+
+def _load_memory_table(memory_dir: Path | None, subject: str) -> pd.DataFrame | None:
+    if memory_dir is None:
+        return None
+    candidate = memory_dir / f"memory_strength_{subject}.tsv"
+    if not candidate.exists():
+        return None
+    return pd.read_csv(candidate, sep="\t")
+
+
+def _default_output_dir() -> Path:
+    from rsa_analysis.rsa_config import BASE_DIR, ROI_SET  # type: ignore
+    return default_roi_tagged_out_dir(
+        BASE_DIR,
+        "model_rdm_results",
+        override_env="METAPHOR_MODEL_RDM_OUT_DIR",
+        roi_set=ROI_SET,
+    )
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare neural RDMs with candidate model RDMs.")
+    parser = argparse.ArgumentParser(description="Compare neural RDMs with candidate model RDMs (M1/M2/M3/M7).")
     parser.add_argument("pattern_root", type=Path)
     parser.add_argument("roi_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("output_dir", type=Path, nargs="?", default=None,
+                        help="Defaults to {BASE_DIR}/model_rdm_results_{ROI_SET}; "
+                             "override via METAPHOR_MODEL_RDM_OUT_DIR env var.")
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     parser.add_argument("--metadata-template", default="{time}_{condition}_metadata.tsv")
+    parser.add_argument("--conditions", nargs="*", default=["yy", "kj", "baseline"])
+    parser.add_argument("--pair-id-col", default="pair_id")
+    parser.add_argument("--word-col", default="word_label")
+    parser.add_argument("--embedding-file", type=Path, default=None,
+                        help="stimulus_embeddings TSV for M3 (cosine distance).")
+    parser.add_argument("--memory-strength-dir", type=Path, default=None,
+                        help="Directory with memory_strength_{subject}.tsv for M7.")
+    parser.add_argument("--memory-score-col", default="recall_score")
     parser.add_argument("--numeric-model-cols", nargs="*", default=[])
+    parser.add_argument("--enabled-models", nargs="*",
+                        default=["M1_condition", "M2_pair", "M3_embedding", "M7_memory"],
+                        help="Subset of models to include: M1_condition M2_pair M3_embedding M7_memory")
+    parser.add_argument("--partial-correlation", action="store_true",
+                        help="Compute partial Spearman correlations between each model and neural RDM.")
+    parser.add_argument("--collinearity-threshold", type=float, default=0.7)
     args = parser.parse_args()
 
-    output_dir = ensure_dir(args.output_dir)
+    output_dir = ensure_dir(args.output_dir if args.output_dir is not None else _default_output_dir())
+
+    embedding_table: pd.DataFrame | None = None
+    if args.embedding_file is not None:
+        if not args.embedding_file.exists():
+            raise FileNotFoundError(f"Embedding file not found: {args.embedding_file}")
+        embedding_table = pd.read_csv(args.embedding_file, sep="\t")
+
     rows = []
+    partial_rows = []
+    collinearity_snapshots: list[pd.DataFrame] = []
+
     roi_paths = sorted(args.roi_dir.glob("*.nii*"))
-    subject_dirs = sorted([path for path in args.pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
+    subject_dirs = sorted([p for p in args.pattern_root.iterdir()
+                           if p.is_dir() and p.name.startswith("sub-")])
 
     for roi_path in roi_paths:
         roi_name = roi_path.stem.replace(".nii", "")
         for subject_dir in subject_dirs:
+            subject = subject_dir.name
             for time in ["pre", "post"]:
-                image_paths = []
-                meta_frames = []
-                for condition in ["yy", "kj"]:
+                image_paths: list[tuple[str, Path]] = []
+                meta_frames: list[pd.DataFrame] = []
+                for condition in args.conditions:
                     image_path = subject_dir / args.filename_template.format(time=time, condition=condition)
                     meta_path = subject_dir / args.metadata_template.format(time=time, condition=condition)
                     if image_path.exists() and meta_path.exists():
@@ -87,39 +279,123 @@ def main() -> None:
                         meta = pd.read_csv(meta_path, sep="\t")
                         meta["condition"] = condition
                         meta_frames.append(meta)
-                if len(image_paths) != 2:
+                if len(image_paths) < 2:
+                    rows.append({
+                        "subject": subject, "roi": roi_name, "time": time,
+                        "model": None, "rho": float("nan"), "p_value": float("nan"),
+                        "n_pairs": 0, "n_conditions_available": len(image_paths),
+                        "skip_reason": "fewer_than_two_conditions_available",
+                    })
                     continue
-                samples = np.vstack([load_masked_samples(path, roi_path) for _, path in image_paths])
+                samples = np.vstack([load_masked_samples(p, roi_path) for _, p in image_paths])
                 metadata = pd.concat(meta_frames, ignore_index=True)
                 neural = neural_rdm_vector(samples, metric="correlation")
 
-                models = {"condition": model_from_condition(metadata)}
-                for column in args.numeric_model_cols:
-                    if column in metadata.columns:
-                        models[column] = model_from_numeric(metadata, column)
+                model_vectors: dict[str, np.ndarray] = {}
+                model_skip: dict[str, str] = {}
 
-                for model_name, model_vector in models.items():
-                    rho, pvalue = stats.spearmanr(neural, model_vector)
+                if "M1_condition" in args.enabled_models:
+                    try:
+                        model_vectors["M1_condition"] = model_from_condition_multi(metadata)
+                    except Exception as exc:
+                        model_skip["M1_condition"] = f"error: {exc}"
+
+                if "M2_pair" in args.enabled_models:
+                    try:
+                        model_vectors["M2_pair"] = model_from_pair_identity(metadata, args.pair_id_col)
+                    except Exception as exc:
+                        model_skip["M2_pair"] = f"error: {exc}"
+
+                if "M3_embedding" in args.enabled_models:
+                    if embedding_table is None:
+                        model_skip["M3_embedding"] = "missing_embedding_file"
+                    else:
+                        try:
+                            model_vectors["M3_embedding"] = model_from_embedding(
+                                metadata, embedding_table, args.word_col
+                            )
+                        except Exception as exc:
+                            model_skip["M3_embedding"] = f"error: {exc}"
+
+                if "M7_memory" in args.enabled_models:
+                    mem_table = _load_memory_table(args.memory_strength_dir, subject)
+                    if mem_table is None:
+                        model_skip["M7_memory"] = "missing_memory_table"
+                    else:
+                        try:
+                            model_vectors["M7_memory"] = model_from_subject_numeric(
+                                metadata, mem_table, args.memory_score_col, args.word_col
+                            )
+                        except Exception as exc:
+                            model_skip["M7_memory"] = f"error: {exc}"
+
+                for col in args.numeric_model_cols:
+                    if col in metadata.columns:
+                        try:
+                            model_vectors[f"numeric_{col}"] = model_from_numeric(metadata, col)
+                        except Exception as exc:
+                            model_skip[f"numeric_{col}"] = f"error: {exc}"
+
+                for model_name, model_vector in model_vectors.items():
+                    rho, pvalue, n_pairs = _safe_spearman(neural, model_vector)
                     rows.append({
-                        "subject": subject_dir.name,
-                        "roi": roi_name,
-                        "time": time,
-                        "model": model_name,
-                        "rho": rho,
-                        "p_value": pvalue,
+                        "subject": subject, "roi": roi_name, "time": time,
+                        "model": model_name, "rho": rho, "p_value": pvalue,
+                        "n_pairs": n_pairs,
+                        "n_conditions_available": len(image_paths),
+                        "skip_reason": "",
                     })
+
+                for model_name, reason in model_skip.items():
+                    rows.append({
+                        "subject": subject, "roi": roi_name, "time": time,
+                        "model": model_name, "rho": float("nan"), "p_value": float("nan"),
+                        "n_pairs": 0,
+                        "n_conditions_available": len(image_paths),
+                        "skip_reason": reason,
+                    })
+
+                if args.partial_correlation and len(model_vectors) >= 2:
+                    names = list(model_vectors.keys())
+                    for name in names:
+                        controls = [model_vectors[other] for other in names if other != name]
+                        rho, pvalue, n_pairs = _partial_spearman(neural, model_vectors[name], controls)
+                        partial_rows.append({
+                            "subject": subject, "roi": roi_name, "time": time,
+                            "model": name, "partial_rho": rho, "p_value": pvalue,
+                            "n_pairs": n_pairs,
+                            "controls": ",".join(n for n in names if n != name),
+                        })
+                    collinearity_snapshots.append(
+                        _build_collinearity_report(model_vectors, args.collinearity_threshold)
+                        .assign(subject=subject, roi=roi_name, time=time)
+                    )
 
     frame = pd.DataFrame(rows)
     write_table(frame, output_dir / "model_rdm_subject_metrics.tsv")
 
+    if partial_rows:
+        write_table(pd.DataFrame(partial_rows), output_dir / "model_rdm_partial_metrics.tsv")
+
+    if collinearity_snapshots:
+        collinearity = pd.concat(collinearity_snapshots, ignore_index=True)
+        write_table(collinearity, output_dir / "model_collinearity.tsv")
+
     summaries = []
-    for (roi_name, model_name), sub_frame in frame.groupby(["roi", "model"]):
-        pivot = sub_frame.pivot(index="subject", columns="time", values="rho").dropna()
-        summary = {"roi": roi_name, "model": model_name, **paired_t_summary(pivot["post"], pivot["pre"])}
+    eligible = frame[(frame["model"].notna()) & (frame["skip_reason"] == "")]
+    for (roi_name, model_name), sub_frame in eligible.groupby(["roi", "model"]):
+        pivot = sub_frame.pivot_table(index="subject", columns="time", values="rho").dropna()
+        if "pre" not in pivot.columns or "post" not in pivot.columns or pivot.empty:
+            continue
+        summary = {"roi": roi_name, "model": model_name,
+                   **paired_t_summary(pivot["post"], pivot["pre"])}
         summaries.append(summary)
         save_json(summary, output_dir / f"{roi_name}_{model_name}_rdm_summary.json")
 
-    write_table(pd.DataFrame(summaries), output_dir / "model_rdm_group_summary.tsv")
+    if summaries:
+        write_table(pd.DataFrame(summaries), output_dir / "model_rdm_group_summary.tsv")
+
+    print(f"[model_rdm_comparison] wrote results to {output_dir}")
 
 
 if __name__ == "__main__":

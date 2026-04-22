@@ -20,6 +20,7 @@ from __future__ import annotations
 
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -46,6 +47,7 @@ if str(FINAL_ROOT) not in sys.path:
 
 from common.final_utils import ensure_dir, paired_t_summary, save_json, write_table
 from common.pattern_metrics import load_masked_samples
+from common.roi_library import default_roi_tagged_out_dir
 
 
 def classify_binary(samples_a: np.ndarray, samples_b: np.ndarray) -> float:
@@ -63,10 +65,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare ROI-MVPA accuracy between pre and post phases.")
     parser.add_argument("pattern_root", type=Path)
     parser.add_argument("roi_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
+    # output_dir 为可选；默认 `${PYTHON_METAPHOR_ROOT}/mvpa_pre_post_<ROI_SET>`，
+    # 可通过环境变量 METAPHOR_MVPA_PRE_POST_OUT_DIR 强制覆盖。
+    parser.add_argument("output_dir", type=Path, nargs="?", default=None)
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     args = parser.parse_args()
 
+    if args.output_dir is None:
+        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        args.output_dir = default_roi_tagged_out_dir(
+            base_dir, "mvpa_pre_post", override_env="METAPHOR_MVPA_PRE_POST_OUT_DIR"
+        )
     output_dir = ensure_dir(args.output_dir)
     rows = []
     roi_paths = sorted(args.roi_dir.glob("*.nii*"))

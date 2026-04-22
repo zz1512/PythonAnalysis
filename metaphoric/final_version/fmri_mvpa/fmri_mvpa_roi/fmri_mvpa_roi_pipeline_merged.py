@@ -40,6 +40,8 @@ fMRI MVPA ROI Pipeline - 完整版本（带特征选择）
 import gc
 import json
 import logging
+import os
+import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -56,6 +58,21 @@ from report_generator import generate_html_report, image_to_base64
 from sklearn.impute import SimpleImputer
 from visualization import create_enhanced_visualizations
 
+
+def _final_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in [current.parent, *current.parents]:
+        if parent.name == "final_version":
+            return parent
+    return current.parent
+
+
+_FINAL_ROOT = _final_root()
+if str(_FINAL_ROOT) not in sys.path:
+    sys.path.append(str(_FINAL_ROOT))
+
+from common.roi_library import default_roi_tagged_out_dir  # noqa: E402
+
 # ============================================================================
 # 配置管理模块 (config.py)
 # ============================================================================
@@ -70,7 +87,11 @@ class MVPAConfig:
         base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
         self.lss_root = base_dir / "lss_betas_final"
         self.roi_dir = base_dir / "glm_analysis_fwe_final/2nd_level_CLUSTER_FWE"
-        self.results_dir = base_dir / "mvpa_roi_results"
+        # 输出目录按 ROI_SET 自动分层，避免三层 ROI 跑多次互相覆盖。
+        # 可通过环境变量 METAPHOR_MVPA_ROI_OUT_DIR 强制覆盖。
+        self.results_dir = default_roi_tagged_out_dir(
+            base_dir, "mvpa_roi_results", override_env="METAPHOR_MVPA_ROI_OUT_DIR"
+        )
 
         # 分类器参数
         self.svm_params = {

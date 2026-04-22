@@ -604,6 +604,73 @@
 - RSA 默认会优先读取 `roi_library/manifest.tsv`
 - 可通过环境变量 `METAPHOR_ROI_SET` 切换 ROI 层级，例如 `main_functional`、`literature`、`atlas_robustness`
 
+#### 三层 ROI 在论文里的角色（非常重要）
+
+不要把三层 ROI 混成一个 list 跑一次。它们在论文里承担**不同的论证角色**，必须**分别跑、分别报告**，才能把"三层证据链"讲清楚：
+
+| 层 | 来源 | 在论文里做什么 | 放在哪里 |
+|---|---|---|---|
+| **A. `main_functional`** | 学习期 GLM 显著簇 | **主结果**：在自己数据的显著簇里看"学习是否让表征重组" | Figure 2/3 主面板 |
+| **B. `literature`** | Harvard-Oxford 文献驱动 ROI（左右配对 6 对） | **独立假设检验**：用文献独立定义的区域复现主结果 | Figure 4 / Table 1 |
+| **C. `atlas_robustness`** | AAL 图谱 | **稳健性**：换图谱再跑一遍，封堵 "atlas 依赖" 这种 Reviewer 攻击 | Supplementary Figure |
+
+**跑法（三层依次跑，输出目录自动分开）**：
+
+```bash
+# macOS/Linux
+export PYTHON_METAPHOR_ROOT=/path/to/python_metaphor
+cd metaphoric/final_version/rsa_analysis
+
+METAPHOR_ROI_SET=main_functional  python run_rsa_optimized.py
+METAPHOR_ROI_SET=literature       python run_rsa_optimized.py
+METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
+```
+
+输出目录会自动带 `ROI_SET` 后缀（`rsa_results_optimized_main_functional/` 等），三次跑**不会互相覆盖**。若需显式指定目录，可用环境变量 `METAPHOR_RSA_OUT_DIR`。
+
+> **同样的三层节奏适用于 RD / GPS / MVPA-ROI / gPPI / effective connectivity**
+> 这些脚本的输出目录都支持同一套机制：
+> - 默认值 = `${PYTHON_METAPHOR_ROOT}/<analysis>_<ROI_SET>`
+> - 环境变量强制覆盖开关：`METAPHOR_RD_OUT_DIR` / `METAPHOR_GPS_OUT_DIR` / `METAPHOR_MVPA_ROI_OUT_DIR` / `METAPHOR_MVPA_PRE_POST_OUT_DIR` / `METAPHOR_MVPA_CROSS_PHASE_OUT_DIR` / `METAPHOR_GPPI_OUT_DIR` / `METAPHOR_EFFECTIVE_CONN_OUT_DIR`
+>
+> 完整一层一层跑的示例：
+>
+> ```bash
+> export PYTHON_METAPHOR_ROOT=/path/to/python_metaphor
+> cd metaphoric/final_version
+>
+> for ROI_SET in main_functional literature atlas_robustness; do
+>   export METAPHOR_ROI_SET=$ROI_SET
+>   # ROI-level 模式分析
+>   python representation_analysis/rd_analysis.py  $PATTERN_ROOT $ROI_DIR
+>   python representation_analysis/gps_analysis.py $PATTERN_ROOT $ROI_DIR
+>   # MVPA
+>   python fmri_mvpa/fmri_mvpa_roi/fmri_mvpa_roi_pipeline_merged.py
+>   python fmri_mvpa/fmri_mvpa_roi/mvpa_pre_post_comparison.py $PATTERN_ROOT $ROI_DIR
+>   python fmri_mvpa/fmri_mvpa_roi/cross_phase_decoding.py      $PATTERN_ROOT $ROI_DIR
+>   # 连接（gPPI 按种子点依次跑；输出目录里会同时含 seed 名与 ROI_SET）
+>   python connectivity_analysis/effective_connectivity.py $PATTERN_ROOT $ROI_DIR
+> done
+> ```
+>
+> 每个脚本都会把 `output_dir` 自动解析成 `<analysis>_<ROI_SET>/`，三层跑完得到三套独立结果目录，彼此不覆盖。
+
+**一致性判据（论文里"converging evidence"的门槛）**
+
+| 检查项 | 通过标准 |
+|---|---|
+| 方向一致 | 三层都看到同向效应（post > pre 的 yy-only RSA 增强，或 yy-kj × post-pre 交互显著） |
+| 强度衰减 | 一般 A 层效应量 ≥ B 层 ≥ C 层（A 是最优 ROI 定义）；若 C 反而更强，说明你的功能 ROI 覆盖不全 |
+| 显著性模式 | 不要求三层全显著，但至少 **A + B 同向**；C 层可仅作 trend |
+| 其他条件固定 | 三层用同一套 pattern、同一份 trial 对齐、同一套 model RDM；**只换 ROI mask** |
+
+**容易踩的坑**
+
+- 把三层 ROI 并成一个 list 一次跑完 → 丢失论证价值，manifest 里 `roi_set` 的区分会被稀释。
+- 只跑 A 层 → Reviewer 最常攻击的"结果是不是 ROI 选择驱动"无从回答。
+- 把 `main_functional_extra_*`（`include_in_main=False`）当主结果报 → 它们是 `cluster_report` 之外的 remaining_components，严格说应放 Supplementary；主结果只报 `include_in_main=True` 的 ROI。
+- 下游的 RD / GPS / MVPA-ROI / gPPI 也按同一套三层节奏跑（它们都走同一个 manifest）；Searchlight 是全脑分析，不需要切层。
+
 ---
 
 ### Step 4：模式堆叠 `stack_patterns.py`
@@ -796,6 +863,212 @@
 最小 QC：
 - `rsa_lmm_summary.txt` 中模型成功收敛
 - 参数表里能找到条件、时间、交互相关项
+
+---
+
+### Step 5D：Model-RSA（核心四模型：M1/M2/M3/M7）+ Δρ LMM
+
+涉及脚本：
+- `rsa_analysis/build_stimulus_embeddings.py`（一次性预计算 M3 词向量）
+- `rsa_analysis/build_memory_strength_table.py`（一次性预计算 M7 被试回忆表）
+- `rsa_analysis/model_rdm_comparison.py`（M1/M2/M3/M7 + 偏相关 + 共线性）
+- `rsa_analysis/delta_rho_lmm.py`（前后测 Δρ LMM 统计）
+
+这步回答什么问题：
+- 光比较 pre vs post 相似性变化还不够，还要回答"这个变化到底在匹配哪种理论模型"。
+- Model-RSA 把 neural RDM 与"理论驱动的模型 RDM"相关，检验哪些认知模型解释力最强。
+
+四个核心模型（故事骨架）：
+
+| 模型 | 构造 | 在学习前应该 | 在学习后应该 | 解释哪部分故事 |
+|---|---|---|---|---|
+| M1_condition | 三水平条件（yy/kj/baseline），同条件=0、跨条件=1 | 弱到中 | 相对稳定或略增 | 是否存在条件分类表征（基线轴） |
+| M2_pair | 同 `pair_id`=0，其余=1 | ≈0（无学习就不应该有配对结构） | **显著增强，尤其 yy 条件** | "学习配对→表征对齐"的直接证据 |
+| M3_embedding | 预训练 BERT cosine distance | 应该最主导（ROI 主要反映预存语义） | 被 M2/M7 分走部分方差 | "预存语义" vs "学习塑造"的分离 |
+| M7_memory | 被试自己的回忆评分差 `|r_i−r_j|` | ≈0 | 学得越牢的 trial 表征越对齐 | 行为记忆成绩 ↔ 表征重塑的桥梁 |
+
+四模型详解（构造 → 数学 → 假设 → 文献 → 常见坑）：
+
+#### M1_condition（条件类别 RDM，基线解释轴）
+
+- 构造思路：把每个 trial 打上 `condition ∈ {yy, kj, baseline}` 标签，同条件 = 0，跨条件 = 1。是最粗的"语义分类"模型。
+- 数学形式：`RDM_M1[i,j] = 0 if cond_i == cond_j else 1`。上三角向量化后长度 = C(n, 2)。
+- 在脚本中：`model_from_condition_multi(metadata)`，位于 [model_rdm_comparison.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/metaphoric/final_version/rsa_analysis/model_rdm_comparison.py)。默认条件循环是 yy/kj/baseline，可用 `--conditions` 覆盖。
+- 理论假设：
+  - 前测：若 ROI 存在条件特异的加工，M1 应有弱到中等正相关（材料差异本身可驱动）。
+  - 后测：相对稳定或略增——条件分类不因学习大幅改变。
+- 文献依据：Mashal et al. 2007、Cardillo et al. 2012 的条件对比；Kriegeskorte 2008 把"categorical model"列为 RSA 第一块积木。
+- 常见坑：
+  - 如果只跑 yy/kj 两条件，M1 退化为二分，区分力下降；强烈建议保留 baseline 作为第三水平。
+  - 条件内 trial 数不均衡（40 : 40 : 20）会让 M1 的 0 值占比偏离 1/3，对 Spearman 影响可控但报告时需说明。
+
+#### M2_pair（配对身份 RDM，学习塑造的直接证据）⭐
+
+- 构造思路：每对学习词（如"玩笑"-"面具"）的两个 concept word 在 M2 上距离 = 0，其余 = 1。只有学习过的配对才应该让这两个 word 在神经空间对齐。
+- 数学形式：`RDM_M2[i,j] = 0 if pair_id_i == pair_id_j (且 i != j) else 1`。
+- 在脚本中：`model_from_pair_identity(metadata, pair_col="pair_id")`；若 `pair_id` 缺失，会回退到 `pic_num`；两者都缺则抛 `ValueError`。
+- 理论假设：
+  - 前测：M2 对 neural RDM 的 ρ ≈ 0（无学习就不应出现配对结构）。**若前测 M2 显著 > 0，说明材料本身有混淆（比如配对词已有语义关联），需要在讨论中解释。**
+  - 后测：M2 显著 > 0，且 **yy > kj > baseline**（隐喻学习最能驱动配对表征对齐，基线最弱）。
+  - Δρ(M2) = ρ_post − ρ_pre 是"学习效应"的核心数值指标。
+- 文献依据：
+  - Cardillo et al. 2012（JoCN）："novel → familiar metaphor tuning" 的表征层解释
+  - Xue et al. 2010（Science）：记忆成功 ↔ 神经模式"再激活稳定性"
+  - Ezzyat & Davachi 2011（Neuron）：新学习的 item 在海马/颞叶的表征压缩
+- 常见坑：
+  - `pair_id` 必须在 `stack_patterns.py` 生成 metadata 时就写入；如果只保留了 `pic_num`，确保同一 pair 的两个 concept word 共享同一 pic_num。
+  - 若一个 concept word 出现在多对中（材料设计有复用），M2 的 0/1 定义会出现歧义，需要确认 1 个 word ↔ 1 个 pair 的一对一映射。
+
+#### M3_embedding（预训练语义 RDM，预存语义基线）
+
+- 构造思路：用预训练语言模型（默认 `bert-base-chinese`）把每个 concept word 编码成 768 维向量，计算两两 cosine 距离。表达"在见到实验之前，这两个词在通用汉语语料里离得多远"。
+- 数学形式：
+  - `v_i = mean-pool(BERT.encode(word_i))`（使用 attention_mask 过滤 padding）
+  - `RDM_M3[i,j] = 1 − cos(v_i, v_j)`，范围近似 [0, 2]
+- 在脚本中：
+  - 预计算：[build_stimulus_embeddings.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/metaphoric/final_version/rsa_analysis/build_stimulus_embeddings.py) 一次性跑完所有刺激词，写入 `stimulus_embeddings_bert.tsv`（列：`word_label` + `dim_0..dim_767`）
+  - 查询：`model_from_embedding(metadata, embeddings, word_col="word_label")`，缺词对应行列填 NaN，相关时自动掩码
+- 理论假设：
+  - 前测：M3 应该是**最主导的解释变量**——被试还没学习，ROI 编码的主要是词汇的预存分布式语义。
+  - 后测：M3 的 ρ 可能**略降或持平**，部分方差被 M2/M7 分走；但不会消失，因为预存语义结构依然存在。
+  - 偏相关：控制 M2/M7 后，M3 的 partial_rho 在 pre/post 都应 > 0，稳定性强的 ROI（如 L_ATL、L_AG）尤其明显。
+- 文献依据：
+  - Bhattasali et al. 2018 / 2019：BERT-like 模型与语义 ROI 的表征相似
+  - Caucheteux & King 2022 (Nature Communications)：大语言模型 embedding 预测大脑语言区激活
+  - Pereira et al. 2018 (Nature Communications)：分布式语义解码 concept 表征
+- 备选模型源（在 `--embedding-source` 中切换或并列对照）：
+  - Tencent word2vec 200d（更轻量，适合句内词）
+  - 腾讯 ChineseGPT / Qwen embedding API（若可联网）
+  - `random` 兜底：仅为测试流程用，不应写入论文
+- 常见坑：
+  - 多字词被 BERT 切成多个 sub-token，默认用 mean-pool；若换成 `[CLS]` 表征，结果会略有差异——在方法学部分明确说明。
+  - 预计算完成后 embedding 文件需固定（加入版本号/hash），确保论文可复现。
+  - 若某些概念词在 BERT 词表中罕见（例如生僻字），vector 可能全接近零；`build_stimulus_embeddings.py` 会保留 NaN，RDM 构造时自动剔除该行列。
+
+#### M7_memory（被试回忆强度 RDM，行为-神经桥梁）⭐
+
+- 构造思路：每个被试自己在 Run-7 的 1-7 级回忆评分（或 0/1 成功失败）构成一个 `word → recall_score` 映射。把"同一对 word 学得都牢"编码成"它们在 M7 上距离小"。
+- 数学形式：`RDM_M7[i,j] = |recall_i − recall_j|`，**per-subject** 计算。
+- 在脚本中：
+  - 预计算：[build_memory_strength_table.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/metaphoric/final_version/rsa_analysis/build_memory_strength_table.py) 从 events.tsv 的 `memory`/`action` 列派生，每被试输出 `memory_strength_sub-XX.tsv`
+  - 查询：`model_from_subject_numeric(metadata, mem_table, value_col="recall_score")`，缺表的被试会被记录 `skip_reason=missing_memory_table`
+- 理论假设：
+  - 前测：M7 的 ρ ≈ 0（被试还没学，记忆强度未定义；若使用 0/1 编码，前测将全部为 0 → M7 退化，此时仅在 post 报告）。
+  - 后测：M7 显著 > 0，并且**仅在学得好的被试/ROI 上明显**——这是"个体差异驱动的表征对齐"。
+  - 条件交互：yy 条件下 M7 的 Δρ 最大（新颖性最高 → 学习强度个体差异最大）。
+- 文献依据：
+  - Xue et al. 2010 (Science)：记忆成功 ↔ 神经模式"稳定性"
+  - LaRocque et al. 2013：与记忆的 representational similarity
+  - Kuhl & Chun 2014：记忆成绩个体差异 ↔ reinstatement strength
+- 为什么必须 per-subject：
+  - 每个被试记忆曲线不同（顶尖被试可能 40 对全记住，差的只记住 10 对）
+  - 跨被试平均后 `|recall_i − recall_j|` 会被压缩，信号减弱
+  - 因此 **M7 的 neural RDM 也必须 per-subject 计算并相关**，然后在组水平做 one-sample t
+- 常见坑：
+  - 若行为数据只有 0/1（`action==3` → 1 否则 0），M7 退化为"是否记住"的二值 RDM，类似 M2 但更个体化；此时与 M2 的共线性会被 `model_collinearity.tsv` 捕获
+  - 若某被试几乎全部记住或全部失败（方差 ≈ 0），M7 的 RDM 几乎全 0，Spearman 计算会退化为 NaN，代码会跳过并写 `skip_reason=memory_variance_too_low`（未来优化）
+  - 被试级 N 决定 M7 的统计功效；28 人已足够，但审稿人可能问"若拿掉 top/bottom 2 个 outlier 结论是否稳定"——建议在 Supplementary 做 leave-one-out
+
+#### 四模型联合检验的核心故事线
+
+- 单模型 ρ 回答：每个模型**单独**能解释多少 neural RDM 方差？
+- 偏相关（`--partial-correlation`）回答：控制其他三个模型后，目标模型**独一无二**解释多少方差？这是区分"预存语义 (M3)"与"学习塑造 (M2/M7)"的关键。
+- Δρ LMM 回答：post − pre 这个增量是否显著，且是否受 condition × model 调节？
+- 三者叠加后的"一张图讲完的故事"：
+  - 前测：M3 单模型和偏相关都大，M2/M7 ≈ 0
+  - 后测：M2/M7 的 ρ 和 partial_rho 显著上升，M3 略降但仍正
+  - Δρ：M2/M7 的 Δρ > 0 显著，且 yy > kj ≈ baseline
+  - 结论：**"学习前神经表征由预存语义主导，学习后表征被配对结构和记忆强度重塑，且该重塑在隐喻条件最强"**
+
+为什么要做多模型偏相关（`--partial-correlation`）：
+- M3 和 M2 可能共线（同配对的两个词语义也更相近）
+- 偏相关把每个模型"独一无二"的解释方差剥离出来
+- 输出 `model_rdm_partial_metrics.tsv`（列：subject/roi/time/model/partial_rho）和 `model_collinearity.tsv`（|ρ|>0.7 标 high）
+
+输入是什么：
+- pattern_root：前后测的 4D patterns（`stack_patterns.py` 的输出）
+- roi_dir：本次三层 ROI 中的某一层
+- `--embedding-file stimulus_embeddings/stimulus_embeddings_bert.tsv`（M3）
+- `--memory-strength-dir memory_strength/`（M7）
+- `--conditions yy kj baseline`（默认三条件）
+- `--pair-id-col pair_id`（默认）
+- `--partial-correlation`（开启偏相关 + 共线性诊断）
+
+输出是什么（自动加 ROI_SET 后缀，可 `METAPHOR_MODEL_RDM_OUT_DIR` 覆盖）：
+- `model_rdm_subject_metrics.tsv`：每 subject/roi/time/model 的 Spearman ρ
+- `model_rdm_partial_metrics.tsv`：多模型偏相关
+- `model_collinearity.tsv`：模型间两两 Spearman ρ
+- `model_rdm_group_summary.tsv`：ROI×模型 pre-vs-post 配对 t
+- `<roi>_<model>_rdm_summary.json`：每个 ROI×模型的配对 t 摘要
+
+然后 Δρ LMM（`delta_rho_lmm.py`）回答什么：
+- 把上一步按 subject/roi/model 合并 `delta_rho = ρ_post − ρ_pre`
+- 拟合 `delta_rho ~ C(model) + (1|subject) + (1|roi)`，核心检验 "M2 / M7 的 Δρ > 0 且显著大于 M3 的 Δρ"
+- 若想加条件轴，先在 RSA 阶段按 condition 分别算 ρ（作为 `condition_col`），再用 `--condition-col condition`
+
+典型跑法（三层 ROI 各跑一次互不覆盖，并结合偏相关）：
+
+```bash
+# 1) 预计算一次（全体 ROI_SET 共用）
+python -m rsa_analysis.build_stimulus_embeddings \
+  --embedding-source bert --model-name bert-base-chinese
+
+python -m rsa_analysis.build_memory_strength_table \
+  --subject-range 1 28
+
+# 2) 主功能 ROI 层
+export METAPHOR_ROI_SET=main_functional
+python -m rsa_analysis.model_rdm_comparison \
+  "$PYTHON_METAPHOR_ROOT/patterns_stacked" \
+  "$PYTHON_METAPHOR_ROOT/roi_library/main_functional" \
+  --embedding-file "$PYTHON_METAPHOR_ROOT/stimulus_embeddings/stimulus_embeddings_bert.tsv" \
+  --memory-strength-dir "$PYTHON_METAPHOR_ROOT/memory_strength" \
+  --partial-correlation
+
+# 3) 同样跑文献层 literature、鲁棒层 atlas_robustness
+# 4) 对每层输出跑 Δρ LMM
+python -m rsa_analysis.delta_rho_lmm \
+  --metrics-file "$PYTHON_METAPHOR_ROOT/model_rdm_results_main_functional/model_rdm_subject_metrics.tsv" \
+  --output-dir "$PYTHON_METAPHOR_ROOT/model_rdm_results_main_functional/lmm"
+```
+
+端到端链路（写给论文 Figure 5 的故事线）：
+
+```
+[词表] build_stimulus_embeddings → stimulus_embeddings_bert.tsv ─┐
+[行为] build_memory_strength_table → memory_strength_{sub}.tsv ──┼─┐
+                                                                │ │
+[fMRI] LSS beta → stack_patterns → pattern_root ────────────────┘ │
+                                                                  │
+[ROI]  build_roi_library → {main_functional, literature, atlas}   │
+                                                                  ↓
+                                   model_rdm_comparison.py
+                                   ├─ M1_condition (yy/kj/baseline)
+                                   ├─ M2_pair      (pair_id)
+                                   ├─ M3_embedding (BERT cosine)
+                                   └─ M7_memory    (recall diff)
+                                         │
+                                         ├─ Spearman ρ per subject/roi/time
+                                         ├─ partial_rho (控制其他模型)
+                                         └─ collinearity flag (ρ>0.7 预警)
+                                         ↓
+                                   delta_rho_lmm.py
+                                   delta_rho = post − pre
+                                   LMM: ~ C(model) + (1|subject) + (1|roi)
+                                         ↓
+                                   Figure 5 (前测 M3 主导 → 后测 M2/M7 增强)
+```
+
+常见坑：
+- metadata 里 `word_label` 列缺失会让 M3/M7 静默跳过（结果表里 `skip_reason=missing_*`）——一定要用 `stack_patterns.py` 生成含 `word_label` 的 metadata
+- 若仅跑 `--conditions yy kj`（不含 baseline），M1 其实只区分两类，解释力会被削弱
+- `--partial-correlation` 开启前先看 `model_collinearity.tsv`，|ρ|>0.9 的两个模型不应同时进入偏相关回归
+- Δρ LMM 要求 pre/post 都存在，某 subject/roi/model 缺一边会被剔除
+
+最小 QC：
+- `model_rdm_subject_metrics.tsv` 中 `skip_reason=""` 的行占主体
+- `model_collinearity.tsv` 没有大面积 `flag=high`
+- `delta_rho_lmm_model.json` 的 `n_obs` 接近 `n_subjects × n_rois × 4 models × 2 times`
 
 ---
 

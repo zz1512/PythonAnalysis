@@ -22,6 +22,7 @@ from __future__ import annotations
 
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -42,16 +43,24 @@ if str(FINAL_ROOT) not in sys.path:
 
 from common.final_utils import difference_in_differences, ensure_dir, paired_t_summary, save_json, write_table
 from common.pattern_metrics import gps_from_samples, load_masked_samples
+from common.roi_library import default_roi_tagged_out_dir
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ROI-level global pattern similarity analysis.")
     parser.add_argument("pattern_root", type=Path)
     parser.add_argument("roi_dir", type=Path)
-    parser.add_argument("output_dir", type=Path)
+    # output_dir 为可选；默认使用 `${PYTHON_METAPHOR_ROOT}/gps_results_<ROI_SET>`，
+    # 可通过环境变量 METAPHOR_GPS_OUT_DIR 强制覆盖。
+    parser.add_argument("output_dir", type=Path, nargs="?", default=None)
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     args = parser.parse_args()
 
+    if args.output_dir is None:
+        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        args.output_dir = default_roi_tagged_out_dir(
+            base_dir, "gps_results", override_env="METAPHOR_GPS_OUT_DIR"
+        )
     output_dir = ensure_dir(args.output_dir)
     rows: list[dict[str, object]] = []
     roi_paths = sorted(args.roi_dir.glob("*.nii*"))

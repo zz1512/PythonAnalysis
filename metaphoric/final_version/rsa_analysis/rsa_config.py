@@ -20,6 +20,8 @@ rsa_config.py (优化版)
 
 输出
 - `OUTPUT_DIR`：RSA 汇总统计、item-wise 明细及下游 LMM 可直接读取的结果表。
+  默认会自动附加当前 `ROI_SET` 后缀（例如 `rsa_results_optimized_main_functional/`），
+  避免三层 ROI 跑多次时结果互相覆盖。可用环境变量 `METAPHOR_RSA_OUT_DIR` 强制覆盖。
 
 关键参数为何这样设
 - `USE_TOP_K=False`：默认关闭，优先保证 ROI 定义透明与可复现；开启后需格外注意选择偏差。
@@ -44,13 +46,14 @@ FINAL_ROOT = CURRENT_FILE.parents[1]
 if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
-from common.roi_library import select_roi_masks
+from common.roi_library import default_roi_tagged_out_dir, select_roi_masks
 
 BASE_DIR = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 LSS_META_FILE = BASE_DIR / "lss_betas_final/lss_metadata_index_final.csv"
 STIMULI_TEMPLATE = BASE_DIR / "stimuli_template.csv"
 ROI_LIBRARY_DIR = BASE_DIR / "roi_library"
 ROI_MANIFEST = ROI_LIBRARY_DIR / "manifest.tsv"
+# ROI_SET可以手动指定：main_functional（主结果）、literature（文献）、atlas_robustness（稳健补充）
 ROI_SET = os.environ.get("METAPHOR_ROI_SET", "main_functional")
 
 if ROI_MANIFEST.exists():
@@ -80,7 +83,14 @@ ROI_CONTRAST_MAP = {
 }
 
 # 输出目录
-OUTPUT_DIR = BASE_DIR / "rsa_results_optimized"
+# 为避免三层 ROI（main_functional / literature / atlas_robustness）同时跑时互相覆盖，
+# 输出目录自动带上当前 ROI_SET 后缀。可通过环境变量 METAPHOR_RSA_OUT_DIR 覆盖。
+OUTPUT_DIR = default_roi_tagged_out_dir(
+    BASE_DIR,
+    "rsa_results_optimized",
+    override_env="METAPHOR_RSA_OUT_DIR",
+    roi_set=ROI_SET,
+)
 
 # 其他
 SUBJECTS = [f"sub-{i:02d}" for i in range(1, 29)]
