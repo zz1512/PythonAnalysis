@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_CONDITION_ORDER = ["Metaphor", "Spatial", "Baseline"]
+MAIN_RSA_CONDITIONS = {"Metaphor", "Spatial"}
+BASELINE_CONDITION = "Baseline"
 CONDITION_ALIASES = {
     "metaphor": "Metaphor",
     "yy": "Metaphor",
@@ -156,27 +158,23 @@ def normalize_template_conditions(template_df):
 
 def extract_baseline_itemwise_data(sim_mat, template_df):
     """
-    Baseline is not paired material.
-    We therefore use all unordered within-baseline trial pairs as item-wise controls.
+    Baseline follows the same pair_id logic as the learned conditions when
+    the template encodes A/B pseudo-pairs (e.g., jx_1 with jx_2).
     """
-    subset = template_df[template_df["condition_norm"] == "Baseline"].copy()
-    if subset.empty:
+    pair_specs = build_condition_pairs(template_df, BASELINE_CONDITION)
+    if not pair_specs:
         return []
 
-    indices = subset.index.to_list()
     item_data = []
-    for i, idx_a in enumerate(indices):
-        for idx_b in indices[i + 1:]:
-            lab_a = str(template_df.loc[idx_a, "word_label"])
-            lab_b = str(template_df.loc[idx_b, "word_label"])
-            item_key = "__".join(sorted([lab_a, lab_b]))
-            item_data.append({
-                "pair_id": f"Baseline:{item_key}",
-                "item": f"Baseline:{item_key}",
-                "word_label": lab_a,
-                "partner_label": lab_b,
-                "similarity": sim_mat[idx_a, idx_b],
-            })
+    for pair_spec in pair_specs:
+        sim_val = sim_mat[pair_spec['index_a'], pair_spec['index_b']]
+        item_data.append({
+            "pair_id": pair_spec['pair_id'],
+            "item": f"Baseline:{pair_spec['pair_id']}",
+            "word_label": pair_spec['word_label'],
+            "partner_label": pair_spec['partner_label'],
+            "similarity": sim_val,
+        })
     return item_data
 
 
@@ -207,8 +205,10 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
     """
     处理单个被试、单个 ROI (集成 Top-K 逻辑)
     """
-    results_summary = []  # 存平均值 (用于做 Bar Plot)
-    results_itemwise = []  # 存每个配对的值 (用于做散点图/LMM)
+    results_summary = []  # 主结果 summary（Metaphor / Spatial）
+    results_itemwise = []  # 主结果 item-wise（默认主链包含 Metaphor / Spatial / Baseline）
+    baseline_summary = []  # baseline 控制单独导出，便于单独汇报
+    baseline_itemwise = []  # 同时保留 baseline 单独文件，便于显式控制分析
 
     try:
         available_conditions = get_available_conditions(template_df)
@@ -277,7 +277,7 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
                 else:
                     items = extract_itemwise_data(sim_mat, template_df, cond)
                 for item in items:
-                    results_itemwise.append({
+                    record = {
                         'subject': sub,
                         'roi': roi_name,
                         'stage': stage,
@@ -286,11 +286,15 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
                         'item': item['item'],
                         'word_label': item['word_label'],
                         'partner_label': item['partner_label'],
-                        'similarity': item['similarity']
-                    })
+                        'similarity': item['similarity'],
+                        'pairing_scheme': 'template_pair' if cond == BASELINE_CONDITION else 'learned_pair',
+                    }
+                    results_itemwise.append(record)
+                    if cond == BASELINE_CONDITION:
+                        baseline_itemwise.append(record)
 
             # 8. 提取 Summary Data (Bar Plot 用)
-            # 直接从 itemwise 聚合，保证 summary 与 LMM 输入完全一致。
+            # 直接从 itemwise 聚合，保证主 summary 与 LMM 输入完全一致。
             def _mean_for(cond_name):
                 values = [
                     x['similarity'] for x in results_itemwise
@@ -298,9 +302,15 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
                 ]
                 return float(np.mean(values)) if values else np.nan
 
+            def _baseline_mean():
+                values = [
+                    x['similarity'] for x in baseline_itemwise
+                    if x['stage'] == stage and x['subject'] == sub
+                ]
+                return float(np.mean(values)) if values else np.nan
+
             meta_mean = _mean_for('Metaphor')
             spatial_mean = _mean_for('Spatial')
-            base_sim = _mean_for('Baseline')
 
             results_summary.append({
                 'subject': sub,
@@ -308,17 +318,25 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
                 'stage': stage,
                 'Sim_Metaphor': meta_mean,
                 'Sim_Spatial': spatial_mean,
-                'Sim_Baseline': base_sim,
                 'n_voxels': time_series.shape[1]  # 记录用了多少个体素
             })
+            if available_conditions and BASELINE_CONDITION in available_conditions:
+                baseline_summary.append({
+                    'subject': sub,
+                    'roi': roi_name,
+                    'stage': stage,
+                    'Sim_Baseline': _baseline_mean(),
+                    'n_voxels': time_series.shape[1],
+                    'pairing_scheme': 'template_pair',
+                })
 
     except Exception as e:
         logger.error(f"Error processing {sub} {roi_name}: {e}")
         import traceback
         traceback.print_exc()
-        return [], []
+        return [], [], [], []
 
-    return results_summary, results_itemwise
+    return results_summary, results_itemwise, baseline_summary, baseline_itemwise
 
 
 def main():
@@ -344,10 +362,14 @@ def main():
     # 拆解结果
     final_summary = []
     final_itemwise = []
+    final_baseline_summary = []
+    final_baseline_itemwise = []
 
-    for res_sum, res_item in results:
+    for res_sum, res_item, res_base_sum, res_base_item in results:
         final_summary.extend(res_sum)
         final_itemwise.extend(res_item)
+        final_baseline_summary.extend(res_base_sum)
+        final_baseline_itemwise.extend(res_base_item)
 
     # 保存 Summary (用于 ANOVA/t-test)
     if final_summary:
@@ -362,6 +384,18 @@ def main():
         out_item = cfg.OUTPUT_DIR / "rsa_itemwise_details.csv"
         df_item.to_csv(out_item, index=False)
         logger.info(f"Item-wise 结果已保存: {out_item}")
+
+    if final_baseline_summary:
+        df_base_sum = pd.DataFrame(final_baseline_summary)
+        out_base_sum = cfg.OUTPUT_DIR / "rsa_baseline_summary_stats.csv"
+        df_base_sum.to_csv(out_base_sum, index=False)
+        logger.info(f"Baseline summary 结果已保存: {out_base_sum}")
+
+    if final_baseline_itemwise:
+        df_base_item = pd.DataFrame(final_baseline_itemwise)
+        out_base_item = cfg.OUTPUT_DIR / "rsa_baseline_itemwise_details.csv"
+        df_base_item.to_csv(out_base_item, index=False)
+        logger.info(f"Baseline item-wise 结果已保存: {out_base_item}")
 
     logger.info(f"耗时: {time.time() - t0:.2f}秒")
 

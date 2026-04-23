@@ -57,7 +57,7 @@ FINAL_ROOT = _final_root()
 if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
-from common.final_utils import ensure_dir, paired_t_summary, save_json, write_table  # noqa: E402
+from common.final_utils import ensure_dir, paired_t_summary, read_table, save_json, write_table  # noqa: E402
 from common.pattern_metrics import load_masked_samples, neural_rdm_vector  # noqa: E402
 from common.roi_library import default_roi_tagged_out_dir  # noqa: E402
 
@@ -262,6 +262,66 @@ def _default_output_dir() -> Path:
     )
 
 
+def _default_stimuli_template() -> Path | None:
+    try:
+        from rsa_analysis.rsa_config import STIMULI_TEMPLATE  # type: ignore
+    except Exception:
+        return None
+    return Path(STIMULI_TEMPLATE)
+
+
+def augment_metadata_for_models(
+    metadata: pd.DataFrame,
+    template_df: pd.DataFrame | None,
+    *,
+    word_col: str,
+    pair_col: str,
+) -> pd.DataFrame:
+    out = metadata.copy()
+
+    if word_col not in out.columns:
+        if "unique_label" in out.columns:
+            out[word_col] = out["unique_label"].astype(str).str.strip()
+        elif "word_label" in out.columns:
+            out[word_col] = out["word_label"].astype(str).str.strip()
+
+    if template_df is not None and not template_df.empty:
+        tpl = template_df.copy()
+        if "word_label" in tpl.columns:
+            tpl["word_label"] = tpl["word_label"].astype(str).str.strip()
+        merge_cols = []
+        if word_col in out.columns and "word_label" in tpl.columns:
+            merge_cols.append("word_label")
+        if merge_cols:
+            wanted = ["word_label"]
+            if "pair_id" in tpl.columns:
+                wanted.append("pair_id")
+            lookup = tpl[wanted].drop_duplicates(subset=["word_label"], keep="first")
+            out = out.merge(lookup, how="left", on="word_label", suffixes=("", "_tpl"))
+
+    if pair_col not in out.columns:
+        if "pair_id" in out.columns:
+            out[pair_col] = out["pair_id"]
+        elif "pic_num" in out.columns:
+            out[pair_col] = out["pic_num"]
+
+    return out
+
+
+def _condition_group_label(value: str) -> str:
+    text = str(value).strip().lower()
+    mapping = {
+        "yy": "yy",
+        "metaphor": "yy",
+        "kj": "kj",
+        "spatial": "kj",
+        "baseline": "baseline",
+        "base": "baseline",
+        "jx": "baseline",
+    }
+    return mapping.get(text, text)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare neural RDMs with candidate model RDMs (M1/M2/M3/M7/M8)."
@@ -274,8 +334,16 @@ def main() -> None:
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     parser.add_argument("--metadata-template", default="{time}_{condition}_metadata.tsv")
     parser.add_argument("--conditions", nargs="*", default=["yy", "kj", "baseline"])
+    parser.add_argument(
+        "--analysis-mode",
+        choices=["by_condition", "pooled", "both"],
+        default="pooled",
+        help="Whether to build neural RDMs within each condition, across pooled conditions, or both.",
+    )
     parser.add_argument("--pair-id-col", default="pair_id")
     parser.add_argument("--word-col", default="word_label")
+    parser.add_argument("--stimuli-template", type=Path, default=None,
+                        help="Optional stimuli template used to backfill word_label/pair_id into pattern metadata.")
     parser.add_argument("--embedding-file", type=Path, default=None,
                         help="stimulus_embeddings TSV for M3 (cosine distance).")
     parser.add_argument("--memory-strength-dir", type=Path, default=None,
@@ -292,6 +360,8 @@ def main() -> None:
     parser.add_argument("--partial-correlation", action="store_true",
                         help="Compute partial Spearman correlations between each model and neural RDM.")
     parser.add_argument("--collinearity-threshold", type=float, default=0.7)
+    parser.add_argument("--allow-missing-models", action="store_true",
+                        help="Allow missing prerequisites to be recorded as skip_reason instead of failing fast.")
     args = parser.parse_args()
 
     output_dir = ensure_dir(args.output_dir if args.output_dir is not None else _default_output_dir())
@@ -301,6 +371,11 @@ def main() -> None:
         if not args.embedding_file.exists():
             raise FileNotFoundError(f"Embedding file not found: {args.embedding_file}")
         embedding_table = pd.read_csv(args.embedding_file, sep="\t")
+
+    stimuli_template = args.stimuli_template or _default_stimuli_template()
+    template_df: pd.DataFrame | None = None
+    if stimuli_template is not None and Path(stimuli_template).exists():
+        template_df = read_table(Path(stimuli_template))
 
     rows = []
     partial_rows = []
@@ -325,9 +400,10 @@ def main() -> None:
                         meta = pd.read_csv(meta_path, sep="\t")
                         meta["condition"] = condition
                         meta_frames.append(meta)
-                if len(image_paths) < 2:
+                if not image_paths:
                     rows.append({
                         "subject": subject, "roi": roi_name, "time": time,
+                        "condition_group": None,
                         "model": None, "rho": float("nan"), "p_value": float("nan"),
                         "n_pairs": 0, "n_conditions_available": len(image_paths),
                         "skip_reason": "fewer_than_two_conditions_available",
@@ -335,6 +411,7 @@ def main() -> None:
                     continue
                 sample_blocks = []
                 checked_meta_frames = []
+                per_condition_cells: list[tuple[str, np.ndarray, pd.DataFrame]] = []
                 for (cond, img_path), meta in zip(image_paths, meta_frames):
                     block = load_masked_samples(img_path, roi_path)
                     if block.shape[0] != len(meta):
@@ -343,116 +420,168 @@ def main() -> None:
                             f"samples={block.shape[0]} vs meta_rows={len(meta)} "
                             f"(check stack_patterns.py ordering and *_metadata.tsv)."
                         )
+                    checked_meta = meta.reset_index(drop=True)
                     sample_blocks.append(block)
-                    checked_meta_frames.append(meta.reset_index(drop=True))
-                samples = np.vstack(sample_blocks)
-                metadata = pd.concat(checked_meta_frames, ignore_index=True)
-                if samples.shape[0] != len(metadata):
-                    raise AssertionError(
-                        f"stacked samples/metadata mismatch for {subject} {roi_name} {time}: "
-                        f"samples={samples.shape[0]} vs meta_rows={len(metadata)}."
-                    )
-                neural = neural_rdm_vector(samples, metric="correlation")
+                    checked_meta_frames.append(checked_meta)
+                    per_condition_cells.append((_condition_group_label(cond), block, checked_meta))
 
-                model_vectors: dict[str, np.ndarray] = {}
-                model_skip: dict[str, str] = {}
+                analysis_cells: list[tuple[str, np.ndarray, pd.DataFrame]] = []
+                if args.analysis_mode in {"pooled", "both"} and len(sample_blocks) >= 2:
+                    pooled_samples = np.vstack(sample_blocks)
+                    pooled_meta = pd.concat(checked_meta_frames, ignore_index=True)
+                    if pooled_samples.shape[0] != len(pooled_meta):
+                        raise AssertionError(
+                            f"stacked samples/metadata mismatch for {subject} {roi_name} {time}: "
+                            f"samples={pooled_samples.shape[0]} vs meta_rows={len(pooled_meta)}."
+                        )
+                    analysis_cells.append(("all", pooled_samples, pooled_meta))
+                if args.analysis_mode in {"by_condition", "both"}:
+                    analysis_cells.extend(per_condition_cells)
 
-                if "M1_condition" in args.enabled_models:
-                    try:
-                        model_vectors["M1_condition"] = model_from_condition_multi(metadata)
-                    except Exception as exc:
-                        model_skip["M1_condition"] = f"error: {exc}"
-
-                if "M2_pair" in args.enabled_models:
-                    if args.pair_id_col not in metadata.columns and "pic_num" not in metadata.columns:
-                        model_skip["M2_pair"] = "missing_pair_id"
-                    else:
-                        try:
-                            model_vectors["M2_pair"] = model_from_pair_identity(metadata, args.pair_id_col)
-                        except Exception as exc:
-                            model_skip["M2_pair"] = f"error: {exc}"
-
-                if "M3_embedding" in args.enabled_models:
-                    if embedding_table is None:
-                        model_skip["M3_embedding"] = "missing_embedding_file"
-                    elif args.word_col not in metadata.columns:
-                        model_skip["M3_embedding"] = "missing_word_label"
-                    else:
-                        try:
-                            model_vectors["M3_embedding"] = model_from_embedding(
-                                metadata, embedding_table, args.word_col
-                            )
-                        except Exception as exc:
-                            model_skip["M3_embedding"] = f"error: {exc}"
-
-                if "M7_memory" in args.enabled_models:
-                    mem_table = _load_memory_table(args.memory_strength_dir, subject)
-                    if mem_table is None:
-                        model_skip["M7_memory"] = "missing_memory_table"
-                    elif args.word_col not in metadata.columns:
-                        model_skip["M7_memory"] = "missing_word_label"
-                    else:
-                        try:
-                            model_vectors["M7_memory"] = model_from_subject_numeric(
-                                metadata, mem_table, args.memory_score_col, args.word_col
-                            )
-                        except Exception as exc:
-                            model_skip["M7_memory"] = f"error: {exc}"
-
-                if "M8_reverse_pair" in args.enabled_models:
-                    if args.pair_id_col not in metadata.columns and "pic_num" not in metadata.columns:
-                        model_skip["M8_reverse_pair"] = "missing_pair_id"
-                    else:
-                        try:
-                            model_vectors["M8_reverse_pair"] = model_from_reverse_pair_identity(
-                                metadata, args.pair_id_col
-                            )
-                        except Exception as exc:
-                            model_skip["M8_reverse_pair"] = f"error: {exc}"
-
-                for col in args.numeric_model_cols:
-                    if col in metadata.columns:
-                        try:
-                            model_vectors[f"numeric_{col}"] = model_from_numeric(metadata, col)
-                        except Exception as exc:
-                            model_skip[f"numeric_{col}"] = f"error: {exc}"
-
-                for model_name, model_vector in model_vectors.items():
-                    rho, pvalue, n_pairs = _safe_spearman(neural, model_vector)
-                    rows.append({
-                        "subject": subject, "roi": roi_name, "time": time,
-                        "model": model_name, "rho": rho, "p_value": pvalue,
-                        "n_pairs": n_pairs,
-                        "n_conditions_available": len(image_paths),
-                        "skip_reason": "",
-                    })
-
-                for model_name, reason in model_skip.items():
-                    rows.append({
-                        "subject": subject, "roi": roi_name, "time": time,
-                        "model": model_name, "rho": float("nan"), "p_value": float("nan"),
-                        "n_pairs": 0,
-                        "n_conditions_available": len(image_paths),
-                        "skip_reason": reason,
-                    })
-
-                if args.partial_correlation and len(model_vectors) >= 2:
-                    names = list(model_vectors.keys())
-                    for name in names:
-                        control_names, excluded_controls = _partial_control_names(names, name)
-                        controls = [model_vectors[other] for other in control_names]
-                        rho, pvalue, n_pairs = _partial_spearman(neural, model_vectors[name], controls)
-                        partial_rows.append({
+                for condition_group, samples, metadata in analysis_cells:
+                    if samples.shape[0] < 2:
+                        rows.append({
                             "subject": subject, "roi": roi_name, "time": time,
-                            "model": name, "partial_rho": rho, "p_value": pvalue,
-                            "n_pairs": n_pairs,
-                            "controls": ",".join(control_names),
-                            "excluded_controls": ",".join(excluded_controls),
+                            "condition_group": condition_group,
+                            "model": None, "rho": float("nan"), "p_value": float("nan"),
+                            "n_pairs": 0, "n_conditions_available": len(image_paths),
+                            "skip_reason": "fewer_than_two_trials",
                         })
-                    collinearity_snapshots.append(
-                        _build_collinearity_report(model_vectors, args.collinearity_threshold)
-                        .assign(subject=subject, roi=roi_name, time=time)
+                        continue
+
+                    metadata = augment_metadata_for_models(
+                        metadata,
+                        template_df,
+                        word_col=args.word_col,
+                        pair_col=args.pair_id_col,
                     )
+                    neural = neural_rdm_vector(samples, metric="correlation")
+
+                    model_vectors: dict[str, np.ndarray] = {}
+                    model_skip: dict[str, str] = {}
+
+                    def _handle_model_failure(model_name: str, reason: str, *, allow_skip: bool = False) -> None:
+                        if allow_skip or args.allow_missing_models:
+                            model_skip[model_name] = reason
+                            return
+                        raise RuntimeError(
+                            f"{model_name} failed for {subject} {roi_name} {time} {condition_group}: {reason}"
+                        )
+
+                    single_condition_group = metadata["condition"].astype(str).nunique() <= 1
+                    baseline_group = condition_group == "baseline"
+
+                    if "M1_condition" in args.enabled_models:
+                        if single_condition_group:
+                            model_skip["M1_condition"] = "not_applicable_single_condition_group"
+                        else:
+                            try:
+                                model_vectors["M1_condition"] = model_from_condition_multi(metadata)
+                            except Exception as exc:
+                                _handle_model_failure("M1_condition", f"error: {exc}")
+
+                    if "M2_pair" in args.enabled_models:
+                        if baseline_group:
+                            model_skip["M2_pair"] = "not_applicable_nonpaired_condition"
+                        elif args.pair_id_col not in metadata.columns and "pic_num" not in metadata.columns:
+                            _handle_model_failure("M2_pair", "missing_pair_id")
+                        else:
+                            try:
+                                model_vectors["M2_pair"] = model_from_pair_identity(metadata, args.pair_id_col)
+                            except Exception as exc:
+                                _handle_model_failure("M2_pair", f"error: {exc}")
+
+                    if "M3_embedding" in args.enabled_models:
+                        if embedding_table is None:
+                            _handle_model_failure("M3_embedding", "missing_embedding_file")
+                        elif args.word_col not in metadata.columns:
+                            _handle_model_failure("M3_embedding", "missing_word_label")
+                        else:
+                            try:
+                                model_vectors["M3_embedding"] = model_from_embedding(
+                                    metadata, embedding_table, args.word_col
+                                )
+                            except Exception as exc:
+                                _handle_model_failure("M3_embedding", f"error: {exc}")
+
+                    if "M7_memory" in args.enabled_models:
+                        mem_table = _load_memory_table(args.memory_strength_dir, subject)
+                        if mem_table is None:
+                            _handle_model_failure("M7_memory", "missing_memory_table")
+                        elif args.word_col not in metadata.columns:
+                            _handle_model_failure("M7_memory", "missing_word_label")
+                        else:
+                            try:
+                                model_vectors["M7_memory"] = model_from_subject_numeric(
+                                    metadata, mem_table, args.memory_score_col, args.word_col
+                                )
+                            except Exception as exc:
+                                _handle_model_failure("M7_memory", f"error: {exc}")
+
+                    if "M8_reverse_pair" in args.enabled_models:
+                        if baseline_group:
+                            model_skip["M8_reverse_pair"] = "not_applicable_nonpaired_condition"
+                        elif args.pair_id_col not in metadata.columns and "pic_num" not in metadata.columns:
+                            _handle_model_failure("M8_reverse_pair", "missing_pair_id")
+                        else:
+                            try:
+                                model_vectors["M8_reverse_pair"] = model_from_reverse_pair_identity(
+                                    metadata, args.pair_id_col
+                                )
+                            except Exception as exc:
+                                _handle_model_failure("M8_reverse_pair", f"error: {exc}")
+
+                    for col in args.numeric_model_cols:
+                        if col in metadata.columns:
+                            try:
+                                model_vectors[f"numeric_{col}"] = model_from_numeric(metadata, col)
+                            except Exception as exc:
+                                _handle_model_failure(f"numeric_{col}", f"error: {exc}", allow_skip=True)
+
+                    if not model_vectors and not model_skip:
+                        raise RuntimeError(
+                            f"No model vectors were built for {subject} {roi_name} {time} {condition_group}."
+                        )
+
+                    for model_name, model_vector in model_vectors.items():
+                        rho, pvalue, n_pairs = _safe_spearman(neural, model_vector)
+                        rows.append({
+                            "subject": subject, "roi": roi_name, "time": time,
+                            "condition_group": condition_group,
+                            "model": model_name, "rho": rho, "p_value": pvalue,
+                            "n_pairs": n_pairs,
+                            "n_conditions_available": len(image_paths),
+                            "skip_reason": "",
+                        })
+
+                    for model_name, reason in model_skip.items():
+                        rows.append({
+                            "subject": subject, "roi": roi_name, "time": time,
+                            "condition_group": condition_group,
+                            "model": model_name, "rho": float("nan"), "p_value": float("nan"),
+                            "n_pairs": 0,
+                            "n_conditions_available": len(image_paths),
+                            "skip_reason": reason,
+                        })
+
+                    if args.partial_correlation and len(model_vectors) >= 2:
+                        names = list(model_vectors.keys())
+                        for name in names:
+                            control_names, excluded_controls = _partial_control_names(names, name)
+                            controls = [model_vectors[other] for other in control_names]
+                            rho, pvalue, n_pairs = _partial_spearman(neural, model_vectors[name], controls)
+                            partial_rows.append({
+                                "subject": subject, "roi": roi_name, "time": time,
+                                "condition_group": condition_group,
+                                "model": name, "partial_rho": rho, "p_value": pvalue,
+                                "n_pairs": n_pairs,
+                                "controls": ",".join(control_names),
+                                "excluded_controls": ",".join(excluded_controls),
+                            })
+                        collinearity_snapshots.append(
+                            _build_collinearity_report(model_vectors, args.collinearity_threshold)
+                            .assign(subject=subject, roi=roi_name, time=time, condition_group=condition_group)
+                        )
 
     frame = pd.DataFrame(rows)
     write_table(frame, output_dir / "model_rdm_subject_metrics.tsv")
@@ -466,14 +595,29 @@ def main() -> None:
 
     summaries = []
     eligible = frame[(frame["model"].notna()) & (frame["skip_reason"] == "")]
-    for (roi_name, model_name), sub_frame in eligible.groupby(["roi", "model"]):
+    group_cols = ["roi", "model"]
+    if "condition_group" in eligible.columns and eligible["condition_group"].notna().any():
+        group_cols.insert(1, "condition_group")
+    for keys, sub_frame in eligible.groupby(group_cols):
         pivot = sub_frame.pivot_table(index="subject", columns="time", values="rho").dropna()
         if "pre" not in pivot.columns or "post" not in pivot.columns or pivot.empty:
             continue
-        summary = {"roi": roi_name, "model": model_name,
-                   **paired_t_summary(pivot["post"], pivot["pre"])}
+        if len(group_cols) == 3:
+            roi_name, condition_group, model_name = keys
+            summary = {
+                "roi": roi_name,
+                "condition_group": condition_group,
+                "model": model_name,
+                **paired_t_summary(pivot["post"], pivot["pre"]),
+            }
+            summary_name = f"{roi_name}_{condition_group}_{model_name}_rdm_summary.json"
+        else:
+            roi_name, model_name = keys
+            summary = {"roi": roi_name, "model": model_name,
+                       **paired_t_summary(pivot["post"], pivot["pre"])}
+            summary_name = f"{roi_name}_{model_name}_rdm_summary.json"
         summaries.append(summary)
-        save_json(summary, output_dir / f"{roi_name}_{model_name}_rdm_summary.json")
+        save_json(summary, output_dir / summary_name)
 
     if summaries:
         write_table(pd.DataFrame(summaries), output_dir / "model_rdm_group_summary.tsv")

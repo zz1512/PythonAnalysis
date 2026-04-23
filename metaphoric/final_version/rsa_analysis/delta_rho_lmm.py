@@ -122,10 +122,12 @@ def main() -> None:
     sep = "\t" if source.suffix.lower() in {".tsv", ".txt"} else ","
     frame = pd.read_csv(source, sep=sep)
 
-    delta_frame = compute_delta(frame, value_col=value_col, condition_col=args.condition_col)
+    condition_col = args.condition_col
+
+    delta_frame = compute_delta(frame, value_col=value_col, condition_col=condition_col)
     write_table(delta_frame, output_dir / "delta_rho_long.tsv")
 
-    fit, formula = fit_lmm(delta_frame, args.condition_col)
+    fit, formula = fit_lmm(delta_frame, condition_col)
 
     summary_text = str(fit.summary())
     (output_dir / "delta_rho_lmm_summary.txt").write_text(summary_text, encoding="utf-8")
@@ -136,6 +138,7 @@ def main() -> None:
             "formula": formula,
             "value_col": value_col,
             "source_file": str(source),
+            "condition_col": condition_col,
             "aic": float(fit.aic),
             "bic": float(fit.bic),
             "n_obs": int(fit.nobs),
