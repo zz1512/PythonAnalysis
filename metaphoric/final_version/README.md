@@ -47,15 +47,17 @@
 - ...
 
 每个 subject 文件夹内的核心文件（4D NIfTI，最后一维是 trials）：
-- `pre_yy.nii.gz`, `pre_kj.nii.gz`
-- `post_yy.nii.gz`, `post_kj.nii.gz`
-- `learn_yy.nii.gz`, `learn_kj.nii.gz`（可选：做学习阶段动态/泛化才需要）
+- `pre_yy.nii.gz`, `pre_kj.nii.gz`, `pre_baseline.nii.gz`
+- `post_yy.nii.gz`, `post_kj.nii.gz`, `post_baseline.nii.gz`
+- `learn_yy.nii.gz`, `learn_kj.nii.gz`（可选：做学习阶段动态/泛化才需要；通常不含 baseline）
 
 每个 4D 文件都有对应 metadata：
-- `pre_yy_metadata.tsv`（至少包含 `beta_path`、`run`、`trial_id`）
+- `pre_yy_metadata.tsv`（至少包含 `beta_path`、`run`、`trial_id`；推荐含 `word_label`、`pair_id`）
 
 命名规则说明：
 - `stack_patterns.py` 会把 `yyw/yyew -> yy`、`kjw/kjew -> kj`，避免生成下游找不到的 `pre_yyw.nii.gz`。
+- `stack_patterns.py` 会把 `jx -> baseline`，以支持 baseline 控制主线。
+- 如果 metadata 没有 `phase` 列，`stack_patterns.py` 会按 `run` 自动推断：`1-2=pre, 3-4=learn, 5-6=post`。
 - 默认排除 `fake`（可通过 `--exclude-conditions` 改）。
 
 ### 2) ROI 目录
@@ -79,8 +81,9 @@ ROI mask 目录通常为：
 2. 学习阶段 GLM（Run3-4）：定位 `yy > kj` 的关键脑区（给“在哪里”）
 3. 前后测 LSS（Run1-2/5-6）→ patterns：得到 `pre/post_yy/kj` 的 4D patterns（后续一切输入）
 4. 前后测 RSA（item-wise）+ LMM：核心证据（表征结构变化）
-5. RD/GPS（ROI-level）：互补证据（几何压缩/紧凑度变化）
+5. Model-RSA + Δρ LMM：机制解释（为什么会这样变）
 6. 脑-行为关联：跨层次一致性与解释力
+7. RD/GPS（ROI-level）：互补证据（几何压缩/紧凑度变化）
 
 ### B. 控制验证（推荐）
 目标：排除“只是重复暴露效应”的替代解释。
@@ -105,12 +108,15 @@ ROI mask 目录通常为：
 | 脚本 | 主要输出 |
 |------|----------|
 | `glm_analysis/run_lss.py` | `${PYTHON_METAPHOR_ROOT}/lss_betas_final/sub-xx/run-*/` + `lss_metadata_index_final.csv` |
-| `representation_analysis/stack_patterns.py` | `${PATTERN_ROOT}/sub-xx/{pre,post,learn}_{yy,kj}.nii.gz` + `*_metadata.tsv` |
+| `representation_analysis/stack_patterns.py` | `${PATTERN_ROOT}/sub-xx/{pre,post}_{yy,kj,baseline}.nii.gz` + `*_metadata.tsv` |
 | `rsa_analysis/run_rsa_optimized.py` | `rsa_itemwise_details.csv` + `rsa_summary_stats.csv` |
 | `rsa_analysis/rsa_lmm.py` | `rsa_lmm_summary.txt` + 参数/系数表（tsv/csv） |
+| `rsa_analysis/model_rdm_comparison.py` | `model_rdm_subject_metrics.tsv` + `model_rdm_partial_metrics.tsv` + `model_collinearity.tsv` |
+| `rsa_analysis/delta_rho_lmm.py` | `delta_rho_lmm_summary.txt` + `delta_rho_lmm_params.tsv` + `delta_rho_lmm_model.json` |
 | `representation_analysis/rd_analysis.py` | `rd_subject_metrics.tsv` + `rd_group_summary.tsv` |
 | `representation_analysis/gps_analysis.py` | `gps_subject_metrics.tsv` + `gps_group_summary.tsv` |
-| `brain_behavior/brain_behavior_correlation.py` | `brain_behavior_merged.tsv` + 相关矩阵/图表 |
+| `rsa_analysis/brain_behavior_correlation.py` | `brain_behavior_correlation.tsv` + `brain_behavior_scatter.png` |
+| `brain_behavior/brain_behavior_correlation.py` | `brain_behavior_merged.tsv` + `brain_behavior_correlations.tsv`（汇总多个 subject-level 指标表） |
 
 ### 1) 行为
 - `behavior_analysis/addMemory.py`
@@ -136,6 +142,11 @@ ROI mask 目录通常为：
 - `rsa_analysis/check_data_integrity.py`
 - `rsa_analysis/run_rsa_optimized.py`
 - `rsa_analysis/rsa_lmm.py`
+- `rsa_analysis/build_stimulus_embeddings.py`
+- `rsa_analysis/build_memory_strength_table.py`
+- `rsa_analysis/model_rdm_comparison.py`
+- `rsa_analysis/delta_rho_lmm.py`
+- `rsa_analysis/brain_behavior_correlation.py`
 - `rsa_analysis/cross_roi_rsa.py`
 - `rsa_analysis/model_rdm_comparison.py`
 - `rsa_analysis/plot_rsa_results.py`
@@ -264,16 +275,22 @@ python stack_patterns.py ${PYTHON_METAPHOR_ROOT}/lss_betas_final/lss_metadata_in
 ```
 
 产出（强依赖命名；下游脚本默认找这些文件）：
-- `pattern_root/sub-xx/pre_yy.nii.gz`、`pre_kj.nii.gz`
-- `pattern_root/sub-xx/post_yy.nii.gz`、`post_kj.nii.gz`
+- `pattern_root/sub-xx/pre_yy.nii.gz`、`pre_kj.nii.gz`、`pre_baseline.nii.gz`
+- `pattern_root/sub-xx/post_yy.nii.gz`、`post_kj.nii.gz`、`post_baseline.nii.gz`
 - `pattern_root/sub-xx/*_metadata.tsv`：每个 4D patterns 的 trial 元数据
 
-### Step 5（必跑）：前后测 RSA（核心证据）+ LMM
+### Step 5（必跑）：前后测 RSA（核心证据）+ LMM + Model-RSA
 ```bash
 cd ../rsa_analysis
 python check_data_integrity.py
 python run_rsa_optimized.py
-python rsa_lmm.py INPUT.tsv OUT_DIR
+python rsa_lmm.py
+
+# Model-RSA 机制解释（推荐直接接在主线后）
+python build_stimulus_embeddings.py
+python build_memory_strength_table.py
+python model_rdm_comparison.py ${PYTHON_METAPHOR_ROOT}/pattern_root ROI_DIR OUT_DIR --partial-correlation
+python delta_rho_lmm.py --metrics-file OUT_DIR/model_rdm_subject_metrics.tsv --output-dir OUT_DIR/lmm
 ```
 
 可选：切换不同 ROI 层级
@@ -292,20 +309,37 @@ python run_rsa_optimized.py
   - `rsa_summary_stats.csv`：汇总统计
 - `OUT_DIR/`：
   - `rsa_lmm_summary.txt` / `rsa_lmm_params.tsv`（具体以脚本输出为准）
+- `OUT_DIR/model_rdm_subject_metrics.tsv`：Model-RSA 单模型相关
+- `OUT_DIR/model_rdm_partial_metrics.tsv`：偏相关结果
+- `OUT_DIR/model_collinearity.tsv`：模型间共线性
+- `OUT_DIR/lmm/delta_rho_lmm_summary.txt`：Δρ LMM 结果
 
-（可选）跨 ROI 与模型 RDM：
+说明：
+- 当前主线默认推荐在 Step 5 里直接把 Model-RSA 跑掉，而不是留到最后再决定做不做。
+- 若要做跨 ROI RDM 一致性，可额外运行：
 ```bash
 python cross_roi_rsa.py ${PYTHON_METAPHOR_ROOT}/pattern_root ROI_DIR OUT_DIR
-python model_rdm_comparison.py ${PYTHON_METAPHOR_ROOT}/pattern_root ROI_DIR OUT_DIR --numeric-model-cols novelty familiarity
 python plot_rsa_results.py
 ```
 
-产出：
-- `OUT_DIR/cross_roi_rsa_*.tsv`（跨 ROI RDM 一致性）
-- `OUT_DIR/model_rdm_*.tsv`（模型 RDM 比较结果）
-- `plot_rsa_results.py` 输出的图表文件（png/svg/html，视脚本配置）
+### Step 6（必跑）：脑-行为关联
+```bash
+cd ../rsa_analysis
+python brain_behavior_correlation.py \
+  --rsa-itemwise ${PYTHON_METAPHOR_ROOT}/rsa_results_optimized/rsa_itemwise_details.csv \
+  --behavior BEHAVIOR.tsv \
+  --condition yy
+```
 
-### Step 6（必跑）：RD / GPS（互补证据）
+产出：
+- `brain_behavior_*/brain_behavior_correlation.tsv`
+- `brain_behavior_*/brain_behavior_scatter.png`
+
+补充说明：
+- `rsa_analysis/brain_behavior_correlation.py` 是当前主线推荐脚本：直接把 RSA 的 `Δ similarity(post-pre)` 与 Run-7 行为做 ROI 级相关/偏相关。
+- `brain_behavior/brain_behavior_correlation.py` 是“通用汇总器”：适合把多个 subject-level 指标表拼起来，再做相关矩阵或中介分析，不是第一优先主线脚本。
+
+### Step 7（互补证据）：RD / GPS
 ```bash
 cd ../representation_analysis
 python rd_analysis.py ${PYTHON_METAPHOR_ROOT}/pattern_root ROI_DIR ${PYTHON_METAPHOR_ROOT}/rd_results
@@ -315,17 +349,6 @@ python gps_analysis.py ${PYTHON_METAPHOR_ROOT}/pattern_root ROI_DIR ${PYTHON_MET
 产出：
 - `rd_results/rd_subject_metrics.tsv`、`rd_results/rd_group_summary.tsv`（文件名以脚本为准）
 - `gps_results/gps_subject_metrics.tsv`、`gps_results/gps_group_summary.tsv`（文件名以脚本为准）
-
-### Step 7（必跑）：脑-行为关联
-```bash
-cd ../brain_behavior
-python brain_behavior_correlation.py ${PYTHON_METAPHOR_ROOT}/brain_behavior_results METRIC1.tsv METRIC2.tsv METRIC3.tsv
-```
-
-产出：
-- `brain_behavior_results/brain_behavior_merged.tsv`（合并后的 subject-level 指标表）
-- `brain_behavior_results/brain_behavior_correlations.tsv`（两两相关结果，含 p 值）
-- `brain_behavior_results/brain_behavior_summary.json`（元信息）
 
 ### Step 8（可选加分项）：机制与稳健性
 
@@ -389,5 +412,5 @@ python bootstrap_ci.py INPUT.tsv OUT_DIR --value-col value --group-cols roi time
 ## 使用约定（最小版）
 
 1. 只要 `pattern_root/sub-xx/pre_yy.nii.gz` 等命名齐了，下游多数脚本无需额外配置即可跑通。
-2. 默认主线只用 `yy/kj`；baseline 控制验证属于可选扩展，先把主线跑通再加。
-3. 论文叙事优先“少而强”：先用 RSA（核心）+ RD/GPS（互补）+ GLM（定位）三件套讲清楚，再考虑 MVPA/连接/中介等加分项。
+2. 默认主线纳入 `yy/kj/baseline` 三条件；baseline 控制是主结果解释的必要环节，不再作为可选扩展。
+3. 当前论文叙事优先“少而强”：先用 RSA（核心）+ Model-RSA（机制解释）+ GLM（定位）+ 脑-行为（意义）讲清楚，再把 RD/GPS 作为几何层互补证据，最后才考虑 MVPA/连接/中介等加分项。

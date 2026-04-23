@@ -5,6 +5,7 @@ rsa_lmm.py
 - 对 `run_rsa_optimized.py` 输出的 item-wise RSA 明细做线性混合模型（LMM）：
   `similarity ~ condition * time + (1|subject) + (1|item)`（item 作为方差成分）。
 - 当前版本默认避免把不同来源/不同对比定义的 ROI 粗暴混在一个模型里。
+- 默认纳入 `rsa_itemwise_details.csv` 中存在的全部条件；当前主线应包含 `Metaphor / Spatial / Baseline`。
 
 输入
 - input_path: TSV/CSV（默认读取 `rsa_config.py` 中 `OUTPUT_DIR / rsa_itemwise_details.csv`）
@@ -82,7 +83,7 @@ def attach_roi_metadata(frame: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
-def fit_model(frame: pd.DataFrame):
+def fit_model(frame: pd.DataFrame, *, formula: str):
     try:
         import statsmodels.formula.api as smf
     except Exception as exc:
@@ -90,7 +91,7 @@ def fit_model(frame: pd.DataFrame):
 
     working = prepare_frame(frame)
     model = smf.mixedlm(
-        "similarity ~ C(condition) * C(time)",
+        formula,
         data=working,
         groups=working["subject"],
         vc_formula={"item": "0 + C(item)"},
@@ -174,11 +175,12 @@ def run_models_by_group(
     group_col: str,
     base_output_dir: Path,
     analysis_level: str,
+    formula: str,
 ) -> pd.DataFrame:
     all_params = []
     for group_value, group_frame in frame.groupby(group_col):
         working = prepare_frame(group_frame)
-        fit = fit_model(working)
+        fit = fit_model(working, formula=formula)
         safe_name = str(group_value).replace("/", "_").replace("\\", "_").replace(" ", "_")
         params = write_single_model(
             base_output_dir / safe_name,
@@ -215,6 +217,18 @@ def main() -> None:
         action="store_true",
         help="Also fit one pooled model across all ROI, even when multiple base_contrast families are mixed.",
     )
+    parser.add_argument(
+        "--conditions",
+        nargs="*",
+        default=None,
+        help="Optional condition filter (e.g., baseline). When only one condition remains, the model uses "
+             "`similarity ~ C(time)` instead of the full interaction.",
+    )
+    parser.add_argument(
+        "--formula",
+        default=None,
+        help="Optional statsmodels formula override. If provided, takes precedence over auto-selected formula.",
+    )
     args = parser.parse_args()
 
     if not args.input_path.exists():
@@ -222,13 +236,23 @@ def main() -> None:
 
     output_dir = ensure_dir(args.output_dir)
     frame = attach_roi_metadata(read_table(args.input_path))
+    if args.conditions:
+        allowed = {str(item) for item in args.conditions}
+        frame = frame[frame["condition"].astype(str).isin(allowed)].copy()
     frame = prepare_frame(frame)
+
+    if args.formula:
+        formula = str(args.formula)
+    else:
+        n_cond = int(frame["condition"].nunique()) if "condition" in frame.columns else 0
+        formula = "similarity ~ C(time)" if n_cond <= 1 else "similarity ~ C(condition) * C(time)"
 
     by_roi = run_models_by_group(
         frame,
         group_col="roi",
         base_output_dir=output_dir / "by_roi",
         analysis_level="roi",
+        formula=formula,
     )
     if not by_roi.empty:
         write_table(by_roi, output_dir / "lmm_by_roi.tsv")
@@ -243,6 +267,7 @@ def main() -> None:
                 group_col="base_contrast",
                 base_output_dir=output_dir / "by_base_contrast",
                 analysis_level="base_contrast",
+                formula=formula,
             )
             if not by_base_contrast.empty:
                 write_table(by_base_contrast, output_dir / "lmm_by_base_contrast.tsv")
@@ -253,7 +278,7 @@ def main() -> None:
         should_run_pooled = should_run_pooled or len(unique_contrasts) <= 1
     pooled_note = "skipped_due_to_mixed_roi_families"
     if should_run_pooled:
-        pooled_fit = fit_model(frame)
+        pooled_fit = fit_model(frame, formula=formula)
         pooled_params = write_single_model(
             output_dir / "overall",
             pooled_fit,

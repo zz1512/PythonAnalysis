@@ -5,6 +5,9 @@
 ## 1. Model-RSA Trial 对齐缺口（M2/M3/M7 可能静默失效）
 
 ### 1.1 缺 `word_label`：M3/M7 无法对齐（高优先级）
+- 修复状态：
+  - [x] 已在 `representation_analysis/stack_patterns.py` 增加 `word_label` 写回逻辑（支持从 `stimuli_template.csv` merge；缺模板时回退到 `unique_label`）
+  - [ ] 待在真实数据上回归验证（抽 1 个被试跑 `model_rdm_comparison.py`，确保不再出现 `skip_reason=missing_word_label`）
 - **现象/风险**：
   - `model_rdm_comparison.py` 的 M3（embedding）与 M7（memory）依赖 `metadata.tsv` 中的 `word_label` 列。
   - 但 `stack_patterns.py` 生成的 `*_metadata.tsv` 由 `lss_metadata_index_final.csv` 透传，当前只保证 `unique_label/pic_num/condition/...`，不保证有 `word_label`。
@@ -21,6 +24,10 @@
   - 对任一被试任一条件的 metadata：`assert 'word_label' in metadata.columns`
 
 ### 1.2 缺 `pair_id`：M2 目前依赖 `pic_num` 回退（高优先级）
+- 修复状态：
+  - [x] 已在 `representation_analysis/stack_patterns.py` 增加 `pair_id` 写回逻辑（优先来自模板；缺模板时回退到 `pic_num/unique_label`，并将 baseline 强制设为唯一 `pair_id`）
+  - [x] 已在 `model_rdm_comparison.py` 中对缺 `pair_id`/`pic_num` 进行显式 `skip_reason=missing_pair_id`（不再只显示笼统 error）
+  - [ ] 待在真实数据上回归验证（检查 yy/kj 的每个 pair_id 是否恰好对应 2 个 concept word）
 - **现象/风险**：
   - M2（配对身份）理应使用 `pair_id`；当前实现若无 `pair_id` 会回退到 `pic_num`。
   - 若实验材料中“同一对的两个 concept word”并不共享同一 `pic_num`（或 1 个 pic_num 对应多于 2 个 word），则 M2 会退化甚至完全失效，但不会明确报错。
@@ -35,6 +42,9 @@
   - `assert 'pair_id' in metadata.columns or metadata.groupby('pic_num').size().eq(2).all()`
 
 ### 1.3 Neural RDM vs Model RDM 顺序对齐缺少断言（中优先级）
+- 修复状态：
+  - [x] 已在 `model_rdm_comparison.py` 增加样本数/元数据行数的硬断言（每个 condition 以及拼接后都校验）
+  - [x] 已在 `representation_analysis/stack_patterns.py` 增加 4D 体积数与 metadata 行数一致性的断言（依赖 nibabel）
 - **现象/风险**：
   - 当前 `model_rdm_comparison.py` 通过“同一循环顺序拼接 samples 与 metadata”来隐式保证 trial 对齐。
   - 若未来有人调整拼接逻辑或上游写盘顺序变化，可能出现 samples 与 metadata 行顺序错位，结果数值会变得不可解释但不一定报错。
@@ -46,6 +56,8 @@
     - `assert pattern_array.shape[0] == len(metadata_out)`
 
 ## 2. Δρ LMM 的随机效应结构说明（中优先级）
+- 修复状态：
+  - [x] 已在 `rsa_analysis/delta_rho_lmm.py` docstring 与 `readme_detail.md` Step 5D 明确说明 crossed RE 目标与 statsmodels 近似实现
 - **现象/风险**：
   - 目标写法常表述为 `(1|subject) + (1|roi)` 的交叉随机效应；但 statsmodels 对真正 crossed RE 支持有限。
   - 当前实现采用 `groups=subject` + `vc_formula={'roi': '0 + C(roi)'}`，更接近“roi 作为 subject 内的方差成分近似”，语义可能被误读。
@@ -53,4 +65,3 @@
   - `delta_rho_lmm_model.json` 已记录 `converged` 与 `random_effects_note`，用于提醒该近似。
 - **建议**：
   - 若后续要提交顶刊并被要求严格 crossed RE，可考虑迁移到 R `lme4` 或 `pymer4` 重跑验证。
-

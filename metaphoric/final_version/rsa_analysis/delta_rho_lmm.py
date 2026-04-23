@@ -20,6 +20,13 @@ delta_rho_lmm.py
 常见坑
 - 必须同一 subject/roi/model 上 pre 与 post 都存在才能形成 Δρ。
 - 若 condition 列存在（例如先按 condition 独立跑 RSA 再合并），请用 `--condition-col` 指定。
+
+随机效应结构说明（重要）
+- 目标模型是 crossed random effects：`(1|subject) + (1|roi)`，因为我们希望同时泛化到被试与 ROI。
+- 但 statsmodels 的 MixedLM 对 fully-crossed 的多组随机截距支持有限，这里采用：
+  - `groups=subject` 作为主要随机截距
+  - `vc_formula={"roi": "0 + C(roi)"}` 把 ROI 作为方差分量加入（实践中常用的近似写法）
+- 这在语义上更接近 crossed，而不是把 ROI 真的当作 nested 在 subject 之内；同时请在结果解读中报告该建模选择。
 """
 
 from __future__ import annotations

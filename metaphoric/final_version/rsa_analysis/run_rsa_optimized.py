@@ -40,6 +40,26 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_CONDITION_ORDER = ["Metaphor", "Spatial", "Baseline"]
+CONDITION_ALIASES = {
+    "metaphor": "Metaphor",
+    "yy": "Metaphor",
+    "yyw": "Metaphor",
+    "yyew": "Metaphor",
+    "spatial": "Spatial",
+    "kj": "Spatial",
+    "kjw": "Spatial",
+    "kjew": "Spatial",
+    "baseline": "Baseline",
+    "base": "Baseline",
+    "bl": "Baseline",
+    "jx": "Baseline",
+    "nonlink": "Baseline",
+    "no_link": "Baseline",
+    "unlinked": "Baseline",
+}
+
+
 def get_sorted_files(sub, stage, lss_df, template_df):
     """获取排序好的 Beta 文件路径"""
     runs = [1, 2] if stage == 'Pre' else [5, 6]
@@ -91,7 +111,7 @@ def get_sorted_files(sub, stage, lss_df, template_df):
 
 
 def build_condition_pairs(template_df, condition_name):
-    subset = template_df[template_df['condition'] == condition_name].copy()
+    subset = template_df[template_df['condition_norm'] == condition_name].copy()
     if subset.empty:
         return []
 
@@ -117,6 +137,49 @@ def build_condition_pairs(template_df, condition_name):
     return pair_specs
 
 
+def get_available_conditions(template_df):
+    """Return analysis conditions in a stable paper-friendly order."""
+    available = {str(item).strip() for item in template_df["condition_norm"].dropna().unique()}
+    ordered = [cond for cond in DEFAULT_CONDITION_ORDER if cond in available]
+    return ordered
+
+
+def normalize_template_conditions(template_df):
+    out = template_df.copy()
+    out["condition_norm"] = out["condition"].astype(str).str.strip().str.lower().map(CONDITION_ALIASES)
+    missing = out["condition_norm"].isna()
+    if missing.any():
+        unknown = sorted(out.loc[missing, "condition"].astype(str).unique().tolist())
+        raise ValueError(f"Unknown template conditions: {unknown}")
+    return out
+
+
+def extract_baseline_itemwise_data(sim_mat, template_df):
+    """
+    Baseline is not paired material.
+    We therefore use all unordered within-baseline trial pairs as item-wise controls.
+    """
+    subset = template_df[template_df["condition_norm"] == "Baseline"].copy()
+    if subset.empty:
+        return []
+
+    indices = subset.index.to_list()
+    item_data = []
+    for i, idx_a in enumerate(indices):
+        for idx_b in indices[i + 1:]:
+            lab_a = str(template_df.loc[idx_a, "word_label"])
+            lab_b = str(template_df.loc[idx_b, "word_label"])
+            item_key = "__".join(sorted([lab_a, lab_b]))
+            item_data.append({
+                "pair_id": f"Baseline:{item_key}",
+                "item": f"Baseline:{item_key}",
+                "word_label": lab_a,
+                "partner_label": lab_b,
+                "similarity": sim_mat[idx_a, idx_b],
+            })
+    return item_data
+
+
 def extract_itemwise_data(sim_mat, template_df, condition_name):
     """
     [新增] 提取项目级 (Item-wise) 数据
@@ -131,6 +194,7 @@ def extract_itemwise_data(sim_mat, template_df, condition_name):
         sim_val = sim_mat[pair_spec['index_a'], pair_spec['index_b']]
         item_data.append({
             'pair_id': pair_spec['pair_id'],
+            'item': f"{condition_name}:{pair_spec['pair_id']}",
             'word_label': pair_spec['word_label'],
             'partner_label': pair_spec['partner_label'],
             'similarity': sim_val
@@ -147,6 +211,8 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
     results_itemwise = []  # 存每个配对的值 (用于做散点图/LMM)
 
     try:
+        available_conditions = get_available_conditions(template_df)
+
         # 1. 初始化 Masker (用于提取全 ROI 数据)
         # 注意：这里先不 standardize，等选完体素后再 standardize 可能更稳妥，
         # 但 nilearn masker 通常是一步到位的。
@@ -204,9 +270,12 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
             sim_mat = 1 - squareform(rdm_vec)  # 转为相似度
 
             # 7. 提取 Item-wise Data (高优需求 2)
-            # 分别提取 Metaphor 和 Spatial 的每对数据
-            for cond in ['Metaphor', 'Spatial']:
-                items = extract_itemwise_data(sim_mat, template_df, cond)
+            # 默认提取模板里存在的全部核心条件：Metaphor / Spatial / Baseline
+            for cond in available_conditions:
+                if cond == "Baseline":
+                    items = extract_baseline_itemwise_data(sim_mat, template_df)
+                else:
+                    items = extract_itemwise_data(sim_mat, template_df, cond)
                 for item in items:
                     results_itemwise.append({
                         'subject': sub,
@@ -214,25 +283,24 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
                         'stage': stage,
                         'condition': cond,
                         'pair_id': item['pair_id'],
+                        'item': item['item'],
                         'word_label': item['word_label'],
                         'partner_label': item['partner_label'],
                         'similarity': item['similarity']
                     })
 
             # 8. 提取 Summary Data (Bar Plot 用)
-            # 计算基线均值
-            base_idx = template_df[template_df['condition'] == 'Baseline'].index
-            base_sim = np.nan
-            if len(base_idx) > 0:
-                base_sub = sim_mat[np.ix_(base_idx, base_idx)]
-                mask_diag = ~np.eye(base_sub.shape[0], dtype=bool)
-                base_sim = base_sub[mask_diag].mean()
+            # 直接从 itemwise 聚合，保证 summary 与 LMM 输入完全一致。
+            def _mean_for(cond_name):
+                values = [
+                    x['similarity'] for x in results_itemwise
+                    if x['stage'] == stage and x['condition'] == cond_name and x['subject'] == sub
+                ]
+                return float(np.mean(values)) if values else np.nan
 
-            # 计算隐喻/空间均值 (直接从 itemwise 聚合，保证一致性)
-            meta_mean = np.mean([x['similarity'] for x in results_itemwise if
-                                 x['stage'] == stage and x['condition'] == 'Metaphor' and x['subject'] == sub])
-            spatial_mean = np.mean([x['similarity'] for x in results_itemwise if
-                                    x['stage'] == stage and x['condition'] == 'Spatial' and x['subject'] == sub])
+            meta_mean = _mean_for('Metaphor')
+            spatial_mean = _mean_for('Spatial')
+            base_sim = _mean_for('Baseline')
 
             results_summary.append({
                 'subject': sub,
@@ -260,6 +328,7 @@ def main():
     lss_df = pd.read_csv(cfg.LSS_META_FILE)
     lss_df['unique_label'] = lss_df['unique_label'].astype(str)
     template_df = pd.read_csv(cfg.STIMULI_TEMPLATE).reset_index(drop=True)
+    template_df = normalize_template_conditions(template_df)
 
     tasks = []
     for sub in cfg.SUBJECTS:

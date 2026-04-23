@@ -23,12 +23,15 @@
 这里的“重组”不是只看“哪个脑区更亮”，而是看：
 - 行为上，隐喻条件是不是学得更好、记得更牢
 - 激活上，学习阶段哪些脑区更参与
-- 表征上，同一类刺激在学习前后是不是变得更像、更稳定、或几何结构发生压缩
+- 表征上，同一类刺激在学习前后是不是变得更像、更稳定、或更分化（区分度增强）、或几何结构发生压缩
 - 脑和行为之间，这些变化能不能互相解释
 
 一句话故事线：
 
-**行为告诉你“有没有学会”，GLM 告诉你“哪里在参与”，RSA 告诉你“表征关系怎么变”，RD/GPS 告诉你“几何结构怎么变”，脑-行为关联告诉你“这些神经变化和表现有没有同向”。**
+**行为告诉你“有没有学会”，GLM 告诉你“哪里在参与”，前后测 RSA 告诉你“表征关系怎么变”，Model-RSA 告诉你“为什么会这样变”，脑-行为关联告诉你“这些神经变化和表现有没有同向”；RD/GPS 则作为几何层面的互补证据。**
+
+重要提示（根据当前阶段性结果）：
+- 在本数据集中，隐喻（yy）的 RSA 主要表现为 **pair similarity 从 pre 到 post 更明显下降**，更接近“表征分化增强”而非“配对聚合/对齐”。后续 Model-RSA 与写作叙事需与这一方向一致。
 
 ### 实验设计
 
@@ -53,9 +56,10 @@
 
 ### 条件如何理解
 
-当前主线重点是两类条件：
+当前主线重点是三类条件：
 - `yy`：隐喻相关联结
 - `kj`：空间相关联结
+- `baseline`：无学习控制条件（原始标签通常是 `jx`）
 
 脚本里原始 trial type 可能长这样：
 - `yyw`, `yyew`
@@ -64,8 +68,13 @@
 在下游很多地方会被统一归并成：
 - `yy`
 - `kj`
+- `baseline`
 
-这样做是为了让下游文件名固定、分析口径统一。
+这样做是为了让下游文件名固定、分析口径统一。需要特别记住的是：
+- `yyw/yyew -> yy`
+- `kjw/kjew -> kj`
+- `jx -> baseline`
+- baseline 不是学习配对材料，而是前后测中的无学习控制条件
 
 ### 数据结构
 
@@ -104,9 +113,10 @@
 1. 行为：隐喻条件是否比空间条件表现更好
 2. GLM：学习时哪些脑区对隐喻联结更敏感
 3. RSA：这些脑区里的表征关系，是否从前测到后测发生了更强变化
-4. RD/GPS：这种变化是不是体现为几何压缩、稳定性提升或维度改变
+4. Model-RSA：这种变化更像预存语义、学习后配对对齐，还是学习后分化增强
 5. 脑-行为关联：神经变化大的被试，行为上是否也学得更好
-6. 机制扩展：如果再加 gPPI、有效连接、中介，可以开始讨论“可能怎么实现”
+6. RD/GPS：如果需要补几何层证据，再看这种变化是否体现为维度改变或紧凑度改变
+7. 机制扩展：如果主结果已经很稳，再考虑动态、偏侧化、连接性或中介
 
 ## 主线、控制、扩展
 
@@ -119,14 +129,15 @@
 3. 学习阶段 GLM
 4. stack patterns
 5. RSA + LMM
-6. RD/GPS
+6. Model-RSA + Δρ LMM
 7. 脑-行为关联
+8. RD/GPS（互补证据）
 
-如果你只想先拿到一条足够完整、能讲故事的结果线，这几步足够。
+如果你只想先拿到一条足够完整、能讲故事、也最符合当前顶刊叙事的结果线，这几步足够。
 
 ### 控制验证
 
-推荐但不是第一次复现必须跑：
+在当前版本里，最重要的控制验证已经不再是“可做可不做”：
 
 - baseline 控制
 
@@ -134,14 +145,19 @@
 
 “前后变化是不是只是重复暴露带来的普通熟悉化，而不是隐喻学习本身带来的特异性变化？”
 
-### 机制扩展
+因此现在的建议是：
+- baseline 必须进入 `run_rsa_optimized.py` 和 `rsa_lmm.py` 的默认主链
+- 主故事仍聚焦 `yy vs kj`
+- 但结果汇报必须同时告诉读者：`baseline(jx)` 是否也发生了同等幅度变化
 
-可选加分项：
+### 进阶扩展
+
+当前最推荐的进阶顺序：
+- 熟悉度/时间梯度参数调制
+- 偏侧化指数（LI）
 - learning dynamics
-- gPPI
-- effective connectivity
 - mediation
-- lateralization
+- effective connectivity
 - BF10 / bootstrap CI
 
 这些更适合在主线结果已经稳定后再做。
@@ -689,20 +705,23 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - `subject`
 - `run`
 - `condition`
-- `phase`
+- `phase`（若缺失，脚本可按 `run` 自动推断：`1-2=pre, 3-4=learn, 5-6=post`）
 - `beta_path` 或 `beta_file`
 - 推荐有 `trial_id`
 
 脚本会做什么标准化：
 - `yyw/yyew -> yy`
 - `kjw/kjew -> kj`
+- `jx -> baseline`
 - 默认排除 `fake`
 
 输出是什么：
 - `pattern_root/sub-xx/pre_yy.nii.gz`
 - `pattern_root/sub-xx/pre_kj.nii.gz`
+- `pattern_root/sub-xx/pre_baseline.nii.gz`
 - `pattern_root/sub-xx/post_yy.nii.gz`
 - `pattern_root/sub-xx/post_kj.nii.gz`
+- `pattern_root/sub-xx/post_baseline.nii.gz`
 - 对应的 `*_metadata.tsv`
 
 为什么输出是 4D NIfTI：
@@ -718,14 +737,15 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - `phase` 缺失或 run 映射错，导致 pre/post 混了
 - 条件归并失败，输出成 `pre_yyw.nii.gz` 这种下游不认的文件
 - metadata 里路径是相对路径，但相对基准目录理解错了
+- 若 metadata 缺 `word_label` / `pair_id`，后面的 Model-RSA 会静默跳过或退化
 
 最小 QC：
-- 每个被试至少应看到 `pre_yy`, `pre_kj`, `post_yy`, `post_kj`
+- 每个被试至少应看到 `pre_yy`, `pre_kj`, `pre_baseline`, `post_yy`, `post_kj`, `post_baseline`
 - `*_metadata.tsv` 行数要和 4D 文件里的 trial 数一致
 
 ---
 
-### Step 5：前后测 RSA（核心证据）+ LMM
+### Step 5：前后测 RSA（核心证据）+ LMM + Model-RSA（主流程机制解释）
 
 涉及脚本：
 - `rsa_analysis/check_data_integrity.py`
@@ -735,10 +755,14 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 这步回答什么问题：
 - 学习前后，刺激之间的神经相似性关系有没有发生系统改变
 - 而且这种改变是不是在 `yy` 比 `kj` 更明显
+- 如果改变存在，它更像“配对对齐/收敛”，还是更像“表征分化增强”
 
 为什么说 RSA 是主线核心：
 - 因为你的研究问题是“表征重组”
 - RSA 最直接地把“刺激之间关系的变化”量化出来
+- 在当前稿件结构里，Step 5 不只是“先看 RSA 再决定要不要做机制分析”，而是默认包含：
+  - Step 5B/5C：先证明变化发生了（What）
+  - Step 5D：再解释这种变化更匹配哪种机制模型（Why）
 
 #### Step 5A：`check_data_integrity.py`
 
@@ -784,6 +808,12 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 5. 提取 Metaphor、Spatial、Baseline 等条件下的 item-wise 相似度
 6. 生成汇总表和明细表
 
+这里需要特别注意 baseline 的定义：
+- `Metaphor` 对应模板里的 `yyw/yyew`
+- `Spatial` 对应模板里的 `kjw/kjew`
+- `Baseline` 对应模板里的 `jx`
+- **baseline 不是成对学习材料**，因此脚本不会把 baseline 当成 `pair_id`=2 个词一组来处理；它会改用 baseline 条件内部所有非对角 trial-pair 的相似度作为控制分布
+
 为什么要“按模板顺序取文件”：
 - 因为相似度矩阵里第 1 行第 1 列必须始终对应同一个刺激位置
 - 一旦顺序错了，不同被试之间、前后测之间就没法比较
@@ -802,6 +832,7 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 `rsa_itemwise_details.csv`
 - 最重要
 - 每行可以理解成“某个被试、某个 ROI、某个时间点、某个条件、某个 item pair 的相似度”
+- 对 `Metaphor/Spatial`，这里的 item pair 是学习配对；对 `Baseline(jx)`，这里的 item pair 是 baseline 内部任意两两 trial 组合
 - 这是 LMM 的输入
 
 `rsa_summary_stats.csv`
@@ -814,6 +845,10 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
   - 相似度升高，可能表示同类表征更整合
   - 相似度降低，也可能表示分化增强
 - 所以关键不是“越高越好”，而是“是否符合你对表征组织变化的理论预期”
+
+结合当前阶段性结果的读法（推荐写进主文/讨论）：
+- 目前结果中 yy 的 pair similarity 从 pre 到 post **下降更明显**。这类模式通常更适合解释为：学习后表征更 item-specific（分化增强），而不是简单“两个词更像/更对齐”。因此后续机制解释应优先围绕 differentiation（分化）路径组织。
+- 在宣称“条件特异分化”之前，强烈建议先做 baseline 控制：确保 baseline 的 pre→post 变化不呈现同等幅度的下降，否则可能是重测噪声或阶段性 SNR 变化导致的假象。
 
 最常见坑：
 - trial 对齐错误
@@ -833,6 +868,10 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 
 模型在回答什么：
 - `similarity ~ condition * time + (1|subject) + (1|item)`
+
+当前默认条件：
+- 默认会纳入 `Metaphor / Spatial / Baseline`
+- baseline 不再只是 summary 里的 `Sim_Baseline`，而是会真正进入 `rsa_itemwise_details.csv` 并作为 LMM 的控制条件
 
 最关键的项：
 - `condition * time` 交互
@@ -866,7 +905,7 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 
 ---
 
-### Step 5D：Model-RSA（核心四模型：M1/M2/M3/M7）+ Δρ LMM
+### Step 5D：Model-RSA（核心五模型：M1/M2/M3/M7 + M8）+ Δρ LMM
 
 涉及脚本：
 - `rsa_analysis/build_stimulus_embeddings.py`（一次性预计算 M3 词向量）
@@ -878,16 +917,32 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - 光比较 pre vs post 相似性变化还不够，还要回答"这个变化到底在匹配哪种理论模型"。
 - Model-RSA 把 neural RDM 与"理论驱动的模型 RDM"相关，检验哪些认知模型解释力最强。
 
-四个核心模型（故事骨架）：
+五个核心模型（故事骨架）：
 
 | 模型 | 构造 | 在学习前应该 | 在学习后应该 | 解释哪部分故事 |
 |---|---|---|---|---|
 | M1_condition | 三水平条件（yy/kj/baseline），同条件=0、跨条件=1 | 弱到中 | 相对稳定或略增 | 是否存在条件分类表征（基线轴） |
-| M2_pair | 同 `pair_id`=0，其余=1 | ≈0（无学习就不应该有配对结构） | **显著增强，尤其 yy 条件** | "学习配对→表征对齐"的直接证据 |
+| M2_pair | 同 `pair_id`=0，其余=1 | ≈0（无学习就不应该有配对结构） | 不预设方向：可能增强（对齐路径），也可能不增强（分化路径） | Convergence（对齐）假设的直接量化模型 |
+| M8_reverse_pair | 同 `pair_id`=1，其余=0 | ≈0（无学习就不应该有配对结构） | 不预设方向：若分化增强，可能更敏感 | Differentiation（分化）假设的直接量化模型（与 M2 互补） |
 | M3_embedding | 预训练 BERT cosine distance | 应该最主导（ROI 主要反映预存语义） | 被 M2/M7 分走部分方差 | "预存语义" vs "学习塑造"的分离 |
-| M7_memory | 被试自己的回忆评分差 `|r_i−r_j|` | ≈0 | 学得越牢的 trial 表征越对齐 | 行为记忆成绩 ↔ 表征重塑的桥梁 |
+| M7_memory | 被试自己的回忆评分差 `|r_i−r_j|` | ≈0 | 不预设方向：既可能“记得越牢越对齐”，也可能“记得越牢越分化” | 行为记忆成绩 ↔ 表征重塑的桥梁 |
 
-四模型详解（构造 → 数学 → 假设 → 文献 → 常见坑）：
+先用 5 句话记住这几个模型：
+- **M1_condition**：问的是“这个 ROI 里有没有粗粒度的条件分类结构”，它更多是一个**基线轴**，不是学习机制本身。
+- **M2_pair**：问的是“学习后同一配对是不是更趋向对齐/收敛”，它对应 **convergence** 路径。
+- **M8_reverse_pair**：问的是“学习后同一配对是不是反而更分化”，它对应 **differentiation** 路径。
+- **M3_embedding**：问的是“在没学之前，神经表征是不是主要跟随词汇的预存语义距离”，它是**语义锚点模型**。
+- **M7_memory**：问的是“记忆得更牢的项目，是否在神经表征上表现出系统性差异”，它是**行为-神经桥梁模型**。
+
+如何快速理解 “为什么必须同时看 M2 和 M8”：
+- 如果 Step 5C 发现 `yy` 的 pair similarity **上升**，更像“配对对齐/收敛”，此时优先关注 M2。
+- 如果 Step 5C 发现 `yy` 的 pair similarity **下降**，更像“表征分化增强”，此时优先关注 M8。
+- 所以 M2 和 M8 不是“一个对一个错”，而是两条竞争机制路径的两种编码方式。
+- 也正因为两者是互补编码，它们在偏相关里**不能互相作为对方控制变量**；否则 partial rho 会失去可解释性。
+
+五个核心模型详解（构造 → 数学 → 假设 → 文献 → 常见坑）：
+
+补充：M8 不是替代 M2，而是用于区分两条机制路径（convergence vs differentiation）。如果 Step 5C 显示 yy 的 pair similarity 明显下降（分化增强），优先关注 M8 的 Δρ 与偏相关结果是否在 yy 中更强。
 
 #### M1_condition（条件类别 RDM，基线解释轴）
 
@@ -901,16 +956,22 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - 常见坑：
   - 如果只跑 yy/kj 两条件，M1 退化为二分，区分力下降；强烈建议保留 baseline 作为第三水平。
   - 条件内 trial 数不均衡（40 : 40 : 20）会让 M1 的 0 值占比偏离 1/3，对 Spearman 影响可控但报告时需说明。
+  - baseline 在 M1 中的意义是“第三类控制条件”，不是学习配对本身；不要把 M1 里 baseline 的存在误解成“baseline 也被当成学习结构”。
 
 #### M2_pair（配对身份 RDM，学习塑造的直接证据）⭐
 
 - 构造思路：每对学习词（如"玩笑"-"面具"）的两个 concept word 在 M2 上距离 = 0，其余 = 1。只有学习过的配对才应该让这两个 word 在神经空间对齐。
 - 数学形式：`RDM_M2[i,j] = 0 if pair_id_i == pair_id_j (且 i != j) else 1`。
 - 在脚本中：`model_from_pair_identity(metadata, pair_col="pair_id")`；若 `pair_id` 缺失，会回退到 `pic_num`；两者都缺则抛 `ValueError`。
+- 直觉图像：
+  - 同一对词越像，M2 越容易与“低神经距离/高神经相似性”一致。
+  - 所以 M2 更适合检验“学习是否把配对词拉近了”。
 - 理论假设：
   - 前测：M2 对 neural RDM 的 ρ ≈ 0（无学习就不应出现配对结构）。**若前测 M2 显著 > 0，说明材料本身有混淆（比如配对词已有语义关联），需要在讨论中解释。**
-  - 后测：M2 显著 > 0，且 **yy > kj > baseline**（隐喻学习最能驱动配对表征对齐，基线最弱）。
-  - Δρ(M2) = ρ_post − ρ_pre 是"学习效应"的核心数值指标。
+  - 后测（两支并行，不预设方向）：
+    - Convergence 路径：M2 显著 > 0，且 **yy > kj > baseline**（隐喻学习最能驱动配对对齐）。
+    - Differentiation 路径：若 Step 5C 显示 yy 的 pair similarity 明显下降，M2 可能不升甚至接近 0；此时应使用“反向配对模型”（M8_reverse_pair）来检验“配对内分化增强”是否为主要机制。
+  - Δρ(M2) = ρ_post − ρ_pre 是学习相关变化的指标之一，但不应强行解读为“必须为正”。在分化路径下，更关键的是 M8 或其它分化型模型的 Δρ。
 - 文献依据：
   - Cardillo et al. 2012（JoCN）："novel → familiar metaphor tuning" 的表征层解释
   - Xue et al. 2010（Science）：记忆成功 ↔ 神经模式"再激活稳定性"
@@ -932,6 +993,9 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
   - 前测：M3 应该是**最主导的解释变量**——被试还没学习，ROI 编码的主要是词汇的预存分布式语义。
   - 后测：M3 的 ρ 可能**略降或持平**，部分方差被 M2/M7 分走；但不会消失，因为预存语义结构依然存在。
   - 偏相关：控制 M2/M7 后，M3 的 partial_rho 在 pre/post 都应 > 0，稳定性强的 ROI（如 L_ATL、L_AG）尤其明显。
+- 实际读结果时怎么用：
+  - 如果 M3 在 pre 很强、post 仍然存在，说明学习不是“抹掉原有语义”，而是在原有语义结构上叠加新的学习结构。
+  - 如果 M3 在 pre/post 都很弱，先不要急着讲“学习塑造”，要先排查 ROI 是否根本不编码语义结构。
 - 文献依据：
   - Bhattasali et al. 2018 / 2019：BERT-like 模型与语义 ROI 的表征相似
   - Caucheteux & King 2022 (Nature Communications)：大语言模型 embedding 预测大脑语言区激活
@@ -954,8 +1018,8 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
   - 查询：`model_from_subject_numeric(metadata, mem_table, value_col="recall_score")`，缺表的被试会被记录 `skip_reason=missing_memory_table`
 - 理论假设：
   - 前测：M7 的 ρ ≈ 0（被试还没学，记忆强度未定义；若使用 0/1 编码，前测将全部为 0 → M7 退化，此时仅在 post 报告）。
-  - 后测：M7 显著 > 0，并且**仅在学得好的被试/ROI 上明显**——这是"个体差异驱动的表征对齐"。
-  - 条件交互：yy 条件下 M7 的 Δρ 最大（新颖性最高 → 学习强度个体差异最大）。
+  - 后测（不预设方向）：M7 反映“记忆强度差异是否能解释表征结构差异”。如果主效应是对齐（convergence），可能出现“记得越牢越对齐”；如果主效应是分化（differentiation），也可能出现“记得越牢越分化”。因此更推荐用偏相关与 Δρ LMM 来判断其独立贡献与方向。
+  - 条件交互：yy 条件下 M7 的效应更可能更强（新颖性更高 → 学习强度个体差异更大），但方向需要以实际估计为准。
 - 文献依据：
   - Xue et al. 2010 (Science)：记忆成功 ↔ 神经模式"稳定性"
   - LaRocque et al. 2013：与记忆的 representational similarity
@@ -964,25 +1028,44 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
   - 每个被试记忆曲线不同（顶尖被试可能 40 对全记住，差的只记住 10 对）
   - 跨被试平均后 `|recall_i − recall_j|` 会被压缩，信号减弱
   - 因此 **M7 的 neural RDM 也必须 per-subject 计算并相关**，然后在组水平做 one-sample t
+- 直觉图像：
+  - M7 不是在问“你记没记住这对词”，而是在问“不同项目之间的记忆强弱差异，能不能解释表征结构差异”。
+  - 所以 M7 更像“项目学习强度地图”，不是简单的条件标签。
 - 常见坑：
   - 若行为数据只有 0/1（`action==3` → 1 否则 0），M7 退化为"是否记住"的二值 RDM，类似 M2 但更个体化；此时与 M2 的共线性会被 `model_collinearity.tsv` 捕获
   - 若某被试几乎全部记住或全部失败（方差 ≈ 0），M7 的 RDM 几乎全 0，Spearman 计算会退化为 NaN，代码会跳过并写 `skip_reason=memory_variance_too_low`（未来优化）
   - 被试级 N 决定 M7 的统计功效；28 人已足够，但审稿人可能问"若拿掉 top/bottom 2 个 outlier 结论是否稳定"——建议在 Supplementary 做 leave-one-out
 
-#### 四模型联合检验的核心故事线
+#### 五模型联合检验的核心故事线
 
 - 单模型 ρ 回答：每个模型**单独**能解释多少 neural RDM 方差？
-- 偏相关（`--partial-correlation`）回答：控制其他三个模型后，目标模型**独一无二**解释多少方差？这是区分"预存语义 (M3)"与"学习塑造 (M2/M7)"的关键。
+- 偏相关（`--partial-correlation`）回答：在排除高共线/互补模型干扰后，目标模型**独一无二**解释多少方差？这是区分"预存语义 (M3)"与"学习塑造 (M2/M7/M8)"的关键。
 - Δρ LMM 回答：post − pre 这个增量是否显著，且是否受 condition × model 调节？
 - 三者叠加后的"一张图讲完的故事"：
   - 前测：M3 单模型和偏相关都大，M2/M7 ≈ 0
-  - 后测：M2/M7 的 ρ 和 partial_rho 显著上升，M3 略降但仍正
-  - Δρ：M2/M7 的 Δρ > 0 显著，且 yy > kj ≈ baseline
-  - 结论：**"学习前神经表征由预存语义主导，学习后表征被配对结构和记忆强度重塑，且该重塑在隐喻条件最强"**
+  - 后测：用偏相关区分“预存语义 (M3)”与“学习塑造 (M2/M7 或分化型模型)”的独立贡献；M3 通常仍为正，但学习相关模型的贡献与方向以数据为准
+  - Δρ：不假设必为正。结合 Step 5C 的方向来解释：
+    - 若 Step 5C 显示配对更对齐（similarity 上升），重点报告 M2/M7 的正向 Δρ
+    - 若 Step 5C 显示配对更分化（similarity 下降），重点报告分化型模型（如 M8_reverse_pair）的 Δρ，并用 M3 的稳定性作为语义锚点证据
+  - 结论模板：**“学习前神经表征主要由预存语义（M3）解释；学习后出现额外的学习相关结构（可能表现为对齐或分化），且该变化在隐喻条件（yy）中最强。”**
+
+如果你只看 3 个结果表，优先级建议是：
+1. `model_rdm_subject_metrics.tsv`
+   - 看每个模型在 pre/post 的单模型 ρ，大致判断谁在前测主导、谁在后测增强。
+2. `model_rdm_partial_metrics.tsv`
+   - 看控制其他模型后，哪个模型还有“独立贡献”。
+3. `delta_rho_lmm_params.tsv`
+   - 看真正的组水平增量检验，决定“哪个模型的变化”最能支撑论文主结论。
+
+最容易误读的地方：
+- **M2 显著** 不等于 “学习一定导致了配对收敛”，因为还要结合 Step 5C 的方向、M8 的结果、以及 partial_rho 一起看。
+- **M3 仍显著** 不等于 “学习没发生”，它往往只是说明预存语义仍然是表征的底盘。
+- **M7 显著** 不等于 “记忆导致了一切”，它只能说明行为学习强度与表征结构变化存在系统联系。
 
 为什么要做多模型偏相关（`--partial-correlation`）：
 - M3 和 M2 可能共线（同配对的两个词语义也更相近）
 - 偏相关把每个模型"独一无二"的解释方差剥离出来
+- 但 **M2_pair** 与 **M8_reverse_pair** 是互补编码（近似完美负相关），两者不应互相作为对方的控制变量；当前脚本会在偏相关时自动把这对互补模型从彼此控制集中剔除，同时把完整关系保留在 `model_collinearity.tsv`
 - 输出 `model_rdm_partial_metrics.tsv`（列：subject/roi/time/model/partial_rho）和 `model_collinearity.tsv`（|ρ|>0.7 标 high）
 
 输入是什么：
@@ -1003,7 +1086,8 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 
 然后 Δρ LMM（`delta_rho_lmm.py`）回答什么：
 - 把上一步按 subject/roi/model 合并 `delta_rho = ρ_post − ρ_pre`
-- 拟合 `delta_rho ~ C(model) + (1|subject) + (1|roi)`，核心检验 "M2 / M7 的 Δρ > 0 且显著大于 M3 的 Δρ"
+- 拟合 `delta_rho ~ C(model) + (1|subject) + (1|roi)`，核心检验是“哪些模型的 Δρ 显著偏离 0、且在 ROI 间具有一致方向”；不应预设 M2/M7 必为正
+- 实现注意：脚本在 statsmodels 中用 `groups=subject` + `vc_formula={"roi": "0 + C(roi)"}` 来近似 crossed random effects（而不是把 roi 真的当作 nested）；在方法与讨论里需要如实报告这一选择
 - 若想加条件轴，先在 RSA 阶段按 condition 分别算 ρ（作为 `condition_col`），再用 `--condition-col condition`
 
 典型跑法（三层 ROI 各跑一次互不覆盖，并结合偏相关）：
@@ -1045,6 +1129,7 @@ python -m rsa_analysis.delta_rho_lmm \
                                    model_rdm_comparison.py
                                    ├─ M1_condition (yy/kj/baseline)
                                    ├─ M2_pair      (pair_id)
+                                   ├─ M8_reverse_pair (reverse pair)
                                    ├─ M3_embedding (BERT cosine)
                                    └─ M7_memory    (recall diff)
                                          │
@@ -1056,19 +1141,19 @@ python -m rsa_analysis.delta_rho_lmm \
                                    delta_rho = post − pre
                                    LMM: ~ C(model) + (1|subject) + (1|roi)
                                          ↓
-                                   Figure 5 (前测 M3 主导 → 后测 M2/M7 增强)
+                                   Figure 5 (前测 M3 主导 → 后测学习相关模型变化，方向由 M2/M8/M7 共同决定)
 ```
 
 常见坑：
 - metadata 里 `word_label` 列缺失会让 M3/M7 静默跳过（结果表里 `skip_reason=missing_*`）——一定要用 `stack_patterns.py` 生成含 `word_label` 的 metadata
 - 若仅跑 `--conditions yy kj`（不含 baseline），M1 其实只区分两类，解释力会被削弱
-- `--partial-correlation` 开启前先看 `model_collinearity.tsv`，|ρ|>0.9 的两个模型不应同时进入偏相关回归
+- `--partial-correlation` 开启前先看 `model_collinearity.tsv`，|ρ|>0.9 的两个模型不应同时进入偏相关回归；尤其 `M2_pair` 与 `M8_reverse_pair` 会呈近似完美负相关
 - Δρ LMM 要求 pre/post 都存在，某 subject/roi/model 缺一边会被剔除
 
 最小 QC：
 - `model_rdm_subject_metrics.tsv` 中 `skip_reason=""` 的行占主体
 - `model_collinearity.tsv` 没有大面积 `flag=high`
-- `delta_rho_lmm_model.json` 的 `n_obs` 接近 `n_subjects × n_rois × 4 models × 2 times`
+- `delta_rho_lmm_model.json` 的 `n_obs` 接近 `n_subjects × n_rois × 5 models × 2 times`（默认主线包含 `M1/M2/M3/M7/M8`）
 
 ---
 
@@ -1162,6 +1247,7 @@ python -m rsa_analysis.delta_rho_lmm \
 ### Step 7：脑-行为关联
 
 涉及脚本：
+- `rsa_analysis/brain_behavior_correlation.py`
 - `brain_behavior/brain_behavior_correlation.py`
 
 这步回答什么问题：
@@ -1171,8 +1257,19 @@ python -m rsa_analysis.delta_rho_lmm \
 - 如果神经指标和行为没有任何关系，论文故事会停留在“平行现象”
 - 有关联时，你可以说不同层次证据彼此支持
 
+主线推荐脚本（ROI 级相关）：
+- `rsa_analysis/brain_behavior_correlation.py`
+- 直接读取 `rsa_itemwise_details.csv`，先算每个 ROI、每个被试的 `Δ similarity = post - pre`
+- 再与 Run-7 行为（例如 `accuracy_yy_run7`）做相关/偏相关
+- 更适合当前主文主线，因为它直接对应 “表征变化是否预测行为收益”
+
+通用汇总脚本（多指标拼表）：
+- `brain_behavior/brain_behavior_correlation.py`
+- 适合把多个 `subject-level` 指标文件先合并，再做 Pearson / Spearman 相关矩阵
+- 更适合补充材料、探索分析或中介分析前的数据整理
+
 输入是什么：
-- 若干 `subject-level` 指标文件
+- 若干 `subject-level` 指标文件，或 `rsa_itemwise_details.csv + behavior.tsv`
 - 每个输入文件必须有 `subject` 列
 
 比较理想的输入例子：
@@ -1182,13 +1279,17 @@ python -m rsa_analysis.delta_rho_lmm \
 - MVPA 准确率表
 
 脚本会做什么：
-- 先把各表按 `subject` 合并
-- 对所有数值列做两两 Pearson 和 Spearman 相关
+- 主线版：先从 RSA item-wise 表构造每个 ROI 的 subject-level `Δ similarity`，再与行为做 ROI 级相关/偏相关
+- 汇总版：先把各表按 `subject` 合并，再对所有数值列做两两 Pearson 和 Spearman 相关
 
 输出是什么：
-- `brain_behavior_merged.tsv`
-- `brain_behavior_correlations.tsv`
-- `brain_behavior_summary.json`
+- 主线版：
+  - `brain_behavior_correlation.tsv`
+  - `brain_behavior_scatter.png`
+- 汇总版：
+  - `brain_behavior_merged.tsv`
+  - `brain_behavior_correlations.tsv`
+  - `brain_behavior_summary.json`
 
 结果怎么读：
 - 先看哪组神经指标与行为指标相关
@@ -1204,6 +1305,7 @@ python -m rsa_analysis.delta_rho_lmm \
 最小 QC：
 - 合并后被试数是否和预期接近
 - 相关结果里 `n` 是否足够
+- 若主线版用偏相关，检查协变量列是否缺失过多
 - 重要结论最好同时看 Pearson 和 Spearman 是否一致
 
 ---
@@ -1494,4 +1596,4 @@ GLM 层最重要：
 
 如果你能用一句话复述整条主线，说明你已经真正理解了这套分析：
 
-**先用行为确认学到了东西，用学习期 GLM 定位相关脑区，用前后测 RSA 证明表征关系发生重组，再用 RD/GPS 补充描述几何变化，最后用脑-行为关联把神经变化和行为收益连起来。**
+**先用行为确认学到了东西，用学习期 GLM 定位相关脑区，用前后测 RSA 证明表征关系发生重组，再用 Model-RSA 解释这种变化更接近哪条机制路径，随后用脑-行为关联把神经变化和行为收益连起来；RD/GPS 作为几何层面的互补证据。**

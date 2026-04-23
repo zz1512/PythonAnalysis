@@ -29,6 +29,7 @@ from __future__ import annotations
 
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -51,7 +52,7 @@ from common.final_utils import ensure_dir, read_table, write_table
 from common.pattern_metrics import concat_images
 
 
-PYTHON_METAPHOR_ROOT = Path(r"E:\python_metaphor")
+PYTHON_METAPHOR_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", r"E:\python_metaphor"))
 DEFAULT_METADATA_PATH = PYTHON_METAPHOR_ROOT / "lss_betas_final" / "lss_metadata_index_final.csv"
 DEFAULT_OUTPUT_ROOT = PYTHON_METAPHOR_ROOT / "pattern_root"
 
@@ -148,6 +149,15 @@ def normalize_metadata(frame: pd.DataFrame, metadata_path: Path) -> pd.DataFrame
     for source, target in rename_candidates.items():
         if source in frame.columns and target not in frame.columns:
             frame[target] = frame[source]
+    if "phase" not in frame.columns and "run" in frame.columns:
+        run_to_phase = {
+            1: "pre", 2: "pre",
+            3: "learn", 4: "learn",
+            5: "post", 6: "post",
+        }
+        inferred = pd.to_numeric(frame["run"], errors="coerce").map(run_to_phase)
+        if inferred.notna().all():
+            frame["phase"] = inferred
     required = {"subject", "run", "condition", "phase", "beta_path"}
     missing = required - set(frame.columns)
     if missing:
@@ -166,6 +176,76 @@ def normalize_metadata(frame: pd.DataFrame, metadata_path: Path) -> pd.DataFrame
     return frame
 
 
+def augment_with_stimuli_template(frame: pd.DataFrame, stimuli_template: Path | None) -> pd.DataFrame:
+    """
+    Ensure trial metadata contains `word_label` and `pair_id`.
+
+    Rationale:
+    - M3 (embedding) and M7 (memory) require `word_label`.
+    - M2 (pair identity) should use an explicit `pair_id` instead of falling back to `pic_num`.
+    """
+    out = frame.copy()
+
+    # Fast path: already present.
+    if "word_label" in out.columns and "pair_id" in out.columns:
+        return out
+
+    template_df: pd.DataFrame | None = None
+    if stimuli_template is not None and Path(stimuli_template).exists():
+        try:
+            template_df = read_table(Path(stimuli_template))
+        except Exception:
+            template_df = None
+
+    if template_df is not None and not template_df.empty:
+        # Normalize common string columns.
+        for col in ["unique_label", "word_label", "condition", "type"]:
+            if col in template_df.columns:
+                template_df[col] = template_df[col].astype(str).str.strip()
+
+        join_key = None
+        for key in ["unique_label", "pic_num"]:
+            if key in out.columns and key in template_df.columns:
+                join_key = key
+                break
+
+        if join_key is not None:
+            cols = [join_key]
+            if "word_label" in template_df.columns:
+                cols.append("word_label")
+            if "pair_id" in template_df.columns:
+                cols.append("pair_id")
+            tpl = template_df[cols].drop_duplicates(subset=[join_key], keep="first")
+            out = out.merge(tpl, on=join_key, how="left", suffixes=("", "_tpl"))
+
+    # Fallbacks (still make the pipeline usable even when template is missing).
+    if "word_label" not in out.columns:
+        if "unique_label" in out.columns:
+            out["word_label"] = out["unique_label"].astype(str).str.strip()
+        else:
+            raise ValueError("Cannot derive `word_label`: missing both `word_label` and `unique_label`.")
+    else:
+        out["word_label"] = out["word_label"].astype(str).str.strip()
+
+    if "pair_id" not in out.columns:
+        # Use pic_num as best-effort pair identifier; baseline is forced unique to avoid fake pairing.
+        if "pic_num" in out.columns:
+            out["pair_id"] = out["pic_num"].astype(str)
+        elif "unique_label" in out.columns:
+            out["pair_id"] = out["unique_label"].astype(str)
+        else:
+            out["pair_id"] = out["trial_id"].astype(str)
+
+    baseline_mask = out["condition"].astype(str).eq("baseline")
+    if baseline_mask.any():
+        # Make baseline items unique so M2 does not impose pairing structure on baseline.
+        out.loc[baseline_mask, "pair_id"] = (
+            "baseline_" + out.loc[baseline_mask, "word_label"].astype(str)
+        )
+
+    return out
+
+
 def stack_subject(frame: pd.DataFrame, output_dir: Path, exclude_conditions: set[str]) -> None:
     output_dir = ensure_dir(output_dir)
     for (phase, condition), cell in frame.groupby(["phase", "condition"]):
@@ -176,6 +256,19 @@ def stack_subject(frame: pd.DataFrame, output_dir: Path, exclude_conditions: set
         output_image = output_dir / f"{phase}_{condition}.nii.gz"
         output_meta = output_dir / f"{phase}_{condition}_metadata.tsv"
         concat_images(cell["beta_path"].tolist(), output_image)
+        # Hard assertion: 4D volume count must match metadata rows.
+        try:
+            import nibabel as nib  # type: ignore
+            img = nib.load(str(output_image))
+            n_vols = int(img.shape[3]) if len(img.shape) >= 4 else int(img.shape[-1])
+            if n_vols != len(cell):
+                raise AssertionError(
+                    f"Stacked image/metadata mismatch at {output_image}: "
+                    f"n_vols={n_vols} vs meta_rows={len(cell)}"
+                )
+        except ImportError:
+            # nibabel is expected in the analysis environment; warn loudly if missing.
+            raise RuntimeError("nibabel is required to validate stacked 4D outputs.")
         write_table(cell.reset_index(drop=True), output_meta)
 
 
@@ -201,12 +294,29 @@ def main() -> None:
         default=["fake"],
         help="Condition labels to exclude from stacking (default: fake).",
     )
+    parser.add_argument(
+        "--stimuli-template",
+        type=Path,
+        default=None,
+        help="Optional stimuli template (csv/tsv) to add word_label/pair_id into *_metadata.tsv. "
+             "Defaults to rsa_analysis.rsa_config.STIMULI_TEMPLATE when available.",
+    )
     args = parser.parse_args()
 
     if not args.metadata_path.exists():
         raise FileNotFoundError(f"Metadata file not found: {args.metadata_path}")
 
     metadata = normalize_metadata(read_table(args.metadata_path), args.metadata_path)
+
+    stimuli_template = args.stimuli_template
+    if stimuli_template is None:
+        try:
+            from rsa_analysis.rsa_config import STIMULI_TEMPLATE  # type: ignore
+            stimuli_template = Path(STIMULI_TEMPLATE)
+        except Exception:
+            stimuli_template = None
+    metadata = augment_with_stimuli_template(metadata, stimuli_template)
+
     exclude_conditions = {str(item).strip().lower() for item in args.exclude_conditions if str(item).strip()}
     for subject, subject_frame in metadata.groupby("subject"):
         stack_subject(

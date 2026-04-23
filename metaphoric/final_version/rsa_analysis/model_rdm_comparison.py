@@ -4,9 +4,10 @@ model_rdm_comparison.py
 用途
 - 模型 RDM 比较（Model RSA）：把神经 RDM 与若干"理论/行为模型 RDM"做相关，
   检验哪些模型最能解释表征结构。
-- 升级后支持四大核心模型：
+- 升级后支持五大核心模型：
   - M1: 条件类别（多水平，默认 yy/kj/baseline）
   - M2: 配对身份（同 pair_id=0，其余=1）
+  - M8: 反向配对身份（同 pair_id=1，其余=0；分化探针）
   - M3: 预训练语义（来自 BERT/word2vec 的 cosine distance；通过外部 embedding 表接入）
   - M7: 被试回忆强度（per-subject |recall_i - recall_j|）
 - 同时保留 numeric 模型（novelty/familiarity 等连续变量的差的绝对值）。
@@ -80,6 +81,24 @@ def model_from_pair_identity(metadata: pd.DataFrame, pair_col: str = "pair_id") 
         raise ValueError("M2 requires pair_id or pic_num column in metadata.")
     values = metadata[col].astype(str).to_numpy()
     matrix = (values[:, None] != values[None, :]).astype(float)
+    return matrix[np.triu_indices_from(matrix, k=1)]
+
+
+def model_from_reverse_pair_identity(metadata: pd.DataFrame, pair_col: str = "pair_id") -> np.ndarray:
+    """
+    M8: 反向配对身份（分化探针）。
+
+    - 同 pair_id=1，非同 pair_id=0
+    - 直觉：若学习后同 pair 的神经距离更大（更分化），则该模型与神经 RDM 的相关可能上升。
+    """
+    col = pair_col if pair_col in metadata.columns else None
+    if col is None and "pic_num" in metadata.columns:
+        col = "pic_num"
+    if col is None:
+        raise ValueError("M8 requires pair_id or pic_num column in metadata.")
+    values = metadata[col].astype(str).to_numpy()
+    matrix = (values[:, None] == values[None, :]).astype(float)
+    np.fill_diagonal(matrix, 0.0)
     return matrix[np.triu_indices_from(matrix, k=1)]
 
 
@@ -200,6 +219,27 @@ def _build_collinearity_report(model_vectors: dict[str, np.ndarray],
     return pd.DataFrame(rows)
 
 
+def _partial_control_names(names: list[str], target_name: str) -> tuple[list[str], list[str]]:
+    """
+    Exclude perfectly complementary model pairs from the same partial-correlation control set.
+
+    M2_pair and M8_reverse_pair are exact complements after vectorization:
+    including one as the other's control makes the residualization step rank-deficient
+    and the resulting partial rho non-interpretable.
+    """
+    controls = [name for name in names if name != target_name]
+    excluded = []
+    complementary = {
+        "M2_pair": "M8_reverse_pair",
+        "M8_reverse_pair": "M2_pair",
+    }
+    counterpart = complementary.get(target_name)
+    if counterpart in controls:
+        controls.remove(counterpart)
+        excluded.append(counterpart)
+    return controls, excluded
+
+
 # ---------- 主流程 ----------
 
 
@@ -223,7 +263,9 @@ def _default_output_dir() -> Path:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare neural RDMs with candidate model RDMs (M1/M2/M3/M7).")
+    parser = argparse.ArgumentParser(
+        description="Compare neural RDMs with candidate model RDMs (M1/M2/M3/M7/M8)."
+    )
     parser.add_argument("pattern_root", type=Path)
     parser.add_argument("roi_dir", type=Path)
     parser.add_argument("output_dir", type=Path, nargs="?", default=None,
@@ -241,8 +283,12 @@ def main() -> None:
     parser.add_argument("--memory-score-col", default="recall_score")
     parser.add_argument("--numeric-model-cols", nargs="*", default=[])
     parser.add_argument("--enabled-models", nargs="*",
-                        default=["M1_condition", "M2_pair", "M3_embedding", "M7_memory"],
-                        help="Subset of models to include: M1_condition M2_pair M3_embedding M7_memory")
+                        default=["M1_condition", "M2_pair", "M3_embedding", "M7_memory", "M8_reverse_pair"],
+                        help="Subset of models to include: "
+                             "M1_condition M2_pair M3_embedding M7_memory M8_reverse_pair")
+    # Alias: some docs may refer to `--models`
+    parser.add_argument("--models", dest="enabled_models", nargs="*",
+                        help="Alias of --enabled-models.")
     parser.add_argument("--partial-correlation", action="store_true",
                         help="Compute partial Spearman correlations between each model and neural RDM.")
     parser.add_argument("--collinearity-threshold", type=float, default=0.7)
@@ -287,8 +333,25 @@ def main() -> None:
                         "skip_reason": "fewer_than_two_conditions_available",
                     })
                     continue
-                samples = np.vstack([load_masked_samples(p, roi_path) for _, p in image_paths])
-                metadata = pd.concat(meta_frames, ignore_index=True)
+                sample_blocks = []
+                checked_meta_frames = []
+                for (cond, img_path), meta in zip(image_paths, meta_frames):
+                    block = load_masked_samples(img_path, roi_path)
+                    if block.shape[0] != len(meta):
+                        raise AssertionError(
+                            f"samples/metadata row mismatch for {subject} {roi_name} {time} {cond}: "
+                            f"samples={block.shape[0]} vs meta_rows={len(meta)} "
+                            f"(check stack_patterns.py ordering and *_metadata.tsv)."
+                        )
+                    sample_blocks.append(block)
+                    checked_meta_frames.append(meta.reset_index(drop=True))
+                samples = np.vstack(sample_blocks)
+                metadata = pd.concat(checked_meta_frames, ignore_index=True)
+                if samples.shape[0] != len(metadata):
+                    raise AssertionError(
+                        f"stacked samples/metadata mismatch for {subject} {roi_name} {time}: "
+                        f"samples={samples.shape[0]} vs meta_rows={len(metadata)}."
+                    )
                 neural = neural_rdm_vector(samples, metric="correlation")
 
                 model_vectors: dict[str, np.ndarray] = {}
@@ -301,14 +364,19 @@ def main() -> None:
                         model_skip["M1_condition"] = f"error: {exc}"
 
                 if "M2_pair" in args.enabled_models:
-                    try:
-                        model_vectors["M2_pair"] = model_from_pair_identity(metadata, args.pair_id_col)
-                    except Exception as exc:
-                        model_skip["M2_pair"] = f"error: {exc}"
+                    if args.pair_id_col not in metadata.columns and "pic_num" not in metadata.columns:
+                        model_skip["M2_pair"] = "missing_pair_id"
+                    else:
+                        try:
+                            model_vectors["M2_pair"] = model_from_pair_identity(metadata, args.pair_id_col)
+                        except Exception as exc:
+                            model_skip["M2_pair"] = f"error: {exc}"
 
                 if "M3_embedding" in args.enabled_models:
                     if embedding_table is None:
                         model_skip["M3_embedding"] = "missing_embedding_file"
+                    elif args.word_col not in metadata.columns:
+                        model_skip["M3_embedding"] = "missing_word_label"
                     else:
                         try:
                             model_vectors["M3_embedding"] = model_from_embedding(
@@ -321,6 +389,8 @@ def main() -> None:
                     mem_table = _load_memory_table(args.memory_strength_dir, subject)
                     if mem_table is None:
                         model_skip["M7_memory"] = "missing_memory_table"
+                    elif args.word_col not in metadata.columns:
+                        model_skip["M7_memory"] = "missing_word_label"
                     else:
                         try:
                             model_vectors["M7_memory"] = model_from_subject_numeric(
@@ -328,6 +398,17 @@ def main() -> None:
                             )
                         except Exception as exc:
                             model_skip["M7_memory"] = f"error: {exc}"
+
+                if "M8_reverse_pair" in args.enabled_models:
+                    if args.pair_id_col not in metadata.columns and "pic_num" not in metadata.columns:
+                        model_skip["M8_reverse_pair"] = "missing_pair_id"
+                    else:
+                        try:
+                            model_vectors["M8_reverse_pair"] = model_from_reverse_pair_identity(
+                                metadata, args.pair_id_col
+                            )
+                        except Exception as exc:
+                            model_skip["M8_reverse_pair"] = f"error: {exc}"
 
                 for col in args.numeric_model_cols:
                     if col in metadata.columns:
@@ -358,13 +439,15 @@ def main() -> None:
                 if args.partial_correlation and len(model_vectors) >= 2:
                     names = list(model_vectors.keys())
                     for name in names:
-                        controls = [model_vectors[other] for other in names if other != name]
+                        control_names, excluded_controls = _partial_control_names(names, name)
+                        controls = [model_vectors[other] for other in control_names]
                         rho, pvalue, n_pairs = _partial_spearman(neural, model_vectors[name], controls)
                         partial_rows.append({
                             "subject": subject, "roi": roi_name, "time": time,
                             "model": name, "partial_rho": rho, "p_value": pvalue,
                             "n_pairs": n_pairs,
-                            "controls": ",".join(n for n in names if n != name),
+                            "controls": ",".join(control_names),
+                            "excluded_controls": ",".join(excluded_controls),
                         })
                     collinearity_snapshots.append(
                         _build_collinearity_report(model_vectors, args.collinearity_threshold)
