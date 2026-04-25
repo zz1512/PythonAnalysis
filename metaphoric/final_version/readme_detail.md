@@ -812,7 +812,9 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - `Metaphor` 对应模板里的 `yyw/yyew`
 - `Spatial` 对应模板里的 `kjw/kjew`
 - `Baseline` 对应模板里的 `jx`
-- **baseline 不是成对学习材料**，因此脚本不会把 baseline 当成 `pair_id`=2 个词一组来处理；它会改用 baseline 条件内部所有非对角 trial-pair 的相似度作为控制分布
+- **baseline 不是成对学习材料**：在当前主线实现里，为了让 baseline 的 item-wise 指标与 `yy/kj` 口径一致，
+  baseline 使用 `stimuli_template.csv` 中预先定义的“伪配对”（同一个 `pair_id` 下恰好两行）来提取相似度。
+  这使得 baseline 可以作为“非学习条件下的稳定性/重测控制”，但不把 baseline 解释为存在真实学习配对结构。
 
 为什么要“按模板顺序取文件”：
 - 因为相似度矩阵里第 1 行第 1 列必须始终对应同一个刺激位置
@@ -832,7 +834,7 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 `rsa_itemwise_details.csv`
 - 最重要
 - 每行可以理解成“某个被试、某个 ROI、某个时间点、某个条件、某个 item pair 的相似度”
-- 对 `Metaphor/Spatial`，这里的 item pair 是学习配对；对 `Baseline(jx)`，这里的 item pair 是 baseline 内部任意两两 trial 组合
+- 对 `Metaphor/Spatial`，这里的 item pair 是学习配对；对 `Baseline(jx)`，这里的 item pair 是模板中定义的固定伪配对（pair_id 两行成对）
 - 这是 LMM 的输入
 
 `rsa_summary_stats.csv`

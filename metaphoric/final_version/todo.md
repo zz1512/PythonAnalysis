@@ -169,18 +169,41 @@
 
 ## 8. 操作层 TODO
 
-- [ ] 把当前第 4 节结果故事固定为：行为优势 + RSA 分化增强并不矛盾，主解释为 differentiation / reorganization。
-- [ ] 单独整理“空间相关 ROI”文献清单，至少覆盖 PPA、RSC/precuneus、OPA、hippocampus。
-- [ ] 新建 `literature_spatial` ROI 集，不混入当前 `literature`。
-- [ ] 先用现有 atlas/main spatial candidate ROI 做一版 pilot，快速看 `kj` 的 pre/post 方向。
-- [ ] 再用 literature-based spatial ROI 正式重跑 `run_rsa_optimized.py`。
-- [ ] 对新 ROI 集运行 `rsa_lmm.py`，重点检查 `Spatial × Pre` 是否显著。
-- [ ] 如果 `kj` 在空间 ROI 中显著，再把这部分作为主文 SI 或机制补充。
-- [ ] 如果 `kj` 仍不显著，则把它作为支持“隐喻学习更强地重塑表征”的关键控制结果。
+本节改为“按优先级排序的可执行清单”，避免 TODO 混在长叙事里难以执行。
+
+### P0（核心阻断项：不做会影响主结论可信度/机制分析无法落地）
+
+- [ ] 记录并写清“反驳头动/SNR/测量变差”的最小证据包（用于主文或 SI）：
+  - 提取每位被试 pre/post 的 motion/QC 指标（例如 mean FD、DVARS 或 motion_outlier 比例、scrub 后保留比例）。
+  - 检验 `Δsimilarity(yy)` 是否被这些 QC 指标解释（相关/回归控制）；并同时报告 `kj` 与 `baseline` 的对应结果作参照。
+  - 做至少一个 reliability 检验：pre 用 run1 vs run2、post 用 run5 vs run6 的 split-half / run-wise 稳定性，排除“post 更不可靠导致 yy similarity 下降”的替代解释。
+- [ ] 解决“真实词条映射缺失导致 Model-RSA 的 word_label 当前不可用”的核心问题：
+  - 找到真实词条对应的文件/表（word_id -> real_word 或 unique_label -> real_word）。
+  - 统一落地到一个可追溯的输入（推荐：更新/新增 `stimuli_template.csv` 列，或新增一张 `stimuli_word_mapping.tsv` 并在文档里写清优先级）。
+  - 更新文档：明确当前 `word_label` 字段到底是 unique_label 还是真实词条，避免 M3/M7 的概念错位。
+  - 跑通 Model-RSA 的最小链路：`build_stimulus_embeddings.py`（M3）与 `build_memory_strength_table.py`（M7）都基于“真实词条”一致取值。
+- [x] baseline 口径锁死为“模板固定伪配对（pair_id 两行成对）”，并保持文档与实现一致（`readme_detail.md` 已更新）。
+
+### P1（主线增强项：提升顶刊抗审稿能力/封堵替代解释）
+
+- [ ] 把当前主故事写作口径固定为：行为优势 + `yy` pre→post similarity 更明显下降并不矛盾，主解释为 differentiation / reorganization（避免写成“学习失败所以没收敛”）。
+- [ ] 做 trial 数/体素数稳健性（建议放 SI，但最好能一键复现）：
+  - 对 yy/kj/baseline 做等量重采样（或在分析中控制每条件 trial 数差异），验证主效应方向稳定。
+  - 检查 `n_voxels` 在 pre/post 的变化是否系统偏向某条件/某 ROI；必要时作为敏感性分析报告。
+- [ ] 单独整理“空间相关 ROI”文献清单（至少覆盖 PPA、RSC/precuneus、OPA、hippocampus），用于新 ROI 集的可辩护性。
+- [ ] 新建 `literature_spatial` ROI 集（独立成套，不混入当前 `literature`），用于检验 `kj` 是否在经典空间网络中出现更明显的学习后变化。
+- [ ] 先用现有 atlas/main 的 spatial candidate ROI 做 pilot（快速判断 `kj` 是否在更空间导向 ROI 中开始出现稳定 pre/post 变化），再决定是否扩展完整 literature_spatial。
+- [ ] 对新 ROI 集运行 `run_rsa_optimized.py` + `rsa_lmm.py`，重点看 `Spatial × Pre` 是否显著；把结果按你在本文件 7.3 的 A/B/C 三种情形写成可直接放论文的结论句模板。
+
+### P2（扩展/加分项：主线稳定后再做）
+
+- [ ] 学习阶段 dynamics：窗口化 RD/GPS（必要时加 MVPA），回答“分化增强何时形成”（更适合冲 NN/Neuron）。
+- [ ] gPPI / effective connectivity / mediation：只在主线稳定且理论路径清晰后做，作为机制补充（明确探索性声明与多重比较策略）。
 
 ## 9. 我下一步最推荐先做什么
 
 - 第一优先：先确定一版最小可跑的“空间 ROI 候选集”。
+- 推荐从下面 4 个开始做 pilot：
 - 推荐从下面 4 个开始做 pilot：
   - posterior parahippocampal
   - bilateral precuneus
@@ -188,3 +211,9 @@
   - posterior fusiform
 - 如果 pilot 已经看到 `kj` 明显下降，再去扩展更完整的 literature spatial ROI 集。
 - 如果 pilot 没看到，再决定是否需要加入 hippocampus / retrosplenial 等更专门的 ROI。
+
+## 10. 执行顺序（建议）
+
+1. 先做 P0 的 motion/QC + reliability：把“测量变差”的替代解释尽早封堵，否则后续所有机制解释都会被质疑。
+2. 再补齐真实词条映射：让 Model-RSA 的 M3/M7 具备语义有效性与可复现性。
+3. 然后推进 P1 的 literature_spatial：决定 `kj` 的弱效应是“ROI没击中”还是“机制上确实更弱”。
