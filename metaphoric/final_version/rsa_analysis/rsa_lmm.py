@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from pathlib import Path
 import sys
 
@@ -46,6 +47,7 @@ if str(RSA_ROOT) not in sys.path:
     sys.path.append(str(RSA_ROOT))
 
 from common.final_utils import ensure_dir, read_table, save_json, write_table
+from common.roi_library import sanitize_roi_tag
 import rsa_config as cfg
 
 
@@ -81,6 +83,60 @@ def attach_roi_metadata(frame: pd.DataFrame) -> pd.DataFrame:
     if "roi_name" in merged.columns:
         merged = merged.drop(columns=["roi_name"])
     return merged
+
+
+def _default_input_candidates() -> list[Path]:
+    roi_tag = sanitize_roi_tag(getattr(cfg, "ROI_SET", ""))
+    candidates = [
+        Path(cfg.OUTPUT_DIR) / "rsa_itemwise_details.csv",
+        Path(cfg.BASE_DIR) / f"rsa_results_optimized_{roi_tag}" / "rsa_itemwise_details.csv",
+        Path(cfg.BASE_DIR) / "rsa_results_optimized" / "rsa_itemwise_details.csv",
+    ]
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve()) if candidate.exists() else str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _default_input_path() -> Path:
+    candidates = _default_input_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _resolve_input_path(input_arg: Path | None) -> Path:
+    if input_arg is None:
+        return _default_input_path()
+    if input_arg.is_dir():
+        return input_arg / "rsa_itemwise_details.csv"
+    return input_arg
+
+
+def _infer_roi_tag_from_input(input_path: Path) -> str:
+    parent_name = input_path.parent.name.strip()
+    prefix = "rsa_results_optimized_"
+    if parent_name.startswith(prefix):
+        suffix = parent_name[len(prefix):].strip()
+        if suffix:
+            return sanitize_roi_tag(suffix)
+    return sanitize_roi_tag(getattr(cfg, "ROI_SET", ""))
+
+
+def _resolve_output_dir(output_arg: Path | None, *, input_path: Path) -> Path:
+    if output_arg is not None:
+        return output_arg
+    override = os.environ.get("METAPHOR_RSA_LMM_OUT_DIR", "").strip()
+    if override:
+        return Path(override)
+    roi_tag = _infer_roi_tag_from_input(input_path)
+    return input_path.parent / f"lmm_{roi_tag}"
 
 
 def fit_model(frame: pd.DataFrame, *, formula: str):
@@ -196,21 +252,20 @@ def run_models_by_group(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mixed-effects models for item-wise RSA results.")
-    default_input = cfg.OUTPUT_DIR / "rsa_itemwise_details.csv"
-    default_output = cfg.OUTPUT_DIR / f"lmm_{cfg.ROI_SET}"
     parser.add_argument(
         "input_path",
         nargs="?",
         type=Path,
-        default=default_input,
-        help=f"Item-wise RSA table (default: {default_input}).",
+        default=None,
+        help="Item-wise RSA table or RSA result directory. If omitted, the script auto-detects the current "
+             "ROI-set result under E:/python_metaphor.",
     )
     parser.add_argument(
         "output_dir",
         nargs="?",
         type=Path,
-        default=default_output,
-        help=f"Output directory (default: {default_output}).",
+        default=None,
+        help="Optional output directory. If omitted, writes to <input_dir>/lmm_<roi_set>.",
     )
     parser.add_argument(
         "--allow-pooled",
@@ -231,11 +286,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.input_path.exists():
-        raise FileNotFoundError(f"RSA item-wise input not found: {args.input_path}")
+    input_path = _resolve_input_path(args.input_path)
+    if not input_path.exists():
+        tried = "\n".join(f"- {path}" for path in _default_input_candidates())
+        raise FileNotFoundError(
+            "RSA item-wise input not found.\n"
+            f"Resolved path: {input_path}\n"
+            "Auto-detect candidates were:\n"
+            f"{tried}"
+        )
 
-    output_dir = ensure_dir(args.output_dir)
-    frame = attach_roi_metadata(read_table(args.input_path))
+    output_dir = ensure_dir(_resolve_output_dir(args.output_dir, input_path=input_path))
+    frame = attach_roi_metadata(read_table(input_path))
     if args.conditions:
         allowed = {str(item) for item in args.conditions}
         frame = frame[frame["condition"].astype(str).isin(allowed)].copy()
@@ -290,7 +352,7 @@ def main() -> None:
 
     save_json(
         {
-            "input_path": str(args.input_path),
+            "input_path": str(input_path),
             "output_dir": str(output_dir),
             "roi_set": getattr(cfg, "ROI_SET", ""),
             "n_rows": int(len(frame)),

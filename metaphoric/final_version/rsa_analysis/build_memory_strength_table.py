@@ -46,6 +46,7 @@ if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
 from common.final_utils import ensure_dir, write_table  # noqa: E402
+from common.stimulus_text_mapping import attach_real_word_columns  # noqa: E402
 
 
 def default_events_root() -> Path:
@@ -83,10 +84,18 @@ def process_subject(events_path: Path, subject: str, score_col: str | None,
         "word_label": frame[word_col].astype(str).str.strip(),
         "recall_score": recall.astype(float),
     })
+    out = attach_real_word_columns(out, column_map={"word_label": "real_word"})
     out = out.dropna(subset=["word_label"])
     out = out[out["word_label"].ne("")]
-    out = (out.groupby("word_label", as_index=False)
-              .agg(recall_score=("recall_score", "mean")))
+    group_col = "real_word" if "real_word" in out.columns and out["real_word"].notna().any() else "word_label"
+    aggregations = {"recall_score": ("recall_score", "mean")}
+    if group_col == "real_word":
+        aggregations["word_label"] = ("word_label", "first")
+    out = out.groupby(group_col, as_index=False).agg(**aggregations)
+    if group_col == "real_word":
+        out = out[["word_label", "real_word", "recall_score"]]
+    else:
+        out = out[["word_label", "recall_score"]]
     out_path = output_dir / f"memory_strength_{subject}.tsv"
     write_table(out, out_path)
     return {
@@ -105,7 +114,7 @@ def main() -> None:
                         help="Defaults to {BASE_DIR}/memory_strength.")
     parser.add_argument("--score-col", default=None,
                         help="Optional column name with 1-7 recall ratings.")
-    parser.add_argument("--word-cols", nargs="+", default=["word_label", "ciyu", "word5_word"],
+    parser.add_argument("--word-cols", nargs="+", default=["real_word", "word_label", "pic_out", "ciyu", "word5_word"],
                         help="Candidate word-label columns (first match wins).")
     parser.add_argument("--subject-range", nargs=2, type=int, default=[1, 28])
     args = parser.parse_args()

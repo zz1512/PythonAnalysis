@@ -19,9 +19,11 @@ import os
 from pathlib import Path
 import sys
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from figure_utils import abbreviate_roi_name, add_panel_label, apply_publication_rcparams, save_png_pdf
 
 def _final_root() -> Path:
     current = Path(__file__).resolve()
@@ -170,26 +172,72 @@ def main() -> None:
         raise ValueError("Provide either --activation-table or --tmap + --roi-dir")
 
     merged = delta.merge(activation, on="roi", how="left")
+    merged["roi_label"] = merged["roi"].map(abbreviate_roi_name)
+    merged["reorg_strength_yy"] = -pd.to_numeric(merged["delta_similarity_yy"], errors="coerce")
+    act_mean = merged["activation_metric"].mean()
+    act_std = merged["activation_metric"].std(ddof=0)
+    reo_mean = merged["reorg_strength_yy"].mean()
+    reo_std = merged["reorg_strength_yy"].std(ddof=0)
+    merged["activation_z"] = (merged["activation_metric"] - act_mean) / act_std if act_std else 0.0
+    merged["reorg_strength_z"] = (merged["reorg_strength_yy"] - reo_mean) / reo_std if reo_std else 0.0
     table_path = out_dir / "table_activation_representation_dissociation.tsv"
     _write_tsv(merged, table_path)
 
-    # Plot
-    import matplotlib.pyplot as plt
-
     fig_path = out_dir / "fig_activation_representation_dissociation.png"
-    plt.figure(figsize=(7.0, 5.0))
-    plt.scatter(merged["activation_metric"], merged["delta_similarity_yy"], alpha=0.8, label="yy (post-pre)")
-    plt.axhline(0, color="gray", linewidth=1)
-    plt.xlabel("Activation metric (mean t in ROI)")
-    plt.ylabel("Delta similarity (post - pre)")
-    plt.title("Activation vs Representation (yy)")
-    # Annotate ROI names lightly.
-    for _, row in merged.dropna(subset=["activation_metric", "delta_similarity_yy"]).iterrows():
-        plt.text(float(row["activation_metric"]), float(row["delta_similarity_yy"]), str(row["roi"]),
-                 fontsize=7, alpha=0.7)
-    plt.tight_layout()
-    plt.savefig(fig_path, dpi=200)
-    plt.close()
+    apply_publication_rcparams()
+    plot_frame = (
+        merged.dropna(subset=["activation_z", "reorg_strength_z"])
+        .sort_values("reorg_strength_z", ascending=True)
+        .reset_index(drop=True)
+    )
+
+    fig, ax = plt.subplots(figsize=(8.6, 5.8))
+    y = np.arange(len(plot_frame))
+    for yi, (_, row) in zip(y, plot_frame.iterrows()):
+        x0 = float(row["activation_z"])
+        x1 = float(row["reorg_strength_z"])
+        ax.plot([x0, x1], [yi, yi], color="#cbd5e1", linewidth=2.0, zorder=1)
+
+    ax.scatter(
+        plot_frame["activation_z"],
+        y,
+        s=78,
+        color="#64748b",
+        edgecolor="white",
+        linewidth=0.7,
+        label="Activation",
+        zorder=3,
+    )
+    ax.scatter(
+        plot_frame["reorg_strength_z"],
+        y,
+        s=78,
+        color="#d9485f",
+        edgecolor="white",
+        linewidth=0.7,
+        label="Reorganization",
+        zorder=4,
+    )
+
+    ax.axvline(0, color="#6b7280", linestyle="--", linewidth=1.0)
+    ax.set_yticks(y)
+    ax.set_yticklabels(plot_frame["roi_label"])
+    ax.set_xlabel("Within-metric standardized effect (z)")
+    ax.set_ylabel("")
+    ax.set_title("Activation and representational reorganization by ROI", fontweight="bold", loc="left")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    add_panel_label(ax, "a")
+
+    x_left = min(plot_frame["activation_z"].min(), plot_frame["reorg_strength_z"].min()) - 0.35
+    x_right = max(plot_frame["activation_z"].max(), plot_frame["reorg_strength_z"].max()) + 0.35
+    ax.set_xlim(x_left, x_right)
+    ax.text(x_left + 0.02, len(plot_frame) - 0.35, "Lower", ha="left", va="bottom", fontsize=8.5, color="#6b7280")
+    ax.text(x_right - 0.02, len(plot_frame) - 0.35, "Higher", ha="right", va="bottom", fontsize=8.5, color="#6b7280")
+    ax.legend(frameon=False, loc="lower right")
+
+    save_png_pdf(fig, fig_path)
+    plt.close(fig)
 
     print(f"[dissociation] wrote {table_path} and {fig_path}")
 

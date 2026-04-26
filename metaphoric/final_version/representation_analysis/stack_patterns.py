@@ -50,6 +50,7 @@ if str(FINAL_ROOT) not in sys.path:
 
 from common.final_utils import ensure_dir, read_table, write_table
 from common.pattern_metrics import concat_images
+from common.stimulus_text_mapping import attach_real_word_columns
 
 
 PYTHON_METAPHOR_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", r"E:\python_metaphor"))
@@ -184,11 +185,11 @@ def augment_with_stimuli_template(frame: pd.DataFrame, stimuli_template: Path | 
     - M3 (embedding) and M7 (memory) require `word_label`.
     - M2 (pair identity) should use an explicit `pair_id` instead of falling back to `pic_num`.
     """
-    out = frame.copy()
-
-    # Fast path: already present.
-    if "word_label" in out.columns and "pair_id" in out.columns:
-        return out
+    out = attach_real_word_columns(frame, column_map={"unique_label": "real_word", "word_label": "real_word"})
+    if "word_label" not in out.columns and "unique_label" in out.columns:
+        out["word_label"] = out["unique_label"].astype(str).str.strip()
+    elif "word_label" in out.columns:
+        out["word_label"] = out["word_label"].astype(str).str.strip()
 
     template_df: pd.DataFrame | None = None
     if stimuli_template is not None and Path(stimuli_template).exists():
@@ -198,25 +199,38 @@ def augment_with_stimuli_template(frame: pd.DataFrame, stimuli_template: Path | 
             template_df = None
 
     if template_df is not None and not template_df.empty:
+        template_df = attach_real_word_columns(template_df, column_map={"word_label": "real_word"})
         # Normalize common string columns.
-        for col in ["unique_label", "word_label", "condition", "type"]:
+        for col in ["unique_label", "word_label", "real_word", "condition", "type"]:
             if col in template_df.columns:
                 template_df[col] = template_df[col].astype(str).str.strip()
 
         join_key = None
-        for key in ["unique_label", "pic_num"]:
+        for key in ["word_label", "unique_label", "pic_num"]:
             if key in out.columns and key in template_df.columns:
                 join_key = key
                 break
 
         if join_key is not None:
-            cols = [join_key]
-            if "word_label" in template_df.columns:
-                cols.append("word_label")
-            if "pair_id" in template_df.columns:
-                cols.append("pair_id")
+            cols: list[str] = []
+            for col in [join_key, "word_label", "real_word", "pair_id"]:
+                if col in template_df.columns and col not in cols:
+                    cols.append(col)
             tpl = template_df[cols].drop_duplicates(subset=[join_key], keep="first")
             out = out.merge(tpl, on=join_key, how="left", suffixes=("", "_tpl"))
+            if "real_word_tpl" in out.columns:
+                if "real_word" not in out.columns:
+                    out["real_word"] = out["real_word_tpl"]
+                else:
+                    current = out["real_word"].astype(str).str.strip()
+                    mask = out["real_word"].isna() | current.eq("") | current.eq("nan") | current.eq("<NA>")
+                    out.loc[mask, "real_word"] = out.loc[mask, "real_word_tpl"]
+                out = out.drop(columns=["real_word_tpl"])
+            if "pair_id_tpl" in out.columns:
+                tpl_pair = out["pair_id_tpl"].astype(str).str.strip()
+                mask = tpl_pair.ne("") & tpl_pair.ne("nan") & tpl_pair.ne("<NA>")
+                out.loc[mask, "pair_id"] = out.loc[mask, "pair_id_tpl"]
+                out = out.drop(columns=["pair_id_tpl"])
 
     # Fallbacks (still make the pipeline usable even when template is missing).
     if "word_label" not in out.columns:
@@ -226,6 +240,10 @@ def augment_with_stimuli_template(frame: pd.DataFrame, stimuli_template: Path | 
             raise ValueError("Cannot derive `word_label`: missing both `word_label` and `unique_label`.")
     else:
         out["word_label"] = out["word_label"].astype(str).str.strip()
+
+    out = attach_real_word_columns(out, column_map={"word_label": "real_word", "unique_label": "real_word"})
+    if "real_word" in out.columns:
+        out["real_word"] = out["real_word"].astype(str).str.strip()
 
     if "pair_id" not in out.columns:
         # Use pic_num as best-effort pair identifier; baseline is forced unique to avoid fake pairing.

@@ -53,7 +53,7 @@ LSS_META_FILE = BASE_DIR / "lss_betas_final/lss_metadata_index_final.csv"
 STIMULI_TEMPLATE = BASE_DIR / "stimuli_template.csv"
 ROI_LIBRARY_DIR = BASE_DIR / "roi_library"
 ROI_MANIFEST = ROI_LIBRARY_DIR / "manifest.tsv"
-# ROI_SET可以手动指定：main_functional（主结果）、literature（文献）、atlas_robustness（稳健补充）
+# ROI_SET可以手动指定：main_functional（主结果）、literature（隐喻文献）、literature_spatial（空间文献）、atlas_robustness（稳健补充）
 ROI_SET = os.environ.get("METAPHOR_ROI_SET", "literature")
 
 if ROI_MANIFEST.exists():

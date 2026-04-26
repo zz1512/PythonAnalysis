@@ -47,19 +47,28 @@ if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
 from common.final_utils import ensure_dir, save_json, write_table  # noqa: E402
+from common.stimulus_text_mapping import attach_real_word_columns  # noqa: E402
 
 
-def load_word_list(stimuli_path: Path, word_col: str) -> list[str]:
+def load_word_frame(stimuli_path: Path, word_col: str) -> pd.DataFrame:
     suffix = stimuli_path.suffix.lower()
     frame = pd.read_csv(stimuli_path, sep="\t") if suffix in {".tsv", ".txt"} else pd.read_csv(stimuli_path)
+    frame = attach_real_word_columns(frame, column_map={"word_label": "real_word"})
     if word_col not in frame.columns:
         raise ValueError(f"Column '{word_col}' not found in {stimuli_path}. Available: {list(frame.columns)}")
-    words = frame[word_col].dropna().astype(str).str.strip()
-    words = words[words.ne("")]
-    unique_words = sorted(set(words.tolist()))
-    if not unique_words:
+    word_values = frame[word_col]
+    if isinstance(word_values, pd.DataFrame):
+        word_values = word_values.iloc[:, 0]
+    frame[word_col] = word_values.astype(str).str.strip()
+    frame = frame[frame[word_col].ne("")].copy()
+    if frame.empty:
         raise ValueError("No valid words extracted from stimuli template.")
-    return unique_words
+    keep_cols: list[str] = []
+    for col in [word_col, "word_label", "real_word"]:
+        if col in frame.columns and col not in keep_cols:
+            keep_cols.append(col)
+    frame = frame[keep_cols].drop_duplicates(subset=[word_col], keep="first").reset_index(drop=True)
+    return frame
 
 
 def embed_with_bert(words: list[str], model_name: str) -> tuple[np.ndarray, str]:
@@ -95,7 +104,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build stimulus word embeddings for Model-RSA M3.")
     parser.add_argument("--stimuli-template", type=Path, default=None,
                         help="Path to stimuli template (csv/tsv). Defaults to rsa_config.STIMULI_TEMPLATE.")
-    parser.add_argument("--word-col", default="word_label")
+    parser.add_argument("--word-col", default="real_word")
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="Directory to write embeddings. Defaults to {BASE_DIR}/stimulus_embeddings.")
     parser.add_argument("--output-name", default="stimulus_embeddings_bert.tsv")
@@ -110,7 +119,11 @@ def main() -> None:
     stimuli_path = args.stimuli_template or STIMULI_TEMPLATE
     output_dir = ensure_dir(args.output_dir or (BASE_DIR / "stimulus_embeddings"))
 
-    words = load_word_list(stimuli_path, args.word_col)
+    word_frame = load_word_frame(stimuli_path, args.word_col)
+    word_values = word_frame[args.word_col]
+    if isinstance(word_values, pd.DataFrame):
+        word_values = word_values.iloc[:, 0]
+    words = word_values.tolist()
 
     if args.embedding_source == "bert":
         matrix, source_tag = embed_with_bert(words, args.model_name)
@@ -118,9 +131,10 @@ def main() -> None:
         matrix, source_tag = embed_with_random(words, args.random_dim, args.random_seed)
 
     dim_cols = [f"dim_{i}" for i in range(matrix.shape[1])]
-    frame = pd.DataFrame(matrix, columns=dim_cols)
-    frame.insert(0, "word_label", words)
-    write_table(frame, output_dir / args.output_name)
+    out_frame = word_frame.copy()
+    for idx, column in enumerate(dim_cols):
+        out_frame[column] = matrix[:, idx]
+    write_table(out_frame, output_dir / args.output_name)
 
     manifest = {
         "source": args.embedding_source,

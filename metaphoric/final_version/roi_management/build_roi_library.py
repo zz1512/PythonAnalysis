@@ -168,6 +168,118 @@ LITERATURE_ROIS = [
 ]
 
 
+LITERATURE_SPATIAL_ROIS = [
+    {
+        "roi_name": "litspat_L_PPA",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Parahippocampal Gyrus, posterior division"],
+        "hemisphere": "L",
+        "theory_role": "scene_landmark_processing",
+        "notes": "PPA proxy from Harvard-Oxford parahippocampal posterior division.",
+    },
+    {
+        "roi_name": "litspat_R_PPA",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Parahippocampal Gyrus, posterior division"],
+        "hemisphere": "R",
+        "theory_role": "scene_landmark_processing",
+        "notes": "PPA proxy from Harvard-Oxford parahippocampal posterior division.",
+    },
+    {
+        "roi_name": "litspat_L_OPA",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Lateral Occipital Cortex, superior division"],
+        "hemisphere": "L",
+        "theory_role": "environmental_boundaries_proxy",
+        "notes": "OPA proxy from lateral occipital superior division; atlas lacks a dedicated OPA parcel.",
+    },
+    {
+        "roi_name": "litspat_R_OPA",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Lateral Occipital Cortex, superior division"],
+        "hemisphere": "R",
+        "theory_role": "environmental_boundaries_proxy",
+        "notes": "OPA proxy from lateral occipital superior division; atlas lacks a dedicated OPA parcel.",
+    },
+    {
+        "roi_name": "litspat_L_precuneus",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Precuneous Cortex"],
+        "hemisphere": "L",
+        "theory_role": "egocentric_spatial_imagery",
+        "notes": "Medial parietal spatial imagery / self-centered spatial representation ROI.",
+    },
+    {
+        "roi_name": "litspat_R_precuneus",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Precuneous Cortex"],
+        "hemisphere": "R",
+        "theory_role": "egocentric_spatial_imagery",
+        "notes": "Medial parietal spatial imagery / self-centered spatial representation ROI.",
+    },
+    {
+        "roi_name": "litspat_L_PPC",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Superior Parietal Lobule"],
+        "hemisphere": "L",
+        "theory_role": "posterior_parietal_spatial_attention_proxy",
+        "notes": "Posterior parietal / IPS-adjacent proxy from superior parietal lobule.",
+    },
+    {
+        "roi_name": "litspat_R_PPC",
+        "atlas_type": "harvard_oxford",
+        "atlas_name": "cort-maxprob-thr25-2mm",
+        "labels": ["Superior Parietal Lobule"],
+        "hemisphere": "R",
+        "theory_role": "posterior_parietal_spatial_attention_proxy",
+        "notes": "Posterior parietal / IPS-adjacent proxy from superior parietal lobule.",
+    },
+    {
+        "roi_name": "litspat_L_RSC",
+        "atlas_type": "aal",
+        "atlas_name": "aal",
+        "labels": ["Cingulum_Post_L"],
+        "hemisphere": "L",
+        "theory_role": "reference_frame_transformation_proxy",
+        "notes": "RSC proxy from AAL posterior cingulate/cingulum parcel.",
+    },
+    {
+        "roi_name": "litspat_R_RSC",
+        "atlas_type": "aal",
+        "atlas_name": "aal",
+        "labels": ["Cingulum_Post_R"],
+        "hemisphere": "R",
+        "theory_role": "reference_frame_transformation_proxy",
+        "notes": "RSC proxy from AAL posterior cingulate/cingulum parcel.",
+    },
+    {
+        "roi_name": "litspat_L_hippocampus",
+        "atlas_type": "aal",
+        "atlas_name": "aal",
+        "labels": ["Hippocampus_L"],
+        "hemisphere": "L",
+        "theory_role": "cognitive_map_memory",
+        "notes": "Anatomical hippocampus ROI for spatial cognitive-map coding.",
+    },
+    {
+        "roi_name": "litspat_R_hippocampus",
+        "atlas_type": "aal",
+        "atlas_name": "aal",
+        "labels": ["Hippocampus_R"],
+        "hemisphere": "R",
+        "theory_role": "cognitive_map_memory",
+        "notes": "Anatomical hippocampus ROI for spatial cognitive-map coding.",
+    },
+]
+
+
 ATLAS_ROBUSTNESS_ROIS = [
     {
         "roi_name": "atlas_L_temporal_pole",
@@ -616,6 +728,84 @@ def build_harvard_oxford_rois(mask_root: Path, reference_img: nib.Nifti1Image | 
     return manifest_rows
 
 
+def build_literature_spatial_rois(mask_root: Path, reference_img: nib.Nifti1Image | None = None) -> list[dict[str, object]]:
+    output_dir = ensure_dir(mask_root / "literature_spatial")
+    qc_dir = ensure_dir(mask_root.parent / "qc")
+
+    ho_atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
+    ho_img = load_img(ho_atlas["maps"])
+    ho_data = np.asarray(ho_img.get_fdata(), dtype=int)
+    ho_lookup = atlas_label_lookup(ho_atlas["labels"])
+
+    aal_atlas = datasets.fetch_atlas_aal()
+    aal_img = load_img(aal_atlas["maps"])
+    aal_data = np.asarray(aal_img.get_fdata(), dtype=int)
+    aal_lookup = {str(label): int(index) for label, index in zip(aal_atlas["labels"], aal_atlas["indices"])}
+
+    manifest_rows: list[dict[str, object]] = []
+    atlas_qc: list[dict[str, object]] = []
+
+    for spec in LITERATURE_SPATIAL_ROIS:
+        if spec["atlas_type"] == "harvard_oxford":
+            atlas_img = ho_img
+            atlas_data = ho_data
+            label_to_index = ho_lookup
+        elif spec["atlas_type"] == "aal":
+            atlas_img = aal_img
+            atlas_data = aal_data
+            label_to_index = aal_lookup
+        else:
+            raise ValueError(f"Unsupported atlas_type for literature_spatial: {spec['atlas_type']}")
+
+        mask = create_atlas_mask(
+            atlas_img,
+            atlas_data,
+            label_to_index,
+            spec["labels"],
+            hemisphere=spec["hemisphere"],
+        )
+        output_path = output_dir / f"{spec['roi_name']}.nii.gz"
+        mask_img = maybe_resample_mask_to_reference(mask, atlas_img, reference_img)
+        voxel_count, volume_mm3 = save_mask_image(mask_img, output_path)
+        is_valid = voxel_count >= MIN_ATLAS_VOXELS
+        atlas_qc.append({
+            "roi_name": spec["roi_name"],
+            "roi_set": "literature_spatial",
+            "atlas_name": spec["atlas_name"],
+            "labels": "|".join(spec["labels"]),
+            "hemisphere": spec["hemisphere"],
+            "voxel_count": voxel_count,
+            "volume_mm3": volume_mm3,
+            "is_valid": is_valid,
+            "reason": "" if is_valid else f"n_voxels<{MIN_ATLAS_VOXELS}",
+        })
+        note = spec.get("notes", "Literature-guided spatial ROI built from atlas labels.")
+        manifest_rows.append(
+            {
+                "roi_name": spec["roi_name"],
+                "roi_set": "literature_spatial",
+                "source_type": spec["atlas_type"],
+                "mask_path": str(output_path.resolve()),
+                "hemisphere": spec["hemisphere"],
+                "base_contrast": "",
+                "atlas_name": spec["atlas_name"],
+                "atlas_label": "|".join(spec["labels"]),
+                "theory_role": spec["theory_role"],
+                "include_in_main": False,
+                "include_in_rsa": bool(is_valid),
+                "include_in_mvpa": bool(is_valid),
+                "include_in_rd": bool(is_valid),
+                "include_in_gps": bool(is_valid),
+                "n_voxels": voxel_count,
+                "volume_mm3": volume_mm3,
+                "notes": str(note) + ("" if is_valid else f" Excluded from analyses: n_voxels<{MIN_ATLAS_VOXELS}."),
+            }
+        )
+    if atlas_qc:
+        write_table(pd.DataFrame(atlas_qc), qc_dir / "literature_spatial_roi_qc.tsv")
+    return manifest_rows
+
+
 def build_aal_rois(mask_root: Path, reference_img: nib.Nifti1Image | None = None) -> list[dict[str, object]]:
     output_dir = ensure_dir(mask_root / "atlas_robustness")
     qc_dir = ensure_dir(mask_root.parent / "qc")
@@ -766,6 +956,7 @@ def build_roi_library(
     rows: list[dict[str, object]] = []
     rows.extend(build_functional_rois(output_dir / "masks"))
     rows.extend(build_harvard_oxford_rois(output_dir / "masks", reference_img=reference_img))
+    rows.extend(build_literature_spatial_rois(output_dir / "masks", reference_img=reference_img))
     rows.extend(build_aal_rois(output_dir / "masks", reference_img=reference_img))
 
     manifest = pd.DataFrame(rows).sort_values(["roi_set", "roi_name"]).reset_index(drop=True)

@@ -59,7 +59,8 @@ if str(FINAL_ROOT) not in sys.path:
 
 from common.final_utils import ensure_dir, paired_t_summary, read_table, save_json, write_table  # noqa: E402
 from common.pattern_metrics import load_masked_samples, neural_rdm_vector  # noqa: E402
-from common.roi_library import default_roi_tagged_out_dir  # noqa: E402
+from common.roi_library import default_roi_tagged_out_dir, select_roi_masks  # noqa: E402
+from common.stimulus_text_mapping import attach_real_word_columns  # noqa: E402
 
 
 # ---------- 模型 RDM 构造 ----------
@@ -107,9 +108,11 @@ def model_from_embedding(metadata: pd.DataFrame, embeddings: pd.DataFrame,
     """M3: 预训练语义 cosine distance RDM。缺词对应行列置 NaN。"""
     if word_col not in metadata.columns:
         raise ValueError(f"Metadata missing '{word_col}' column required for M3 embedding lookup.")
-    if embeddings["word_label"].duplicated().any():
-        embeddings = embeddings.drop_duplicates(subset="word_label", keep="first")
-    emb_map = embeddings.set_index("word_label")
+    if word_col not in embeddings.columns:
+        raise ValueError(f"Embedding file missing '{word_col}' column required for M3 lookup.")
+    if embeddings[word_col].duplicated().any():
+        embeddings = embeddings.drop_duplicates(subset=word_col, keep="first")
+    emb_map = embeddings.set_index(word_col)
     labels = metadata[word_col].astype(str).to_list()
     dim_cols = [c for c in emb_map.columns if c.startswith("dim_")]
     if not dim_cols:
@@ -139,7 +142,9 @@ def model_from_subject_numeric(metadata: pd.DataFrame, table: pd.DataFrame,
     """M7: 被试维度 numeric 差 RDM（例如回忆强度）。"""
     if word_col not in metadata.columns:
         raise ValueError(f"Metadata missing '{word_col}' column required for subject numeric RDM.")
-    lookup = table.set_index("word_label")[value_col]
+    if word_col not in table.columns:
+        raise ValueError(f"Subject numeric table missing '{word_col}' column required for M7 lookup.")
+    lookup = table.set_index(word_col)[value_col]
     values = np.asarray([lookup.get(lab, np.nan) for lab in metadata[word_col].astype(str)], dtype=float)
     diff = np.abs(values[:, None] - values[None, :])
     return diff[np.triu_indices_from(diff, k=1)]
@@ -270,6 +275,26 @@ def _default_stimuli_template() -> Path | None:
     return Path(STIMULI_TEMPLATE)
 
 
+def _default_pattern_root() -> Path:
+    from rsa_analysis.rsa_config import BASE_DIR  # type: ignore
+    return Path(BASE_DIR) / "pattern_root"
+
+
+def _resolve_roi_masks(roi_dir: Path | None) -> dict[str, Path]:
+    if roi_dir is not None:
+        if roi_dir.is_file():
+            return {roi_dir.stem.replace(".nii", ""): roi_dir}
+        roi_paths = sorted(roi_dir.glob("*.nii*"))
+        return {path.stem.replace(".nii", ""): path for path in roi_paths}
+
+    from rsa_analysis.rsa_config import ROI_MANIFEST, ROI_MASKS, ROI_SET  # type: ignore
+
+    manifest_path = Path(ROI_MANIFEST) if ROI_MANIFEST is not None else None
+    if manifest_path is not None and manifest_path.exists():
+        return select_roi_masks(manifest_path, roi_set=ROI_SET, include_flag="include_in_rsa")
+    return {str(name): Path(path) for name, path in dict(ROI_MASKS).items()}
+
+
 def augment_metadata_for_models(
     metadata: pd.DataFrame,
     template_df: pd.DataFrame | None,
@@ -278,6 +303,7 @@ def augment_metadata_for_models(
     pair_col: str,
 ) -> pd.DataFrame:
     out = metadata.copy()
+    out = attach_real_word_columns(out, column_map={"unique_label": "real_word", "word_label": "real_word"})
 
     if word_col not in out.columns:
         if "unique_label" in out.columns:
@@ -286,24 +312,36 @@ def augment_metadata_for_models(
             out[word_col] = out["word_label"].astype(str).str.strip()
 
     if template_df is not None and not template_df.empty:
-        tpl = template_df.copy()
+        tpl = attach_real_word_columns(template_df, column_map={"word_label": "real_word"})
         if "word_label" in tpl.columns:
             tpl["word_label"] = tpl["word_label"].astype(str).str.strip()
-        merge_cols = []
-        if word_col in out.columns and "word_label" in tpl.columns:
-            merge_cols.append("word_label")
-        if merge_cols:
+        if "real_word" in tpl.columns:
+            tpl["real_word"] = tpl["real_word"].astype(str).str.strip()
+        if "word_label" in out.columns and "word_label" in tpl.columns:
             wanted = ["word_label"]
+            if "real_word" in tpl.columns:
+                wanted.append("real_word")
             if "pair_id" in tpl.columns:
                 wanted.append("pair_id")
             lookup = tpl[wanted].drop_duplicates(subset=["word_label"], keep="first")
             out = out.merge(lookup, how="left", on="word_label", suffixes=("", "_tpl"))
+            if "real_word_tpl" in out.columns:
+                if "real_word" not in out.columns:
+                    out["real_word"] = out["real_word_tpl"]
+                else:
+                    current = out["real_word"].astype(str).str.strip()
+                    mask = out["real_word"].isna() | current.eq("") | current.eq("nan") | current.eq("<NA>")
+                    out.loc[mask, "real_word"] = out.loc[mask, "real_word_tpl"]
+                out = out.drop(columns=["real_word_tpl"])
 
     if pair_col not in out.columns:
         if "pair_id" in out.columns:
             out[pair_col] = out["pair_id"]
         elif "pic_num" in out.columns:
             out[pair_col] = out["pic_num"]
+
+    if word_col not in out.columns and word_col == "real_word":
+        out = attach_real_word_columns(out, column_map={"word_label": "real_word", "unique_label": "real_word"})
 
     return out
 
@@ -326,8 +364,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Compare neural RDMs with candidate model RDMs (M1/M2/M3/M7/M8)."
     )
-    parser.add_argument("pattern_root", type=Path)
-    parser.add_argument("roi_dir", type=Path)
+    parser.add_argument(
+        "pattern_root",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Defaults to {BASE_DIR}/pattern_root.",
+    )
+    parser.add_argument(
+        "roi_dir",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Optional ROI directory or single ROI mask. Defaults to current ROI_SET masks from rsa_config.",
+    )
     parser.add_argument("output_dir", type=Path, nargs="?", default=None,
                         help="Defaults to {BASE_DIR}/model_rdm_results_{ROI_SET}; "
                              "override via METAPHOR_MODEL_RDM_OUT_DIR env var.")
@@ -341,7 +391,7 @@ def main() -> None:
         help="Whether to build neural RDMs within each condition, across pooled conditions, or both.",
     )
     parser.add_argument("--pair-id-col", default="pair_id")
-    parser.add_argument("--word-col", default="word_label")
+    parser.add_argument("--word-col", default="real_word")
     parser.add_argument("--stimuli-template", type=Path, default=None,
                         help="Optional stimuli template used to backfill word_label/pair_id into pattern metadata.")
     parser.add_argument("--embedding-file", type=Path, default=None,
@@ -364,6 +414,7 @@ def main() -> None:
                         help="Allow missing prerequisites to be recorded as skip_reason instead of failing fast.")
     args = parser.parse_args()
 
+    args.pattern_root = args.pattern_root or _default_pattern_root()
     output_dir = ensure_dir(args.output_dir if args.output_dir is not None else _default_output_dir())
 
     embedding_table: pd.DataFrame | None = None
@@ -381,12 +432,14 @@ def main() -> None:
     partial_rows = []
     collinearity_snapshots: list[pd.DataFrame] = []
 
-    roi_paths = sorted(args.roi_dir.glob("*.nii*"))
+    roi_masks = _resolve_roi_masks(args.roi_dir)
+    if not roi_masks:
+        raise ValueError("No ROI masks found. Pass roi_dir explicitly or check rsa_config ROI settings.")
+
     subject_dirs = sorted([p for p in args.pattern_root.iterdir()
                            if p.is_dir() and p.name.startswith("sub-")])
 
-    for roi_path in roi_paths:
-        roi_name = roi_path.stem.replace(".nii", "")
+    for roi_name, roi_path in roi_masks.items():
         for subject_dir in subject_dirs:
             subject = subject_dir.name
             for time in ["pre", "post"]:
@@ -507,7 +560,7 @@ def main() -> None:
                     if "M7_memory" in args.enabled_models:
                         mem_table = _load_memory_table(args.memory_strength_dir, subject)
                         if mem_table is None:
-                            _handle_model_failure("M7_memory", "missing_memory_table")
+                            _handle_model_failure("M7_memory", "missing_memory_table", allow_skip=True)
                         elif args.word_col not in metadata.columns:
                             _handle_model_failure("M7_memory", "missing_word_label")
                         else:

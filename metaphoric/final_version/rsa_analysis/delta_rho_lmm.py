@@ -32,6 +32,7 @@ delta_rho_lmm.py
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -49,8 +50,45 @@ def _final_root() -> Path:
 FINAL_ROOT = _final_root()
 if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
+RSA_ROOT = Path(__file__).resolve().parent
+if str(RSA_ROOT) not in sys.path:
+    sys.path.append(str(RSA_ROOT))
 
 from common.final_utils import ensure_dir, save_json, write_table  # noqa: E402
+from common.roi_library import sanitize_roi_tag  # noqa: E402
+import rsa_config as cfg  # noqa: E402
+
+
+def _default_model_rdm_dir() -> Path:
+    roi_tag = sanitize_roi_tag(getattr(cfg, "ROI_SET", ""))
+    return Path(cfg.BASE_DIR) / f"model_rdm_results_{roi_tag}"
+
+
+def _resolve_metrics_file(path_arg: Path | None) -> Path:
+    if path_arg is None:
+        return _default_model_rdm_dir() / "model_rdm_subject_metrics.tsv"
+    if path_arg.is_dir():
+        return path_arg / "model_rdm_subject_metrics.tsv"
+    return path_arg
+
+
+def _resolve_partial_metrics_file(path_arg: Path | None, *, metrics_file: Path, use_partial: bool) -> Path | None:
+    if path_arg is not None:
+        if path_arg.is_dir():
+            return path_arg / "model_rdm_partial_metrics.tsv"
+        return path_arg
+    if use_partial:
+        return metrics_file.parent / "model_rdm_partial_metrics.tsv"
+    return None
+
+
+def _resolve_output_dir(path_arg: Path | None, *, metrics_file: Path) -> Path:
+    if path_arg is not None:
+        return path_arg
+    override = os.environ.get("METAPHOR_DELTA_RHO_OUT_DIR", "").strip()
+    if override:
+        return Path(override)
+    return metrics_file.parent / "lmm"
 
 
 def compute_delta(frame: pd.DataFrame, value_col: str, condition_col: str | None) -> pd.DataFrame:
@@ -101,23 +139,42 @@ def fit_lmm(delta_frame: pd.DataFrame, condition_col: str | None):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Δρ LMM on Model-RSA outputs.")
-    parser.add_argument("--metrics-file", type=Path, required=True,
-                        help="model_rdm_subject_metrics.tsv (or compatible table).")
+    parser.add_argument("--metrics-file", type=Path, default=None,
+                        help="model_rdm_subject_metrics.tsv or a model_rdm_results_* directory. "
+                             "If omitted, auto-detects the current ROI-set result directory.")
     parser.add_argument("--partial-metrics-file", type=Path, default=None,
-                        help="Optional partial-correlation table; when provided uses partial_rho.")
-    parser.add_argument("--output-dir", type=Path, required=True)
+                        help="Optional partial-correlation table or containing directory.")
+    parser.add_argument("--use-partial", action="store_true",
+                        help="Use model_rdm_partial_metrics.tsv from the resolved result directory automatically.")
+    parser.add_argument("--output-dir", type=Path, default=None,
+                        help="Optional output directory. Default: <model_rdm_results_dir>/lmm")
     parser.add_argument("--condition-col", default=None,
                         help="Optional condition-group column for the interaction.")
     args = parser.parse_args()
 
-    output_dir = ensure_dir(args.output_dir)
+    metrics_file = _resolve_metrics_file(args.metrics_file)
+    if not metrics_file.exists():
+        raise FileNotFoundError(
+            "Model-RSA metrics file not found.\n"
+            f"Resolved path: {metrics_file}\n"
+            f"Default search root: {_default_model_rdm_dir()}"
+        )
 
-    if args.partial_metrics_file is not None:
-        source = args.partial_metrics_file
+    partial_metrics_file = _resolve_partial_metrics_file(
+        args.partial_metrics_file,
+        metrics_file=metrics_file,
+        use_partial=args.use_partial,
+    )
+    if partial_metrics_file is not None:
+        if not partial_metrics_file.exists():
+            raise FileNotFoundError(f"Partial metrics file not found: {partial_metrics_file}")
+        source = partial_metrics_file
         value_col = "partial_rho"
     else:
-        source = args.metrics_file
+        source = metrics_file
         value_col = "rho"
+
+    output_dir = ensure_dir(_resolve_output_dir(args.output_dir, metrics_file=metrics_file))
 
     sep = "\t" if source.suffix.lower() in {".tsv", ".txt"} else ","
     frame = pd.read_csv(source, sep=sep)

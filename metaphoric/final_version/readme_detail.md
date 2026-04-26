@@ -32,6 +32,9 @@
 
 重要提示（根据当前阶段性结果）：
 - 在本数据集中，隐喻（yy）的 RSA 主要表现为 **pair similarity 从 pre 到 post 更明显下降**，更接近“表征分化增强”而非“配对聚合/对齐”。后续 Model-RSA 与写作叙事需与这一方向一致。
+- baseline 已经进入默认主链，因此当前正式结果应始终按 `yy / kj / baseline` 三条件解释，而不是回到旧的两条件版本。
+- 当前 Step 5D 也已经给出更具体的机制线索：左 Precuneous / 左 IFG 更支持 `pair-based differentiation`，左 temporal pole 更支持 `semantic reweighting`。
+- 因而现阶段的主问题不应再写成“学习后同 pair 会不会更像”，而应写成：“隐喻学习是否诱发更强的表征重组，以及这种重组更接近 pair-based differentiation 还是 semantic reweighting。”
 
 ### 实验设计
 
@@ -135,6 +138,11 @@
 
 如果你只想先拿到一条足够完整、能讲故事、也最符合当前顶刊叙事的结果线，这几步足够。
 
+当前阶段状态（2026-04）：
+- 行为、Step 5C（RSA + LMM）和 Step 5D（Model-RSA + Δρ LMM）已经基本跑通，主故事已经可以闭环。
+- 因此接下来最重要的工作，不再是继续无限扩展分析种类，而是把主线结果写稳、把剩余稳健性和脑-行为分析收口。
+- 后续优先级建议调整为：固定写作口径 > 最小脑-行为分析 > trial/voxel/atlas 稳健性 > 再决定是否推进 RD/GPS、dynamics 或 connectivity。
+
 ### 控制验证
 
 在当前版本里，最重要的控制验证已经不再是“可做可不做”：
@@ -149,6 +157,11 @@
 - baseline 必须进入 `run_rsa_optimized.py` 和 `rsa_lmm.py` 的默认主链
 - 主故事仍聚焦 `yy vs kj`
 - 但结果汇报必须同时告诉读者：`baseline(jx)` 是否也发生了同等幅度变化
+
+根据当前已经完成的结果，baseline 控制已支持主结论：
+- `yy` 的 pre->post similarity 下降最稳定
+- `baseline` 没有表现出与 `yy` 同方向、同幅度的下降
+- 因此当前更合理的表述是：`yy` 的去相似化不能被简单归结为普通熟悉化或重测效应
 
 ### 进阶扩展
 
@@ -737,7 +750,7 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - `phase` 缺失或 run 映射错，导致 pre/post 混了
 - 条件归并失败，输出成 `pre_yyw.nii.gz` 这种下游不认的文件
 - metadata 里路径是相对路径，但相对基准目录理解错了
-- 若 metadata 缺 `word_label` / `pair_id`，后面的 Model-RSA 会静默跳过或退化
+- 若 metadata 缺 `pair_id`，或缺少可映射到真实词条的列（如 `real_word` / `word_label` / `unique_label`），后面的 Model-RSA 会静默跳过或退化
 
 最小 QC：
 - 每个被试至少应看到 `pre_yy`, `pre_kj`, `pre_baseline`, `post_yy`, `post_kj`, `post_baseline`
@@ -751,6 +764,7 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - `rsa_analysis/check_data_integrity.py`
 - `rsa_analysis/run_rsa_optimized.py`
 - `rsa_analysis/rsa_lmm.py`
+- `rsa_analysis/motion_qc_reliability.py`
 
 这步回答什么问题：
 - 学习前后，刺激之间的神经相似性关系有没有发生系统改变
@@ -989,8 +1003,13 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
   - `v_i = mean-pool(BERT.encode(word_i))`（使用 attention_mask 过滤 padding）
   - `RDM_M3[i,j] = 1 − cos(v_i, v_j)`，范围近似 [0, 2]
 - 在脚本中：
-  - 预计算：[build_stimulus_embeddings.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/metaphoric/final_version/rsa_analysis/build_stimulus_embeddings.py) 一次性跑完所有刺激词，写入 `stimulus_embeddings_bert.tsv`（列：`word_label` + `dim_0..dim_767`）
-  - 查询：`model_from_embedding(metadata, embeddings, word_col="word_label")`，缺词对应行列填 NaN，相关时自动掩码
+  - 预计算：`rsa_analysis/build_stimulus_embeddings.py` 一次性跑完所有刺激词，写入 `stimulus_embeddings_bert.tsv`
+  - 最新默认列键：`real_word`（保留 `word_label` 作为标签追溯列）
+  - 查询：`model_from_embedding(metadata, embeddings, word_col="real_word")`，缺词对应行列填 NaN，相关时自动掩码
+  - 真实词条来源：`E:\python_metaphor\materials_detail\映射.txt`
+- 重要说明：
+  - `word_label` 在当前项目里主要是材料标签（如 `yyw_1`、`kjew_13`），不是 BERT 应直接编码的真实中文词条。
+  - 因此 M3 的主键必须是 `real_word`，而不是标签型 `word_label`。
 - 理论假设：
   - 前测：M3 应该是**最主导的解释变量**——被试还没学习，ROI 编码的主要是词汇的预存分布式语义。
   - 后测：M3 的 ρ 可能**略降或持平**，部分方差被 M2/M7 分走；但不会消失，因为预存语义结构依然存在。
@@ -1016,8 +1035,13 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - 构造思路：每个被试自己在 Run-7 的 1-7 级回忆评分（或 0/1 成功失败）构成一个 `word → recall_score` 映射。把"同一对 word 学得都牢"编码成"它们在 M7 上距离小"。
 - 数学形式：`RDM_M7[i,j] = |recall_i − recall_j|`，**per-subject** 计算。
 - 在脚本中：
-  - 预计算：[build_memory_strength_table.py](file:///Users/bytedance/Documents/trae_projects/PythonAnalysis/metaphoric/final_version/rsa_analysis/build_memory_strength_table.py) 从 events.tsv 的 `memory`/`action` 列派生，每被试输出 `memory_strength_sub-XX.tsv`
-  - 查询：`model_from_subject_numeric(metadata, mem_table, value_col="recall_score")`，缺表的被试会被记录 `skip_reason=missing_memory_table`
+  - 预计算：`rsa_analysis/build_memory_strength_table.py` 从 events.tsv 的 `memory`/`action` 列派生，每被试输出 `memory_strength_sub-XX.tsv`
+  - 最新默认列键：`real_word`
+  - 查询：`model_from_subject_numeric(metadata, mem_table, value_col="recall_score", word_col="real_word")`
+  - 缺表的被试会被记录 `skip_reason=missing_memory_table`
+- 重要说明：
+  - Run-7 events 里的 `pic_out` / 标签型编号会先通过 `E:\python_metaphor\materials_detail\映射.txt` 还原成真实词条，再进入 M7。
+  - 因此 M7 现在也是按 `real_word` 对齐，而不是按 `yyw_1` 这类标签对齐。
 - 理论假设：
   - 前测：M7 的 ρ ≈ 0（被试还没学，记忆强度未定义；若使用 0/1 编码，前测将全部为 0 → M7 退化，此时仅在 post 报告）。
   - 后测（不预设方向）：M7 反映“记忆强度差异是否能解释表征结构差异”。如果主效应是对齐（convergence），可能出现“记得越牢越对齐”；如果主效应是分化（differentiation），也可能出现“记得越牢越分化”。因此更推荐用偏相关与 Δρ LMM 来判断其独立贡献与方向。
@@ -1092,24 +1116,28 @@ METAPHOR_ROI_SET=atlas_robustness python run_rsa_optimized.py
 - 实现注意：脚本在 statsmodels 中用 `groups=subject` + `vc_formula={"roi": "0 + C(roi)"}` 来近似 crossed random effects（而不是把 roi 真的当作 nested）；在方法与讨论里需要如实报告这一选择
 - 若想加条件轴，先在 RSA 阶段按 condition 分别算 ρ（作为 `condition_col`），再用 `--condition-col condition`
 
+当前正式结果应这样读：
+- ROI 级最强结果：
+  - `main_functional`：左 Precuneous 出现 `M2_pair ↓ / M8_reverse_pair ↑`，左 temporal pole 出现 `M3_embedding ↓`
+  - `literature`：左 IFG 出现 `M2_pair ↓ / M8_reverse_pair ↑`
+- 跨 ROI 的 Δρ LMM：
+  - `main_functional` 层最稳定下行的是 `M3_embedding`
+  - `literature` 层 `M2_pair` 只有趋势性更负变化
+- 因而当前最稳妥的机制结论不是 “pair convergence”，而是：
+  - pair-based differentiation
+  - semantic reweighting
+- `M7_memory` 目前没有形成稳定主结论，不宜写成记忆强度是主要驱动因素
+
 典型跑法（三层 ROI 各跑一次互不覆盖，并结合偏相关）：
 
 ```bash
 # 1) 预计算一次（全体 ROI_SET 共用）
-python -m rsa_analysis.build_stimulus_embeddings \
-  --embedding-source bert --model-name bert-base-chinese
+python -m rsa_analysis.build_stimulus_embeddings --embedding-source bert --model-name bert-base-chinese
 
-python -m rsa_analysis.build_memory_strength_table \
-  --subject-range 1 28
+python -m rsa_analysis.build_memory_strength_table --subject-range 1 28
 
 # 2) 主功能 ROI 层
-export METAPHOR_ROI_SET=main_functional
-python -m rsa_analysis.model_rdm_comparison \
-  "$PYTHON_METAPHOR_ROOT/patterns_stacked" \
-  "$PYTHON_METAPHOR_ROOT/roi_library/main_functional" \
-  --embedding-file "$PYTHON_METAPHOR_ROOT/stimulus_embeddings/stimulus_embeddings_bert.tsv" \
-  --memory-strength-dir "$PYTHON_METAPHOR_ROOT/memory_strength" \
-  --partial-correlation
+python -m rsa_analysis.model_rdm_comparison --embedding-file E:\python_metaphor\stimulus_embeddings\stimulus_embeddings_bert.tsv  --memory-strength-dir E:\python_metaphor\memory_strength  --partial-correlation
 
 # 3) 同样跑文献层 literature、鲁棒层 atlas_robustness
 # 4) 对每层输出跑 Δρ LMM
@@ -1147,7 +1175,7 @@ python -m rsa_analysis.delta_rho_lmm \
 ```
 
 常见坑：
-- metadata 里 `word_label` 列缺失会让 M3/M7 静默跳过（结果表里 `skip_reason=missing_*`）——一定要用 `stack_patterns.py` 生成含 `word_label` 的 metadata
+- metadata 里若没有可用的真实词条键（推荐 `real_word`，其次才是可映射的 `word_label` / `unique_label`），M3/M7 会静默跳过（结果表里 `skip_reason=missing_*`）——一定要用最新版 `stack_patterns.py`
 - 若仅跑 `--conditions yy kj`（不含 baseline），M1 其实只区分两类，解释力会被削弱
 - `--partial-correlation` 开启前先看 `model_collinearity.tsv`，|ρ|>0.9 的两个模型不应同时进入偏相关回归；尤其 `M2_pair` 与 `M8_reverse_pair` 会呈近似完美负相关
 - Δρ LMM 要求 pre/post 都存在，某 subject/roi/model 缺一边会被剔除
@@ -1433,6 +1461,23 @@ python -m rsa_analysis.delta_rho_lmm \
 - 数据完整性检查通过
 - `rsa_itemwise_details.csv` 没有大面积缺失
 - LMM 成功收敛
+
+### Motion / Reliability 层
+
+- 已运行 `rsa_analysis/motion_qc_reliability.py`
+- `motion_qc_run_metrics.tsv` / `motion_qc_subject_stage.tsv` 已生成
+- `reliability_by_roi.tsv` / `reliability_group_summary.tsv` 已生成
+- 需要区分两件事：
+  - `QC` 直接比较 `pre vs post`（如 FD、DVARS、scrub 保留比例）
+  - `reliability` 现在使用 voxel split-half，而不再使用旧的 run-wise item-overlap 方案
+- 原因：
+  - 当前设计里，同一阶段刺激被随机拆到两个 run 中，`run1/run2` 不共享完全相同的 item 标签，因此旧版 run-wise reliability 在这个设计下不成立
+  - 若直接把 pre 和 post 的 neural RDM 做相关，相关下降既可能代表“post 更不稳定”，也可能只是代表“学习后表征真的变了”，两者无法区分
+  - 因此当前 reliability 的作用是检验：在同一阶段内部，同一 ROI 的表征结构是否稳定、可复现，以及 post 阶段是否整体更不可靠
+- 当前结果应这样解释：
+  - voxel split-half reliability 没有显示 post 阶段整体崩坏，因此“不支持 yy 下降只是整体 reliability 变差”
+  - 但 motion/QC 指标在 post 阶段确实略差，而且与 `yy` 的下降存在相关
+  - 所以更稳妥的结论是：reliability 不支持整体测量崩坏，但 motion/QC 可能调制效应幅度
 
 ### RD/GPS 层
 

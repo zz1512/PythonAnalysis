@@ -1,219 +1,193 @@
-# Step 5C/5D 当前分析思路与下一步 TODO
+# 当前阶段总体分析方案
 
-## 1. 当前结果的核心解释框架
+## 一、当前总判断
 
-### 1.1 目前已经稳定得到的结果
+当前主线已经基本成立，不需要重构。
 
-- 行为层：`yy` 条件记忆表现优于 `kj`。
-- RSA 层：在 `main_functional` 和 `literature` 两层 ROI 中，`yy` 的 pair similarity 都表现出更明显的 `pre -> post` 下降。
-- baseline 控制：`baseline(jx)` 没有和 `yy` 一样出现系统性下降，多数 ROI 中稳定或轻度上升。
-- `kj`：目前在已有主 ROI 和论文 ROI 中，变化较弱，且缺少跨 ROI 的稳定显著性。
+现阶段最稳的证据链是：
+- 行为上，`yy` 学得更好
+- Step 5C：`yy` 的 pre->post similarity 下降更明显，且 `baseline / kj` 不支持“普遍熟悉化”解释
+- Step 5D ROI 级：左 Precuneous、左 IFG 更支持 `pair-based differentiation`，左 temporal pole 更支持 `semantic reweighting`
+- Step 5D 跨 ROI：`main_functional` 中 `M3_embedding` 的负向 `Δρ` 最稳定；`literature` 中 `M2_pair` 只有趋势
+- QC / reliability：不支持“post 阶段整体 reliability 崩坏”，但 motion/QC 可能调制效应幅度
 
-### 1.2 当前最合理的结果故事
+因此，后续工作不应再以“继续找新结果”为主，而应改成：
+- 固定主文故事
+- 补最小行为与稳健性证据
+- 再决定是否做网络层扩展
 
-- 这组结果**不等于矛盾**。
-- 行为上的“记得更好”不要求“pair members 在神经上更相似”。
-- 更贴切的解释是：`yy` 学习成功后，并不是简单地把两个词的表征“拉近”，而是让它们进入一个**更精细、更可区分、干扰更小**的关系结构。
-- 因此，当前主线更接近：
-  - `representational differentiation`
-  - `learning-specific reorganization`
-  - `reduced interference / finer-grained relational coding`
+---
 
-### 1.3 为什么这在理论上说得通
+## 二、当前主故事
 
-- 若学习目标是建立更稳定、可检索、少混淆的关系，系统可能会把相关项目的表征拉开，而不是机械融合。
-- `yy` 可能依赖更高阶的语义重组：学习后形成的是“更结构化的关系编码”，而不是“两词越来越像”。
-- baseline 没有同步下降，使得“纯重测/熟悉化/噪声”解释变弱。
+当前论文主故事固定为：
 
-## 2. 可直接支持当前解释的文献线索
+1. 相比空间联结学习，隐喻联结学习引发更强的学习后表征重组。
+2. 这种重组在当前数据中主要表现为 `yy` 的 pair similarity 从 pre 到 post 更明显下降。
+3. 这种变化不支持简单的 pair convergence，更支持：
+   - `pair-based differentiation`
+   - `semantic reweighting`
+4. 记忆强度模型 `M7_memory` 当前不是主导解释。
+5. QC 结果提示 motion/QC 可能影响效应幅度，但不足以把主结果解释成整体测量崩坏。
 
-### 2.1 支持“更好记忆可以伴随神经分化”的论文
+写作上应避免：
+- “学习后同 pair 更像”
+- “结果证明隐喻学习失败所以没有收敛”
+- “已经完全排除所有质量解释”
+- “literature` 层 `delta_rho_lmm` 已经给出强裁决”
 
-- Favila, Chanales, & Kuhl (2016, *Nature Communications*)
-  - 学习可使相似事件的表征拉开，帮助降低干扰。
-  - 链接: <https://www.nature.com/articles/ncomms11066>
-- Hulbert & Norman (2015, *Cerebral Cortex*)
-  - neural differentiation 与更好的 competing-memory recall 相关。
-  - 链接: <https://academic.oup.com/cercor/article/25/10/3994/394658>
-- Schlichting, Mumford, & Preston (2015, *Nature Communications*)
-  - 学习后的表征变化既可能表现为 integration，也可能表现为 separation，方向取决于任务需求。
-  - 链接: <https://www.nature.com/articles/ncomms8151>
-- Sun et al. (2026, *Communications Biology*)
-  - 海马环路中 differentiation 与 integration 可以共存，不同学习内容可能偏向不同路径。
-  - 本地摘要位置: [隐喻与创造力相关论文整理.md](E:/PythonAnalysis/metaphoric/final_version/result_pdf/隐喻与创造力相关论文整理.md:178)
+---
 
-### 2.2 一个需要注意但不冲突的对照文献
+## 三、工作优先级
 
-- Xue et al. (2010, *Science*)
-  - 更好的记忆与更高的 repetition-related pattern similarity 有关。
-  - 但它主要讨论的是**同一项目 across repetitions 的稳定性**，不是这里的“同一 pair 内两个不同词是否更像”。
-  - 因此它和当前结果可以并存：item-level stability 增强，同时 between-item pair similarity 下降。
+## P0：现在立刻做
 
-## 3. 当前论文写作上的推荐口径
+- [x] 固定论文主文口径
+  - 把主现象固定写成：`yy` 学习后出现更强的 pre->post similarity 下降
+  - 把机制解释固定写成：`pair-based differentiation + semantic reweighting`
+  - 明确 `literature` 层 `delta_rho_lmm` 仅为趋势支持，不写成强裁决
+  - 明确 QC 结论写法：reliability 不支持整体测量崩坏，但 motion/QC 可能调制效应幅度
 
-- 不要把当前结果写成“学习失败，所以没收敛”。
-- 更推荐的表述：
-  - `yy` 行为记忆更好，但这种学习收益并未表现为 pair members 的简单神经收敛；
-  - 相反，它表现为更明显的 post-learning neural differentiation；
-  - 该模式更符合 learning-specific representational reorganization，可能反映更精细的关系编码和更低的干扰。
+- [x] 细化行为分析
+  - 目标不是增加很多行为表，而是把神经主结果和学习收益连接起来
+  - 先固定 1 个主行为指标：`memory`
+  - 再固定 1 个补充指标：`log_rt_correct`
+  - 避免同时铺开太多行为指标
+  - 统一使用 `behavior_analysis/behavior_refined.py`
+  - 输出重点：
+    - `subject_summary_wide.tsv`
+    - `behavior_primary_diff_yy_minus_kj`
+    - `rt_correct_diff_yy_minus_kj`
 
-### 3.1 暂时不要过度下结论
+- [x] 做一个最小脑-行为主分析
+  - 只固定 1 个行为指标和 1 个神经指标
+  - 优先检验：更强的 `yy` 去相似化是否预测更好的学习/记忆表现
+  - 优先从主 ROI 或文献 ROI 的核心指标出发，不一开始就全铺开
 
-- 目前可以说“更支持 differentiation / reorganization”。
-- 暂时不要直接下结论说“已经证明 hippocampal-style pattern separation”。
-- 原因：
-  - 目前主要结果 ROI 多在语义/视觉-顶叶/内侧颞叶网络，不完全等于经典海马分离框架；
-  - 更稳妥的写法是“reduced similarity / differentiation consistent with reduced interference or finer-grained relational coding”。
+## P1：主文加固
 
-## 4. 下一步重点问题：空间 ROI 会不会对 `kj` 显示更强前后分化？
+- [x] 做 trial 数 / 体素数稳健性分析
+  - 对 `yy / kj / baseline` 做等量重采样或控制 trial 数差异
+  - 检查 `n_voxels` 在 pre/post 是否系统偏向某条件或某 ROI
+  - 形成可放 SI 的一键复现结果
 
-### 4.1 为什么这一步值得做
+- [x] 视精力补一层 `atlas_robustness`
+  - 不重写主故事
+  - 只回答：主结论是否依赖当前 ROI 定义
 
-- 现在的主 ROI / 论文 ROI 结果说明：`yy` 的分化是稳定的，但 `kj` 不稳定。
-- 这有两种可能：
-  1. `kj` 本来就不会产生和 `yy` 同等级别的表征重组。
-  2. 现在使用的 ROI 更偏“隐喻/语义主线”，还没有充分击中真正的**空间表征网络**。
-- 因此，单独建立一套“空间相关 literature ROI”，再测试 `kj` 在这些 ROI 中是否出现显著 `pre -> post` similarity 下降，是非常必要的控制分析。
+- [x] 把空间 ROI 的负结果写进讨论定稿
+  - 明确：即使在经典空间网络中，`kj` 也未表现出稳定的 pre/post 去相似化
+  - 用来支持：`yy` 的效应不是 ROI 选择偏差造成
 
-### 4.2 这个分析想回答什么
+- [x] 固定“激活-表征解耦”图
+  - 用来呈现：学习期激活更强，不等于学习后表征重塑更强
+  - 这会是主文里很有价值的一张整合图
 
-- 不是重复问“`yy` 有没有效应”。
-- 而是问：
-  - 在经典空间/场景/导航网络中，`kj` 是否显示出更明显的学习后分化？
-  - 如果显示，则说明当前 `kj` 的弱效应可能是 ROI 选取问题。
-  - 如果仍不显示，则更支持“本实验中隐喻学习比空间学习更强烈地改变表征几何”这一主结论。
+- [x] 补齐主文关键图示
+  - 目标不是把所有结果都画出来，而是固定 4-5 张真正承载故事的主图
+  - 当前建议的主文图顺序：
+    - Figure 1：行为结果图
+      - `YY` vs `KJ` 的 `memory`
+      - `YY` vs `KJ` 的 `log_rt_correct`
+      - 适合用 paired dot/line + mean/CI
+    - Figure 2：Step 5C 主结果图
+      - 主功能 ROI 的 `Pre/Post × condition`
+      - 必要时配一个 pooled summary 或 family summary
+      - 这是最核心的一张 RSA 现象图
+    - Figure 3：Model-RSA 机制图
+      - `main_functional + literature` 的关键 ROI × model 结果
+      - 优先突出 `M2/M8` 与 `M3`
+      - 更适合热图或点图，而不是铺满所有表格
+    - Figure 4：四层 ROI 稳健性图
+      - `main_functional / literature / literature_spatial / atlas_robustness`
+      - 用来回答：主结论不依赖 ROI 定义
+    - Figure 5：激活-表征解耦图
+      - 呈现学习期激活与学习后表征重塑并非同一件事
+  - 当前不建议进主文的图：
+    - QC / reliability 全套图
+    - trial/voxel 平衡性全套图
+    - 脑-行为阴性相关大图
+  - 这些更适合做补充材料（SI）
 
-## 5. 空间相关 ROI 的候选清单
+## P2：可以做，但不抢主线
 
-### 5.1 一级优先：场景/空间网络核心 ROI
+- [ ] RD / GPS 作为补充几何证据
+  - 只在主文主线稳定后再推进
+  - 作为补充而不是替代当前 RSA/Model-RSA 主结果
 
-- 双侧 posterior parahippocampal gyrus / PPA
-  - 理由：场景、地点、环境布局表征核心区域。
-- retrosplenial cortex / medial parietal cortex
-  - 实操上可先用 `Precuneus/Retrosplenial` 邻近 atlas ROI 近似。
-  - 理由：场景-导航转换、环境定位、空间参照。
-- occipital place area / lateral occipital superior division
-  - 理由：局部场景边界、可通行空间、视觉场景结构。
+- [ ] 偏侧化 / 熟悉度梯度
+  - 用于和经典隐喻文献对话
+  - 适合主故事已经写稳之后再上
 
-### 5.2 二级优先：与空间意象/场景编码相关的扩展 ROI
+- [ ] 补充材料图（SI）整理
+  - QC / reliability
+  - trial / voxel / atlas robustness
+  - brain-behavior null result
+  - 目标是支持主结论，而不是在主文里分散注意力
 
-- bilateral precuneus
-  - 本地文献摘要和当前结果都已提示它与空间意象/情境表征相关。
-- posterior fusiform / scene-sensitive ventral visual cortex
-  - 可用于检验视觉场景表征是否参与 `kj` 学习。
-- hippocampus / posterior hippocampal formation
-  - 如果 atlas 支持且 mask 稳定，可作为补充探索 ROI。
+## P3：下一阶段扩展
 
-### 5.3 结合当前库，最容易先落地的一版
+- [ ] 脑网络分析
+  - 可考虑：
+    - gPPI
+    - beta-series connectivity
+    - effective connectivity
+  - 这条线有理论价值，但当前不应抢主线
+  - 更适合作为主结果稳定后的机制扩展
 
-- 可以优先从你现有 ROI 库或 atlas 中抽这些 ROI 做一版 pilot：
-  - `atlas_R_parahippocampal`
-  - `atlas_L_precuneus`
-  - `atlas_R_precuneus`
-  - `atlas_L_fusiform`
-  - 当前 `main_functional` 里的
-    - posterior fusiform
-    - bilateral precuneus
-    - posterior parahippocampal
-    - lateral occipital
-- 这一版的价值是：
-  - 不用先大改 pipeline；
-  - 可以快速判断 `kj` 是否在“更空间导向”的 ROI 中开始出现稳定前后变化。
+- [ ] dynamics / mediation
+  - dynamics
+  - mediation
+  - 必须明确探索性声明与多重比较策略
 
-## 6. 空间 ROI 文献整理时优先关注的论文方向
+---
 
-### 6.1 已在本地摘要中出现、可直接利用的线索
+## 四、老师新建议的处理原则
 
-- Beaty et al. (2017)
-  - 文档里提到楔前叶、右海马旁回、右 IPS 等与隐喻生成相关，但这些区域本身也可作为空间/意象相关节点的文献入口。
-  - 位置: [隐喻与创造力相关论文整理.md](E:/PythonAnalysis/metaphoric/final_version/result_pdf/隐喻与创造力相关论文整理.md:40)
-- Sun et al. (2026)
-  - 提供内侧颞叶与表征重组的概念支持，尤其适合解释后海马旁回相关结果。
-  - 位置: [隐喻与创造力相关论文整理.md](E:/PythonAnalysis/metaphoric/final_version/result_pdf/隐喻与创造力相关论文整理.md:206)
+### 1. 细化行为分析
 
-### 6.2 还需要补充的经典空间 ROI 文献
+结论：有必要，而且适合现在做。
 
-- PPA / parahippocampal place area
-- RSC / retrosplenial cortex
-- OPA / occipital place area
-- precuneus 与 spatial imagery / navigation
-- hippocampus 与 relational spatial learning
+原因：
+- 当前神经主结果已经清楚
+- 行为层如果只停在“`yy` 记得更好”，证据链会偏短
+- 行为细化最能帮助回答：神经上的分化增强，到底对应哪一种学习收益
 
-## 7. 建议的分析设计
+执行原则：
+- 少而精
+- 先主指标，再补充指标
+- 优先做脑-行为耦合，而不是只堆更多行为表
 
-### 7.1 新建一个单独的 ROI 集
+### 2. 扩展脑网络分析
 
-- 名称建议：`literature_spatial`
-- 不要把它和当前 `literature` 混在一起。
-- 原因：
-  - 当前 `literature` 是“隐喻/语义主线 ROI”；
-  - 新分析要回答的是“空间网络是否更支持 `kj` 的学习后分化”，逻辑上应独立成套。
+结论：有价值，但不适合现在立刻升成主线。
 
-### 7.2 最重要的统计问题
+原因：
+- 网络分析和当前理论是匹配的
+- 但它的方法自由度更高，也更容易把叙事带散
+- 当前阶段应先把主终点、主机制和脑-行为证据链固定好
 
-- 先跑三条件版本：
-  - `similarity ~ condition * time + (1|subject) + (1|item)`
-- 重点看两类效应：
-  - `C(condition)[T.Spatial]:C(time)[T.Pre]`
-  - `C(condition)[T.Metaphor]:C(time)[T.Pre]`
-- 解释时始终以 `baseline` 为参照，不要只看 `yy vs kj`。
+执行原则：
+- 作为下一阶段机制扩展
+- 不作为现在最优先任务
+- 只有在主线写稳后再推进
 
-### 7.3 预期会出现的三种结果
+---
 
-- 结果 A：空间 ROI 中 `kj` 显著下降，且强于 baseline
-  - 解释：`kj` 的学习效应存在，但需要在更合适的空间网络 ROI 中才能看见。
-- 结果 B：空间 ROI 中 `kj` 仍不显著，而 `yy` 继续显著
-  - 解释：隐喻学习确实比空间学习更强烈地改变表征几何，这是更强的主结论。
-- 结果 C：`kj` 和 `yy` 在不同网络中都显著，但落点不同
-  - 解释：两类学习都能重塑表征，但依赖不同神经系统，形成“语义网络 vs 空间网络”的双重 dissociation。
+## 五、建议执行顺序
 
-## 8. 操作层 TODO
+1. 先固定论文故事、结果图和讨论口径
+2. 细化行为分析，并做一个最小脑-行为主分析
+3. 补 trial/voxel 与 atlas 稳健性
+4. 固定“激活-表征解耦”图
+5. 最后再决定是否上 RD/GPS、偏侧化、熟悉度梯度
+6. 脑网络分析放到下一阶段
 
-本节改为“按优先级排序的可执行清单”，避免 TODO 混在长叙事里难以执行。
+---
 
-### P0（核心阻断项：不做会影响主结论可信度/机制分析无法落地）
+## 六、当前不建议优先推进
 
-- [ ] 记录并写清“反驳头动/SNR/测量变差”的最小证据包（用于主文或 SI）：
-  - 提取每位被试 pre/post 的 motion/QC 指标（例如 mean FD、DVARS 或 motion_outlier 比例、scrub 后保留比例）。
-  - 检验 `Δsimilarity(yy)` 是否被这些 QC 指标解释（相关/回归控制）；并同时报告 `kj` 与 `baseline` 的对应结果作参照。
-  - 做至少一个 reliability 检验：pre 用 run1 vs run2、post 用 run5 vs run6 的 split-half / run-wise 稳定性，排除“post 更不可靠导致 yy similarity 下降”的替代解释。
-- [ ] 解决“真实词条映射缺失导致 Model-RSA 的 word_label 当前不可用”的核心问题：
-  - 找到真实词条对应的文件/表（word_id -> real_word 或 unique_label -> real_word）。
-  - 统一落地到一个可追溯的输入（推荐：更新/新增 `stimuli_template.csv` 列，或新增一张 `stimuli_word_mapping.tsv` 并在文档里写清优先级）。
-  - 更新文档：明确当前 `word_label` 字段到底是 unique_label 还是真实词条，避免 M3/M7 的概念错位。
-  - 跑通 Model-RSA 的最小链路：`build_stimulus_embeddings.py`（M3）与 `build_memory_strength_table.py`（M7）都基于“真实词条”一致取值。
-- [x] baseline 口径锁死为“模板固定伪配对（pair_id 两行成对）”，并保持文档与实现一致（`readme_detail.md` 已更新）。
-
-### P1（主线增强项：提升顶刊抗审稿能力/封堵替代解释）
-
-- [ ] 把当前主故事写作口径固定为：行为优势 + `yy` pre→post similarity 更明显下降并不矛盾，主解释为 differentiation / reorganization（避免写成“学习失败所以没收敛”）。
-- [ ] 做 trial 数/体素数稳健性（建议放 SI，但最好能一键复现）：
-  - 对 yy/kj/baseline 做等量重采样（或在分析中控制每条件 trial 数差异），验证主效应方向稳定。
-  - 检查 `n_voxels` 在 pre/post 的变化是否系统偏向某条件/某 ROI；必要时作为敏感性分析报告。
-- [ ] 单独整理“空间相关 ROI”文献清单（至少覆盖 PPA、RSC/precuneus、OPA、hippocampus），用于新 ROI 集的可辩护性。
-- [ ] 新建 `literature_spatial` ROI 集（独立成套，不混入当前 `literature`），用于检验 `kj` 是否在经典空间网络中出现更明显的学习后变化。
-- [ ] 先用现有 atlas/main 的 spatial candidate ROI 做 pilot（快速判断 `kj` 是否在更空间导向 ROI 中开始出现稳定 pre/post 变化），再决定是否扩展完整 literature_spatial。
-- [ ] 对新 ROI 集运行 `run_rsa_optimized.py` + `rsa_lmm.py`，重点看 `Spatial × Pre` 是否显著；把结果按你在本文件 7.3 的 A/B/C 三种情形写成可直接放论文的结论句模板。
-
-### P2（扩展/加分项：主线稳定后再做）
-
-- [ ] 学习阶段 dynamics：窗口化 RD/GPS（必要时加 MVPA），回答“分化增强何时形成”（更适合冲 NN/Neuron）。
-- [ ] gPPI / effective connectivity / mediation：只在主线稳定且理论路径清晰后做，作为机制补充（明确探索性声明与多重比较策略）。
-
-## 9. 我下一步最推荐先做什么
-
-- 第一优先：先确定一版最小可跑的“空间 ROI 候选集”。
-- 推荐从下面 4 个开始做 pilot：
-- 推荐从下面 4 个开始做 pilot：
-  - posterior parahippocampal
-  - bilateral precuneus
-  - lateral occipital / OPA 对应区
-  - posterior fusiform
-- 如果 pilot 已经看到 `kj` 明显下降，再去扩展更完整的 literature spatial ROI 集。
-- 如果 pilot 没看到，再决定是否需要加入 hippocampus / retrosplenial 等更专门的 ROI。
-
-## 10. 执行顺序（建议）
-
-1. 先做 P0 的 motion/QC + reliability：把“测量变差”的替代解释尽早封堵，否则后续所有机制解释都会被质疑。
-2. 再补齐真实词条映射：让 Model-RSA 的 M3/M7 具备语义有效性与可复现性。
-3. 然后推进 P1 的 literature_spatial：决定 `kj` 的弱效应是“ROI没击中”还是“机制上确实更弱”。
+- [ ] 不优先做新的大规模全脑探索
+- [ ] 不优先再扩很多新 ROI 集
+- [ ] 不优先把 connectivity / mediation 抬成当前主结果
+- [ ] 不优先同时铺开很多行为指标和很多神经指标

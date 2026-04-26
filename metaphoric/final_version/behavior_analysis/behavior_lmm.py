@@ -75,6 +75,19 @@ def get_sub_id_from_name(path: str | Path) -> str:
     return Path(path).stem
 
 
+def normalize_subject_id(value: object) -> str:
+    text = str(value).strip()
+    if not text:
+        return text
+    match = re.fullmatch(r"sub[-_]?(\d+)", text, flags=re.IGNORECASE)
+    if match:
+        return f"sub-{match.group(1).zfill(2)}"
+    if text.isdigit():
+        return f"sub-{text.zfill(2)}"
+    fallback = get_sub_id_from_name(text)
+    return fallback or text
+
+
 def collect_paths(data_dir: Path, pattern: str) -> list[Path]:
     paths = sorted(Path(p) for p in glob.glob(str(data_dir / "**" / pattern), recursive=True))
     if not paths:
@@ -111,7 +124,7 @@ def prepare_trials(paths: list[Path]) -> pd.DataFrame:
             continue
 
         sub_id = (
-            str(frame["subject"].iloc[0]).strip()
+            normalize_subject_id(frame["subject"].iloc[0])
             if "subject" in frame.columns and frame["subject"].notna().any()
             else get_sub_id_from_name(path)
         )
