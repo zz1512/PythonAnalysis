@@ -45,6 +45,15 @@ import pandas as pd
 from scipy import stats
 
 
+M7_MODEL_FILE_VARIANTS: dict[str, str] = {
+    "M7_memory": "binary",
+    "M7_binary": "binary",
+    "M7_continuous_confidence": "continuous_confidence",
+    "M7_learning_weighted": "learning_weighted",
+    "M7_irt": "irt",
+}
+
+
 def _final_root() -> Path:
     current = Path(__file__).resolve()
     for parent in [current.parent, *current.parents]:
@@ -248,13 +257,32 @@ def _partial_control_names(names: list[str], target_name: str) -> tuple[list[str
 # ---------- 主流程 ----------
 
 
-def _load_memory_table(memory_dir: Path | None, subject: str) -> pd.DataFrame | None:
+def _normalize_enabled_models(model_names: list[str] | None) -> list[str]:
+    names = list(model_names or [])
+    normalized: list[str] = []
+    for name in names:
+        canonical = "M7_binary" if name == "M7_memory" else name
+        if canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
+
+def _load_memory_table(memory_dir: Path | None, subject: str, variant: str = "binary") -> pd.DataFrame | None:
     if memory_dir is None:
         return None
-    candidate = memory_dir / f"memory_strength_{subject}.tsv"
-    if not candidate.exists():
-        return None
-    return pd.read_csv(candidate, sep="\t")
+    candidates: list[Path] = []
+    if variant == "binary":
+        candidates.extend([
+            memory_dir / f"memory_strength_binary_{subject}.tsv",
+            memory_dir / f"memory_strength_{subject}.tsv",
+        ])
+    else:
+        candidates.append(memory_dir / f"memory_strength_{variant}_{subject}.tsv")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return pd.read_csv(candidate, sep="\t")
+    return None
 
 
 def _default_output_dir() -> Path:
@@ -278,6 +306,75 @@ def _default_stimuli_template() -> Path | None:
 def _default_pattern_root() -> Path:
     from rsa_analysis.rsa_config import BASE_DIR  # type: ignore
     return Path(BASE_DIR) / "pattern_root"
+
+
+def _slug(text: object) -> str:
+    out = str(text).strip()
+    for src, dst in [
+        (" ", "_"),
+        ("/", "_"),
+        ("\\", "_"),
+        (":", "_"),
+        ("*", "_"),
+        ("?", "_"),
+        ('"', "_"),
+        ("<", "_"),
+        (">", "_"),
+        ("|", "_"),
+    ]:
+        out = out.replace(src, dst)
+    return out or "unknown"
+
+
+def _save_rdm_audit(
+    audit_root: Path,
+    *,
+    subject: str,
+    roi_name: str,
+    time: str,
+    condition_group: str,
+    metadata: pd.DataFrame,
+    neural: np.ndarray,
+    model_vectors: dict[str, np.ndarray],
+    model_skip: dict[str, str],
+) -> None:
+    cell_dir = ensure_dir(audit_root / subject / _slug(roi_name))
+    cell_stem = f"{_slug(time)}_{_slug(condition_group)}"
+
+    metadata_out = metadata.reset_index(drop=True).copy()
+    if "trial_index" in metadata_out.columns:
+        metadata_out = metadata_out.drop(columns=["trial_index"])
+    metadata_out.insert(0, "trial_index", np.arange(len(metadata_out), dtype=int))
+    metadata_path = cell_dir / f"{cell_stem}_metadata.tsv"
+    write_table(metadata_out, metadata_path)
+
+    pair_i, pair_j = np.triu_indices(len(metadata_out), k=1)
+    npz_payload: dict[str, np.ndarray] = {
+        "pair_i": pair_i.astype(np.int32),
+        "pair_j": pair_j.astype(np.int32),
+        "neural_rdm": np.asarray(neural, dtype=float),
+    }
+    for model_name, model_vec in model_vectors.items():
+        npz_payload[model_name] = np.asarray(model_vec, dtype=float)
+
+    rdm_path = cell_dir / f"{cell_stem}_rdms.npz"
+    np.savez_compressed(rdm_path, **npz_payload)
+
+    save_json(
+        {
+            "subject": subject,
+            "roi": roi_name,
+            "time": time,
+            "condition_group": condition_group,
+            "n_trials": int(len(metadata_out)),
+            "n_pairs": int(len(pair_i)),
+            "metadata_file": str(metadata_path),
+            "rdm_file": str(rdm_path),
+            "model_names": sorted(model_vectors.keys()),
+            "skipped_models": model_skip,
+        },
+        cell_dir / f"{cell_stem}_audit_manifest.json",
+    )
 
 
 def _resolve_roi_masks(roi_dir: Path | None) -> dict[str, Path]:
@@ -397,13 +494,25 @@ def main() -> None:
     parser.add_argument("--embedding-file", type=Path, default=None,
                         help="stimulus_embeddings TSV for M3 (cosine distance).")
     parser.add_argument("--memory-strength-dir", type=Path, default=None,
-                        help="Directory with memory_strength_{subject}.tsv for M7.")
+                        help="Directory with per-subject M7 tables, e.g. "
+                             "memory_strength_binary_{subject}.tsv and "
+                             "memory_strength_continuous_confidence_{subject}.tsv.")
     parser.add_argument("--memory-score-col", default="recall_score")
     parser.add_argument("--numeric-model-cols", nargs="*", default=[])
     parser.add_argument("--enabled-models", nargs="*",
-                        default=["M1_condition", "M2_pair", "M3_embedding", "M7_memory", "M8_reverse_pair"],
+                        default=[
+                            "M1_condition",
+                            "M2_pair",
+                            "M3_embedding",
+                            "M7_binary",
+                            "M7_continuous_confidence",
+                            "M8_reverse_pair",
+                        ],
                         help="Subset of models to include: "
-                             "M1_condition M2_pair M3_embedding M7_memory M8_reverse_pair")
+                             "M1_condition M2_pair M3_embedding "
+                             "M7_binary M7_continuous_confidence "
+                             "M7_learning_weighted M7_irt M8_reverse_pair "
+                             "(legacy alias: M7_memory -> M7_binary)")
     # Alias: some docs may refer to `--models`
     parser.add_argument("--models", dest="enabled_models", nargs="*",
                         help="Alias of --enabled-models.")
@@ -412,10 +521,22 @@ def main() -> None:
     parser.add_argument("--collinearity-threshold", type=float, default=0.7)
     parser.add_argument("--allow-missing-models", action="store_true",
                         help="Allow missing prerequisites to be recorded as skip_reason instead of failing fast.")
+    parser.add_argument("--save-rdm-audit", action="store_true", default=True,
+                        help="Save per-cell metadata and compressed neural/model RDM vectors for audit (default: on).")
+    parser.add_argument("--no-save-rdm-audit", dest="save_rdm_audit", action="store_false",
+                        help="Disable per-cell model-RDM audit export.")
+    parser.add_argument("--rdm-audit-dir", type=Path, default=None,
+                        help="Optional directory for model-RDM audit exports. Default: <output_dir>/model_rdm_audit")
     args = parser.parse_args()
+    args.enabled_models = _normalize_enabled_models(args.enabled_models)
 
     args.pattern_root = args.pattern_root or _default_pattern_root()
     output_dir = ensure_dir(args.output_dir if args.output_dir is not None else _default_output_dir())
+    audit_root = None
+    if args.save_rdm_audit:
+        audit_root = ensure_dir(
+            args.rdm_audit_dir if args.rdm_audit_dir is not None else (output_dir / "model_rdm_audit")
+        )
 
     embedding_table: pd.DataFrame | None = None
     if args.embedding_file is not None:
@@ -438,6 +559,7 @@ def main() -> None:
 
     subject_dirs = sorted([p for p in args.pattern_root.iterdir()
                            if p.is_dir() and p.name.startswith("sub-")])
+    memory_table_cache: dict[tuple[str, str], pd.DataFrame | None] = {}
 
     for roi_name, roi_path in roi_masks.items():
         for subject_dir in subject_dirs:
@@ -557,19 +679,30 @@ def main() -> None:
                             except Exception as exc:
                                 _handle_model_failure("M3_embedding", f"error: {exc}")
 
-                    if "M7_memory" in args.enabled_models:
-                        mem_table = _load_memory_table(args.memory_strength_dir, subject)
-                        if mem_table is None:
-                            _handle_model_failure("M7_memory", "missing_memory_table", allow_skip=True)
-                        elif args.word_col not in metadata.columns:
-                            _handle_model_failure("M7_memory", "missing_word_label")
-                        else:
-                            try:
-                                model_vectors["M7_memory"] = model_from_subject_numeric(
-                                    metadata, mem_table, args.memory_score_col, args.word_col
+                    requested_m7_models = [
+                        model_name for model_name in args.enabled_models
+                        if model_name in M7_MODEL_FILE_VARIANTS
+                    ]
+                    if requested_m7_models:
+                        for model_name in requested_m7_models:
+                            variant = M7_MODEL_FILE_VARIANTS[model_name]
+                            cache_key = (subject, variant)
+                            if cache_key not in memory_table_cache:
+                                memory_table_cache[cache_key] = _load_memory_table(
+                                    args.memory_strength_dir, subject, variant
                                 )
-                            except Exception as exc:
-                                _handle_model_failure("M7_memory", f"error: {exc}")
+                            mem_table = memory_table_cache[cache_key]
+                            if mem_table is None:
+                                _handle_model_failure(model_name, f"missing_memory_table:{variant}", allow_skip=True)
+                            elif args.word_col not in metadata.columns:
+                                _handle_model_failure(model_name, "missing_word_label")
+                            else:
+                                try:
+                                    model_vectors[model_name] = model_from_subject_numeric(
+                                        metadata, mem_table, args.memory_score_col, args.word_col
+                                    )
+                                except Exception as exc:
+                                    _handle_model_failure(model_name, f"error: {exc}")
 
                     if "M8_reverse_pair" in args.enabled_models:
                         if baseline_group:
@@ -594,6 +727,19 @@ def main() -> None:
                     if not model_vectors and not model_skip:
                         raise RuntimeError(
                             f"No model vectors were built for {subject} {roi_name} {time} {condition_group}."
+                        )
+
+                    if audit_root is not None:
+                        _save_rdm_audit(
+                            audit_root,
+                            subject=subject,
+                            roi_name=roi_name,
+                            time=time,
+                            condition_group=condition_group,
+                            metadata=metadata,
+                            neural=neural,
+                            model_vectors=model_vectors,
+                            model_skip=model_skip,
                         )
 
                     for model_name, model_vector in model_vectors.items():
@@ -674,6 +820,15 @@ def main() -> None:
 
     if summaries:
         write_table(pd.DataFrame(summaries), output_dir / "model_rdm_group_summary.tsv")
+
+    if audit_root is not None:
+        save_json(
+            {
+                "audit_root": str(audit_root),
+                "note": "Each subject/roi/time/condition cell stores trial-order metadata and compressed RDM vectors.",
+            },
+            output_dir / "model_rdm_audit_manifest.json",
+        )
 
     print(f"[model_rdm_comparison] wrote results to {output_dir}")
 

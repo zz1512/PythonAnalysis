@@ -1,4 +1,4 @@
-## 1、行为结果总结：
+﻿## 1、行为结果总结：
 
 当前行为部分已采用 refined 版本结果作为正式口径。主行为终点是 run-7 的 `memory`，补充终点是正确反应 trial 上的 `log_rt_correct`。在 27 名被试中，`YY` 条件下的平均正确率为 `0.680`，高于 `KJ` 条件的 `0.588`；trial-level 混合模型显示这一差异显著，`b = 0.092`, `SE = 0.014`, `z = 6.43`, `p < .001`, 95% CI `[0.064, 0.120]`。因此，行为主结果可以稳定写成：**被试在隐喻联结条件下的记忆表现显著优于空间联结条件。**
 
@@ -6,13 +6,17 @@
 
 从整条证据链的角度看，这一点非常重要。当前行为层最稳的结论不是单纯的“`yy` 记得更好”，而是：`yy` 在 run-7 的最终测验中表现出更优的学习结果；这种优势既体现在准确率上，也体现在正确反应的提取效率上。因此，后续如果要把神经结果与行为结果放在一起解释，更合适的写法是：**隐喻学习在组水平上同时带来了更好的行为表现和更强的学习后表征重组。**
 
-### 1.1 最小脑-行为分析
+### 1.1 被试内 item-level 脑-行为分析
 
-在脑-行为关联部分，我们首先只做了一个最小、最克制的 subject-level 分析，避免一开始同时铺开太多 ROI、太多神经指标和太多行为指标。主行为指标定义为 `behavior_primary_diff_yy_minus_kj = accuracy_YY - accuracy_KJ`，表示某位被试在行为上对 `yy` 的优势有多强；主神经指标定义为 `main_functional_primary_diff_yy_minus_kj = (pre_yy - post_yy) - (pre_kj - post_kj)`，表示在主功能 ROI 中，某位被试的 `yy` 去相似化是否比 `kj` 更强。
+在脑-行为关联部分，我们进一步把旧的 subject-level 差值相关升级成了真正的 **within-subject item-level** 分析。具体做法是：先把 refined run-7 行为 trial 通过 `stimuli_template.csv` 映射到 `pair_id`，再将每个行为 item 对应到同一 `subject × ROI × condition × pair_id` 下的 neural `delta_similarity_post_minus_pre = post - pre`。随后，在每个 `ROI × condition` 单元内，把该神经指标拆成两个部分：一部分是同一被试内部的 item-level 偏离量（within-subject component），另一部分是该被试在该 ROI/条件下的平均值（between-subject component）。主模型使用 trial-level `GEE binomial` 拟合 `memory ~ delta_similarity_within + delta_similarity_subject_mean`，从而直接检验：**在同一位被试内部，哪些词对如果表现出更强的神经变化，是否更容易在最终测验中被记住。**
 
-结果显示，这一最小脑-行为相关并未形成稳定显著耦合。主分析中，`main_functional_primary_diff_yy_minus_kj` 与 `behavior_primary_diff_yy_minus_kj` 的相关较弱且不显著，Pearson `r = -0.163`, `p = .417`，Spearman `rho = -0.144`, `p = .474`。把神经指标改成 `yy` 相对 baseline 的差值后，结果仍不显著（Pearson `r = -0.200`, `p = .316`）。在文献 ROI 层，`literature_primary_diff_yy_minus_kj` 与行为差值也未见稳定相关（Pearson `r = -0.252`, `p = .205`）。同样，主功能 ROI 的神经差值与正确反应时差值之间也没有显著关系（Pearson `r = 0.121`, `p = .547`）。
+这一新版分析的联表质量非常高。27 名被试的 refined 行为表共提供 `3780` 条 `YY/KJ` trial，映射到主功能与文献 ROI 的 pair-level neural delta 后，共形成 `71820` 条 `subject × roi × word` 级记录，等于每条行为记录都成功接入了 `7 + 12` 个 ROI 的 neural predictor。因此，这一步已经不再受旧版 between-subject 均值相关“样本太粗”的限制。
 
-因此，当前更稳妥的表述是：**行为优势本身成立，神经分化主结果本身也成立，但二者在被试差异层面尚未形成稳定的线性耦合。** 这并不推翻主线，而是说明当前最强的证据仍然来自条件层面的组水平差异，而不是个体差异层面的强相关。换句话说，`yy` 更好学、`yy` 更去相似化，这两件事在组水平上是同向成立的；但“谁分化得更强，谁就一定记得更好”这一更强的个体差异命题，目前并没有得到直接支持。
+结果显示，**item-level 脑-行为耦合并没有形成一个 `yy` 特异、跨 ROI 一致的 memory 准确率主效应。** 在主功能 ROI 中，显著的 within-subject memory slope 主要出现在 `KJ` 条件，而不是 `YY`：右后海马旁回 `b = -0.092, p = .012`，左后梭状回 `b = -0.085, p = .022`。在文献 ROI 中，`KJ` 条件同样给出了更多显著结果，包括左 IFG `b = -0.083, p = .011`、左 precuneus `b = -0.084, p = .045` 和右 temporal pole `b = -0.055, p = .032`；`YY` 条件没有任何 ROI 在 memory 模型中达到传统显著，仅在左 pSTS（`p = .057`）与左 precuneus（`p = .081`）出现趋势。更关键的是，按 ROI 拟合的 `condition × delta_similarity_within` 交互项没有一个达到显著，这意味着当前数据**并不支持“item-level neural differentiation 对 memory 的预测在 `yy` 中显著强于 `kj`”**。
+
+补充的正确 trial RT 分析则呈现出更微妙、也更贴近“提取效率”的模式。由于主神经预测量定义为 `post - pre`，因此若回归系数为正，表示 neural delta 越偏向上升或越少下降，正确反应越慢；反过来说，也意味着**更强的 neural decrease 与更快的正确提取相关**。在这一模型中，`YY` 在若干 ROI 中出现了局部显著耦合：文献 ROI 的左 AG（`b = 0.012, p = .025`）、左 IFG（`b = 0.013, p = .025`）、右 IFG（`b = 0.012, p = .010`）和右 pSTS（`b = 0.015, p = .008`）均显著；主功能 ROI 中右后海马旁回也显著（`b = 0.011, p = .018`）。这说明 item-level neural change 对行为的关系更像是**局部地调制正确提取效率**，而不是统一地决定最终 binary memory 准确率。
+
+因此，当前脑-行为部分最稳妥的更新写法是：**新版 within-subject item-level 分析并没有把结果改写成“`yy` 分化越强，memory 准确率越高”的简单命题。** 它一方面重复了旧版 subject-level 结果的核心边界，即脑-行为关系并不是一个强而直接的 accuracy 耦合；另一方面又比旧版更进一步，表明 neural differentiation 与行为之间并非完全无关，而是更可能在若干局部 ROI 中体现为对**正确提取效率**的调制。这意味着，当前最强的主线仍然是“`yy` 在组水平上更好学、也更去相似化”，而脑-行为耦合则更适合作为一个局部、次级、需要谨慎表述的补充层。 
 
 ## 2、学习阶段全脑 GLM 结果总结（Step 3B: `main_analysis.py`）
 
@@ -118,13 +122,13 @@
 
 这一部分对应 Step 5D 的 pooled Model-RSA 结果。当前 `main_functional` 与 `literature` 两层 ROI 都使用 `analysis-mode=pooled`，因此这里的 neural RDM 是在每个 `subject × ROI × time` 单元内，把 `yy / kj / baseline` 三类 trial 合并后构造的一个 pooled neural RDM；结果表中的 `condition_group=all` 即表示这一 pooled 单元。统计上，`model_rdm_group_summary.tsv` 使用配对 t 检验比较 `post` 与 `pre` 的模型相关系数，其中 `mean_a = post`，`mean_b = pre`。因此，若某模型出现 `post < pre`，表示学习后该模型对神经几何结构的解释力减弱；若 `post > pre`，则表示该模型的解释力增强。
 
-当前正式报告的模型包括：`M1_condition`（条件类别）、`M2_pair`（同 pair 接近）、`M3_embedding`（BERT 预训练语义距离）、`M7_memory`（被试回忆强度差异）和 `M8_reverse_pair`（同 pair 分化探针）。其中，`M2_pair` 与 `M8_reverse_pair` 是互补编码，因此在 `model_collinearity.tsv` 中它们是唯一稳定被标记为 `high` 的模型对；解释时应把二者视为同一条“pair 聚合 vs pair 分化”证据链的镜像，而不是两个相互独立的机制。
+当前正式报告的模型包括：`M1_condition`（条件类别）、`M2_pair`（同 pair 接近）、`M3_embedding`（BERT 预训练语义距离）、`M7_binary`（低分辨率二值记忆强度）、`M7_continuous_confidence`（连续记忆强度：在答对项内部结合 RT 派生速度分量）、以及 `M8_reverse_pair`（同 pair 分化探针）。其中，`M2_pair` 与 `M8_reverse_pair` 是互补编码，因此在 `model_collinearity.tsv` 中它们仍是唯一稳定被标记为 `high` 的模型对；解释时应把二者视为同一条“pair 聚合 vs pair 分化”证据链的镜像，而不是两个相互独立的机制。新的 M7 链路保留了历史二值版，同时增加了连续版，并通过 `model_rdm_audit/` 保存每个 `subject × ROI × time` 单元内的 trial 顺序与模型向量，便于回溯模型构建是否正确。
 
 ### 5.1 主功能 ROI（`main_functional`）结果
 
-`main_functional` 层共 7 个 ROI。`M1_condition`、`M2_pair`、`M3_embedding` 和 `M8_reverse_pair` 均在 392 个 `subject × ROI × time` 单元中全部可估；`M7_memory` 因 `sub-12` 缺少记忆表，仅有 378 个有效单元。总体上，这一层的 Model-RSA 指向两条最清晰的机制信号。第一，在左侧楔前叶 ROI（`func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort`）中，`M2_pair` 从 pre 的 0.0060 下降到 post 的 0.0010，`t(27) = -3.06, p = .0049, dz = -0.58`；与之互补的 `M8_reverse_pair` 从 pre 的 -0.0060 上升到 post 的 -0.0010，`t(27) = 3.06, p = .0049, dz = 0.58`。这说明学习后该 ROI 的表征结构明显偏离了“同 pair 更接近”的组织方式，更符合 pair-based differentiation / reorganization，而不是简单的 pair convergence。第二，在左侧颞极 ROI（`func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort`）中，`M3_embedding` 从 pre 的 0.0132 下降到 post 的 -0.0061，`t(27) = -2.74, p = .0107, dz = -0.52`，提示学习后这里的神经几何不再主要按预训练语义距离组织，而是在原有语义底盘上发生了额外重组。
+`main_functional` 层共 7 个 ROI。`M1_condition`、`M2_pair`、`M3_embedding` 与 `M8_reverse_pair` 均在 392 个 `subject × ROI × time` 单元中全部可估；`M7_binary` 与 `M7_continuous_confidence` 因 `sub-12` 缺少记忆表，均在 378 个单元中有效。总体上，这一层的 Model-RSA 仍然指向两条最清晰的机制信号。第一，在左侧楔前叶 ROI（`func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort`）中，`M2_pair` 从 pre 的 0.0060 下降到 post 的 0.0010，`t(27) = -3.06, p = .0049, dz = -0.58`；与之互补的 `M8_reverse_pair` 从 pre 的 -0.0060 上升到 post 的 -0.0010，`t(27) = 3.06, p = .0049, dz = 0.58`。这说明学习后该 ROI 的表征结构明显偏离了“同 pair 更接近”的组织方式，更符合 pair-based differentiation / reorganization，而不是简单的 pair convergence。第二，在左侧颞极 ROI（`func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort`）中，`M3_embedding` 从 pre 的 0.0132 下降到 post 的 -0.0061，`t(27) = -2.74, p = .0107, dz = -0.52`，提示学习后这里的神经几何不再主要按预训练语义距离组织，而是在原有语义底盘上发生了额外重组。
 
-其余结果大多较弱。左侧另一枚颞极 ROI 的 `M1_condition` 仅边缘显著（post = -0.0011, pre = -0.0049, `p = .0517`），左后楔前叶 ROI 的 `M3_embedding` 也只有边缘效应（post = -0.0007, pre = 0.0151, `p = .0503`）。`M7_memory` 在 7 个主功能 ROI 中没有一个达到显著，说明当前主功能网络的前后重组并不能被简单归结为“记得更好所以几何结构更按回忆强度排列”。偏相关层面，五个模型的平均 partial rho 都接近 0（`M1 = -0.0035`, `M2 = 0.0069`, `M3 = 0.0035`, `M7 = -0.0029`, `M8 = -0.0069`），提示真正稳定的效应目前主要体现在少数关键 ROI，而不是一个全局性的 uniform shift。
+主功能 ROI 中的 M7 结果没有因连续化而发生实质性翻转。`M7_binary` 与 `M7_continuous_confidence` 在 7 个 ROI 中均未达到显著，其中效应最大的仍是后海马旁回二值模型（post = -0.0039, pre = 0.0016, `p = .307`）与外侧枕叶连续模型（post = -0.0074, pre = -0.0045, `p = .485`），但都不足以支持“当前主功能网络的前后重组主要由回忆强度几何驱动”。换句话说，主功能 ROI 的机制主线仍由 `M2/M8` 与 `M3` 决定，而不是由 M7 两个变体主导。
 
 主功能 ROI 的详细数值如下：
 
@@ -133,44 +137,51 @@
 | func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M1_condition | 28.0 | -0.0006 | -0.0021 | 0.71 | 0.485 | 0.13 |
 | func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M2_pair | 28.0 | 0.0053 | 0.0081 | -1.45 | 0.157 | -0.27 |
 | func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M3_embedding | 28.0 | -0.0061 | 0.0132 | -2.74 | 0.011 | -0.52 |
-| func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M7_memory | 27.0 | -0.0028 | -0.0059 | 0.57 | 0.575 | 0.11 |
+| func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M7_binary | 27.0 | -0.0028 | -0.0059 | 0.57 | 0.575 | 0.11 |
+| func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M7_continuous_confidence | 27.0 | -0.0023 | -0.0061 | 0.67 | 0.506 | 0.13 |
 | func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort | M8_reverse_pair | 28.0 | -0.0053 | -0.0081 | 1.45 | 0.157 | 0.27 |
 | func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M1_condition | 28.0 | -0.0011 | -0.0049 | 2.04 | 0.052 | 0.38 |
 | func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M2_pair | 28.0 | 0.0056 | 0.0071 | -0.65 | 0.520 | -0.12 |
 | func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M3_embedding | 28.0 | -0.0074 | 0.0000 | -1.20 | 0.240 | -0.23 |
-| func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M7_memory | 27.0 | -0.0023 | -0.0013 | -0.19 | 0.847 | -0.04 |
+| func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M7_binary | 27.0 | -0.0023 | -0.0013 | -0.19 | 0.847 | -0.04 |
+| func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M7_continuous_confidence | 27.0 | -0.0052 | -0.0035 | -0.34 | 0.740 | -0.06 |
 | func_Metaphor_gt_Spatial_c02_Temporal_Pole_HO_cort | M8_reverse_pair | 28.0 | -0.0056 | -0.0071 | 0.65 | 0.520 | 0.12 |
 | func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M1_condition | 28.0 | -0.0039 | -0.0050 | 0.55 | 0.587 | 0.10 |
 | func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M2_pair | 28.0 | 0.0057 | 0.0078 | -1.04 | 0.306 | -0.20 |
 | func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M3_embedding | 28.0 | -0.0006 | 0.0107 | -1.54 | 0.135 | -0.29 |
-| func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M7_memory | 27.0 | 0.0005 | -0.0047 | 0.87 | 0.391 | 0.17 |
+| func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M7_binary | 27.0 | 0.0005 | -0.0047 | 0.87 | 0.391 | 0.17 |
+| func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M7_continuous_confidence | 27.0 | -0.0008 | -0.0066 | 0.83 | 0.413 | 0.16 |
 | func_Spatial_gt_Metaphor_c01_Temporal_Fusiform_Cortex_posterior_division_HO_cort | M8_reverse_pair | 28.0 | -0.0057 | -0.0078 | 1.04 | 0.306 | 0.20 |
 | func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M1_condition | 28.0 | -0.0024 | -0.0037 | 0.51 | 0.618 | 0.10 |
 | func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M2_pair | 28.0 | 0.0010 | 0.0060 | -3.06 | 0.005 | -0.58 |
 | func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M3_embedding | 28.0 | -0.0008 | 0.0143 | -1.94 | 0.063 | -0.37 |
-| func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M7_memory | 27.0 | -0.0023 | -0.0026 | 0.05 | 0.961 | 0.01 |
+| func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M7_binary | 27.0 | -0.0023 | -0.0026 | 0.05 | 0.961 | 0.01 |
+| func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M7_continuous_confidence | 27.0 | -0.0008 | -0.0030 | 0.35 | 0.731 | 0.07 |
 | func_Spatial_gt_Metaphor_c02_Precuneous_Cortex_HO_cort | M8_reverse_pair | 28.0 | -0.0010 | -0.0060 | 3.06 | 0.005 | 0.58 |
 | func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M1_condition | 28.0 | -0.0030 | -0.0048 | 0.90 | 0.376 | 0.17 |
 | func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M2_pair | 28.0 | 0.0014 | 0.0033 | -1.01 | 0.321 | -0.19 |
 | func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M3_embedding | 28.0 | -0.0007 | 0.0151 | -2.05 | 0.050 | -0.39 |
-| func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M7_memory | 27.0 | 0.0000 | -0.0044 | 0.74 | 0.467 | 0.14 |
+| func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M7_binary | 27.0 | 0.0000 | -0.0044 | 0.74 | 0.467 | 0.14 |
+| func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M7_continuous_confidence | 27.0 | 0.0023 | -0.0019 | 0.66 | 0.514 | 0.13 |
 | func_Spatial_gt_Metaphor_c03_Precuneous_Cortex_HO_cort | M8_reverse_pair | 28.0 | -0.0014 | -0.0033 | 1.01 | 0.321 | 0.19 |
 | func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M1_condition | 28.0 | -0.0043 | -0.0038 | -0.22 | 0.827 | -0.04 |
 | func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M2_pair | 28.0 | 0.0033 | 0.0056 | -0.89 | 0.383 | -0.17 |
 | func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M3_embedding | 28.0 | -0.0012 | 0.0063 | -1.12 | 0.274 | -0.21 |
-| func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M7_memory | 27.0 | -0.0039 | 0.0016 | -1.04 | 0.307 | -0.20 |
+| func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M7_binary | 27.0 | -0.0039 | 0.0016 | -1.04 | 0.307 | -0.20 |
+| func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M7_continuous_confidence | 27.0 | -0.0023 | -0.0018 | -0.10 | 0.920 | -0.02 |
 | func_Spatial_gt_Metaphor_c04_Parahippocampal_Gyrus_posterior_division_HO_cort | M8_reverse_pair | 28.0 | -0.0033 | -0.0056 | 0.89 | 0.383 | 0.17 |
 | func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M1_condition | 28.0 | -0.0020 | -0.0033 | 0.56 | 0.579 | 0.11 |
 | func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M2_pair | 28.0 | 0.0046 | 0.0051 | -0.21 | 0.839 | -0.04 |
 | func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M3_embedding | 28.0 | 0.0059 | 0.0027 | 0.48 | 0.632 | 0.09 |
-| func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M7_memory | 27.0 | -0.0076 | -0.0053 | -0.54 | 0.596 | -0.10 |
+| func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M7_binary | 27.0 | -0.0076 | -0.0053 | -0.54 | 0.596 | -0.10 |
+| func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M7_continuous_confidence | 27.0 | -0.0074 | -0.0045 | -0.71 | 0.485 | -0.14 |
 | func_Spatial_gt_Metaphor_c05_Lateral_Occipital_Cortex_superior_division_HO_cort | M8_reverse_pair | 28.0 | -0.0046 | -0.0051 | 0.21 | 0.839 | 0.04 |
 
 ### 5.2 论文 ROI（`literature`）结果
 
-`literature` 层共 12 个理论 ROI。与 `main_functional` 类似，`M1`、`M2`、`M3` 和 `M8` 均在 672 个 pooled 单元中全部可估；`M7` 因 `sub-12` 缺失回忆表，在 648 个单元中有效。与主功能 ROI 相比，这一层的 Model-RSA 故事更收敛：绝大多数 ROI 和模型都没有表现出强而稳定的 pre-post 改变，唯一明确达到显著的效应出现在左 IFG。具体而言，`lit_L_IFG` 中 `M2_pair` 从 pre 的 0.0098 下降到 post 的 0.0033，`t(27) = -3.47, p = .0018, dz = -0.65`；其镜像模型 `M8_reverse_pair` 从 pre 的 -0.0098 上升到 post 的 -0.0033，`t(27) = 3.47, p = .0018, dz = 0.65`。这与主功能 ROI 左 Precuneous 的结果方向完全一致，说明至少在一个经典语义控制节点（L IFG）中，学习后神经几何同样脱离了“同 pair 更相似”的组织方式，更接近 pair-based differentiation。
+`literature` 层共 12 个理论 ROI。与 `main_functional` 类似，`M1`、`M2`、`M3` 与 `M8` 均在 672 个 pooled 单元中全部可估；`M7_binary` 与 `M7_continuous_confidence` 因 `sub-12` 缺失回忆表，在 648 个单元中有效。与主功能 ROI 相比，这一层的 Model-RSA 故事更收敛，但新版连续 M7 确实带来了一处新的局部信号。首先，左 IFG 仍然是最明确的 pair-based ROI：`M2_pair` 从 pre 的 0.0098 下降到 post 的 0.0033，`t(27) = -3.47, p = .0018, dz = -0.65`；镜像模型 `M8_reverse_pair` 从 pre 的 -0.0098 上升到 post 的 -0.0033，`t(27) = 3.47, p = .0018, dz = 0.65`。这与主功能 ROI 左 Precuneous 的结果方向完全一致，说明在一个经典语义控制节点中，学习后神经几何同样脱离了“同 pair 更相似”的组织方式，更接近 pair-based differentiation。
 
-除左 IFG 外，其余结果大多停留在趋势水平。右 IFG 的 `M2/M8`（`p = .081`）、右 pSTS 的 `M2/M8`（`p = .096`）以及 `R_pSTS` 的 `M1_condition`（`p = .058`）都提示学习后可能存在弱的 pair-structure 衰减或条件结构增强，但这些趋势尚不足以构成正式主结论。与 `main_functional` 不同，这一层并没有再出现一个明确的 `M3_embedding` 减弱 ROI；预训练语义模型在大多数文献 ROI 中前后都较稳定。`M7_memory` 仍然没有在任何文献 ROI 中达到显著，说明回忆强度差异暂时还不是解释 pooled neural geometry 重组的主导变量。偏相关层面，五个模型的平均 partial rho 也都接近 0（`M1 = -0.0030`, `M2 = 0.0093`, `M3 = -0.0005`, `M7 = -0.0025`, `M8 = -0.0093`），说明在控制其他模型后，最稳定保留下来的独立信号仍主要集中在 pair-model 这一条线上。
+其次，连续 M7 在文献 ROI 中第一次出现了一个明确的 ROI 级阳性结果：右 pMTG 的 `M7_continuous_confidence` 从 pre 的 0.0029 下降到 post 的 -0.0069，`t(26) = -2.20, p = .037, dz = -0.42`。对应的二值版 `M7_binary` 仅为趋势（post = -0.0081, pre = 0.0008, `p = .104`），说明把正确项内部的 RT 差异纳入连续记忆强度之后，M7 的灵敏度确实有所提升。除此之外，双侧 AG 的 `M7_continuous_confidence` 也达到边缘显著（`p = .078–.079`），而二值版在这些 ROI 中仍然较弱。因此，新的 M7 结果更适合被解读为：记忆强度几何并非主导全局重组，但在部分后部语义节点，连续记忆强度模型开始提供局部支持。
 
 论文 ROI 的详细数值如下：
 
@@ -179,95 +190,121 @@
 | lit_L_AG | M1_condition | 28.0 | -0.0038 | -0.0025 | -0.62 | 0.541 | -0.12 |
 | lit_L_AG | M2_pair | 28.0 | 0.0045 | 0.0067 | -1.25 | 0.221 | -0.24 |
 | lit_L_AG | M3_embedding | 28.0 | 0.0048 | 0.0010 | 0.54 | 0.596 | 0.10 |
-| lit_L_AG | M7_memory | 27.0 | 0.0010 | -0.0019 | 0.79 | 0.434 | 0.15 |
+| lit_L_AG | M7_binary | 27.0 | 0.0010 | -0.0019 | 0.79 | 0.434 | 0.15 |
+| lit_L_AG | M7_continuous_confidence | 27.0 | 0.0026 | -0.0060 | 1.83 | 0.079 | 0.35 |
 | lit_L_AG | M8_reverse_pair | 28.0 | -0.0045 | -0.0067 | 1.25 | 0.221 | 0.24 |
 | lit_L_IFG | M1_condition | 28.0 | -0.0040 | -0.0039 | -0.06 | 0.953 | -0.01 |
 | lit_L_IFG | M2_pair | 28.0 | 0.0033 | 0.0098 | -3.47 | 0.002 | -0.65 |
 | lit_L_IFG | M3_embedding | 28.0 | 0.0041 | 0.0019 | 0.32 | 0.749 | 0.06 |
-| lit_L_IFG | M7_memory | 27.0 | -0.0036 | -0.0009 | -0.56 | 0.580 | -0.11 |
+| lit_L_IFG | M7_binary | 27.0 | -0.0036 | -0.0009 | -0.56 | 0.580 | -0.11 |
+| lit_L_IFG | M7_continuous_confidence | 27.0 | -0.0032 | -0.0055 | 0.43 | 0.671 | 0.08 |
 | lit_L_IFG | M8_reverse_pair | 28.0 | -0.0033 | -0.0098 | 3.47 | 0.002 | 0.65 |
 | lit_L_pMTG | M1_condition | 28.0 | -0.0028 | -0.0029 | 0.06 | 0.950 | 0.01 |
 | lit_L_pMTG | M2_pair | 28.0 | 0.0087 | 0.0091 | -0.20 | 0.839 | -0.04 |
 | lit_L_pMTG | M3_embedding | 28.0 | -0.0032 | 0.0022 | -1.00 | 0.327 | -0.19 |
-| lit_L_pMTG | M7_memory | 27.0 | -0.0028 | -0.0022 | -0.10 | 0.925 | -0.02 |
+| lit_L_pMTG | M7_binary | 27.0 | -0.0028 | -0.0022 | -0.10 | 0.925 | -0.02 |
+| lit_L_pMTG | M7_continuous_confidence | 27.0 | -0.0036 | 0.0031 | -1.22 | 0.234 | -0.23 |
 | lit_L_pMTG | M8_reverse_pair | 28.0 | -0.0087 | -0.0091 | 0.20 | 0.839 | 0.04 |
+| lit_L_pSTS | M1_condition | 28.0 | -0.0004 | -0.0033 | 1.25 | 0.222 | 0.24 |
+| lit_L_pSTS | M2_pair | 28.0 | 0.0040 | 0.0049 | -0.47 | 0.641 | -0.09 |
+| lit_L_pSTS | M3_embedding | 28.0 | 0.0003 | 0.0003 | -0.00 | 0.998 | -0.00 |
+| lit_L_pSTS | M7_binary | 27.0 | -0.0037 | -0.0002 | -0.82 | 0.419 | -0.16 |
+| lit_L_pSTS | M7_continuous_confidence | 27.0 | -0.0043 | 0.0003 | -0.88 | 0.389 | -0.17 |
+| lit_L_pSTS | M8_reverse_pair | 28.0 | -0.0040 | -0.0049 | 0.47 | 0.641 | 0.09 |
 | lit_L_precuneus | M1_condition | 28.0 | -0.0027 | -0.0017 | -0.46 | 0.648 | -0.09 |
 | lit_L_precuneus | M2_pair | 28.0 | 0.0041 | 0.0058 | -0.94 | 0.355 | -0.18 |
 | lit_L_precuneus | M3_embedding | 28.0 | 0.0004 | 0.0087 | -0.99 | 0.330 | -0.19 |
-| lit_L_precuneus | M7_memory | 27.0 | -0.0043 | -0.0026 | -0.35 | 0.729 | -0.07 |
+| lit_L_precuneus | M7_binary | 27.0 | -0.0043 | -0.0026 | -0.35 | 0.729 | -0.07 |
+| lit_L_precuneus | M7_continuous_confidence | 27.0 | -0.0022 | -0.0056 | 0.60 | 0.551 | 0.12 |
 | lit_L_precuneus | M8_reverse_pair | 28.0 | -0.0041 | -0.0058 | 0.94 | 0.355 | 0.18 |
-| lit_L_pSTS | M1_condition | 28.0 | -0.0004 | -0.0033 | 1.25 | 0.222 | 0.24 |
-| lit_L_pSTS | M2_pair | 28.0 | 0.0040 | 0.0049 | -0.47 | 0.641 | -0.09 |
-| lit_L_pSTS | M3_embedding | 28.0 | 0.0003 | 0.0003 | 0.00 | 0.998 | 0.00 |
-| lit_L_pSTS | M7_memory | 27.0 | -0.0037 | -0.0002 | -0.82 | 0.419 | -0.16 |
-| lit_L_pSTS | M8_reverse_pair | 28.0 | -0.0040 | -0.0049 | 0.47 | 0.641 | 0.09 |
 | lit_L_temporal_pole | M1_condition | 28.0 | -0.0030 | -0.0038 | 0.33 | 0.745 | 0.06 |
 | lit_L_temporal_pole | M2_pair | 28.0 | 0.0088 | 0.0095 | -0.32 | 0.750 | -0.06 |
 | lit_L_temporal_pole | M3_embedding | 28.0 | 0.0021 | 0.0034 | -0.23 | 0.817 | -0.04 |
-| lit_L_temporal_pole | M7_memory | 27.0 | -0.0042 | -0.0006 | -0.68 | 0.500 | -0.13 |
+| lit_L_temporal_pole | M7_binary | 27.0 | -0.0042 | -0.0006 | -0.68 | 0.500 | -0.13 |
+| lit_L_temporal_pole | M7_continuous_confidence | 27.0 | -0.0071 | -0.0030 | -0.97 | 0.342 | -0.19 |
 | lit_L_temporal_pole | M8_reverse_pair | 28.0 | -0.0088 | -0.0095 | 0.32 | 0.750 | 0.06 |
 | lit_R_AG | M1_condition | 28.0 | -0.0031 | -0.0028 | -0.13 | 0.901 | -0.02 |
 | lit_R_AG | M2_pair | 28.0 | 0.0043 | 0.0064 | -0.80 | 0.431 | -0.15 |
 | lit_R_AG | M3_embedding | 28.0 | 0.0008 | -0.0034 | 0.78 | 0.443 | 0.15 |
-| lit_R_AG | M7_memory | 27.0 | -0.0013 | -0.0054 | 0.86 | 0.399 | 0.16 |
+| lit_R_AG | M7_binary | 27.0 | -0.0013 | -0.0054 | 0.86 | 0.399 | 0.16 |
+| lit_R_AG | M7_continuous_confidence | 27.0 | 0.0005 | -0.0075 | 1.83 | 0.078 | 0.35 |
 | lit_R_AG | M8_reverse_pair | 28.0 | -0.0043 | -0.0064 | 0.80 | 0.431 | 0.15 |
 | lit_R_IFG | M1_condition | 28.0 | -0.0009 | -0.0037 | 1.37 | 0.180 | 0.26 |
 | lit_R_IFG | M2_pair | 28.0 | 0.0078 | 0.0108 | -1.81 | 0.081 | -0.34 |
-| lit_R_IFG | M3_embedding | 28.0 | 0.0000 | -0.0008 | 0.13 | 0.901 | 0.02 |
-| lit_R_IFG | M7_memory | 27.0 | -0.0042 | -0.0020 | -0.40 | 0.690 | -0.08 |
+| lit_R_IFG | M3_embedding | 28.0 | -0.0000 | -0.0008 | 0.13 | 0.901 | 0.02 |
+| lit_R_IFG | M7_binary | 27.0 | -0.0042 | -0.0020 | -0.40 | 0.690 | -0.08 |
+| lit_R_IFG | M7_continuous_confidence | 27.0 | -0.0056 | -0.0035 | -0.40 | 0.690 | -0.08 |
 | lit_R_IFG | M8_reverse_pair | 28.0 | -0.0078 | -0.0108 | 1.81 | 0.081 | 0.34 |
 | lit_R_pMTG | M1_condition | 28.0 | -0.0026 | -0.0031 | 0.23 | 0.818 | 0.04 |
 | lit_R_pMTG | M2_pair | 28.0 | 0.0081 | 0.0111 | -1.66 | 0.108 | -0.31 |
 | lit_R_pMTG | M3_embedding | 28.0 | -0.0064 | -0.0041 | -0.36 | 0.721 | -0.07 |
-| lit_R_pMTG | M7_memory | 27.0 | -0.0081 | 0.0008 | -1.69 | 0.104 | -0.32 |
+| lit_R_pMTG | M7_binary | 27.0 | -0.0081 | 0.0008 | -1.69 | 0.104 | -0.32 |
+| lit_R_pMTG | M7_continuous_confidence | 27.0 | -0.0069 | 0.0029 | -2.20 | 0.037 | -0.42 |
 | lit_R_pMTG | M8_reverse_pair | 28.0 | -0.0081 | -0.0111 | 1.66 | 0.108 | 0.31 |
-| lit_R_precuneus | M1_condition | 28.0 | -0.0040 | -0.0027 | -0.64 | 0.526 | -0.12 |
-| lit_R_precuneus | M2_pair | 28.0 | 0.0030 | 0.0046 | -0.68 | 0.500 | -0.13 |
-| lit_R_precuneus | M3_embedding | 28.0 | 0.0025 | 0.0092 | -0.82 | 0.420 | -0.15 |
-| lit_R_precuneus | M7_memory | 27.0 | -0.0031 | -0.0065 | 0.65 | 0.519 | 0.13 |
-| lit_R_precuneus | M8_reverse_pair | 28.0 | -0.0030 | -0.0046 | 0.68 | 0.500 | 0.13 |
 | lit_R_pSTS | M1_condition | 28.0 | 0.0004 | -0.0037 | 1.98 | 0.058 | 0.37 |
 | lit_R_pSTS | M2_pair | 28.0 | 0.0053 | 0.0083 | -1.72 | 0.096 | -0.33 |
 | lit_R_pSTS | M3_embedding | 28.0 | -0.0019 | 0.0013 | -0.51 | 0.615 | -0.10 |
-| lit_R_pSTS | M7_memory | 27.0 | 0.0004 | 0.0013 | -0.19 | 0.850 | -0.04 |
+| lit_R_pSTS | M7_binary | 27.0 | 0.0004 | 0.0013 | -0.19 | 0.850 | -0.04 |
+| lit_R_pSTS | M7_continuous_confidence | 27.0 | -0.0002 | -0.0038 | 0.66 | 0.517 | 0.13 |
 | lit_R_pSTS | M8_reverse_pair | 28.0 | -0.0053 | -0.0083 | 1.72 | 0.096 | 0.33 |
+| lit_R_precuneus | M1_condition | 28.0 | -0.0040 | -0.0027 | -0.64 | 0.526 | -0.12 |
+| lit_R_precuneus | M2_pair | 28.0 | 0.0030 | 0.0046 | -0.68 | 0.500 | -0.13 |
+| lit_R_precuneus | M3_embedding | 28.0 | 0.0025 | 0.0092 | -0.82 | 0.420 | -0.15 |
+| lit_R_precuneus | M7_binary | 27.0 | -0.0031 | -0.0065 | 0.65 | 0.519 | 0.13 |
+| lit_R_precuneus | M7_continuous_confidence | 27.0 | -0.0020 | -0.0060 | 0.82 | 0.418 | 0.16 |
+| lit_R_precuneus | M8_reverse_pair | 28.0 | -0.0030 | -0.0046 | 0.68 | 0.500 | 0.13 |
 | lit_R_temporal_pole | M1_condition | 28.0 | 0.0003 | -0.0017 | 0.96 | 0.347 | 0.18 |
 | lit_R_temporal_pole | M2_pair | 28.0 | 0.0090 | 0.0096 | -0.35 | 0.731 | -0.07 |
 | lit_R_temporal_pole | M3_embedding | 28.0 | 0.0039 | 0.0003 | 0.66 | 0.514 | 0.12 |
-| lit_R_temporal_pole | M7_memory | 27.0 | -0.0033 | -0.0006 | -0.51 | 0.615 | -0.10 |
+| lit_R_temporal_pole | M7_binary | 27.0 | -0.0033 | -0.0006 | -0.51 | 0.615 | -0.10 |
+| lit_R_temporal_pole | M7_continuous_confidence | 27.0 | -0.0045 | 0.0001 | -0.85 | 0.404 | -0.16 |
 | lit_R_temporal_pole | M8_reverse_pair | 28.0 | -0.0090 | -0.0096 | 0.35 | 0.731 | 0.07 |
 
 ### 5.3 跨 ROI 的 Δρ LMM（`delta_rho_lmm.py`）
 
 为了进一步检验“哪一种模型的前后变化最稳定”，我们在 `model_rdm_subject_metrics.tsv` 基础上，对每个 `subject × ROI × model` 先计算 `Δρ = ρ_post − ρ_pre`，再在 ROI 层面拟合 `delta_rho ~ C(model) + (1|subject) + (1|roi)`。这里 `M1_condition` 为参考模型，因此截距表示 `M1` 的平均 `Δρ`，其他系数表示对应模型相对 `M1` 的额外变化量。若系数为负，表示该模型比 `M1` 更倾向于在 post 阶段下降；若系数为正，则表示它比 `M1` 更倾向于上升。
 
-在 `main_functional` 层，Δρ LMM 使用 28 名被试、7 个 ROI、973 个观测，模型收敛良好。原始均值显示：`M1 = +0.00147`，`M2 = -0.00229`，`M3 = -0.01043`，`M7 = +0.00064`，`M8 = +0.00229`。其中，只有 `M3_embedding` 相对于 `M1_condition` 的额外下降达到显著，`b = -0.0119, SE = 0.0022, z = -5.43, p < .001, 95% CI [-0.016, -0.008]`；`M2_pair` 也呈边缘显著的更负变化，`b = -0.0038, SE = 0.0022, z = -1.71, p = .087`。这说明在主功能 ROI 集中，若从“跨 ROI 的平均模型轨迹”来比较，最稳定下行的其实不是条件模型，而是**预训练语义模型 `M3`**；pair-based 模型则表现出一个较弱但方向一致的“向分化侧偏移”的趋势。
+在 `main_functional` 层，更新后的 Δρ LMM 使用 28 名被试、7 个 ROI、1162 个观测、6 个模型。原始均值显示：`M1 = +0.00147`，`M2 = -0.00229`，`M3 = -0.01043`，`M7_binary = +0.00080`，`M7_continuous_confidence = +0.00171`，`M8 = +0.00229`。其中，`M3_embedding` 相对于 `M1_condition` 的额外下降仍然最稳定，`b = -0.0119, SE = 0.0023, z = -5.24, p < .001, 95% CI [-0.016, -0.007]`；`M2_pair` 仍为边缘更负，`b = -0.0038, p = .098`。两条 M7 都没有接近显著（`M7_binary: p = .770`; `M7_continuous_confidence: p = .917`）。需要注意的是，加入双 M7 后该总体 MixedLM 标记为 `converged = false`，因此这层跨 ROI 系数应被视为方向稳定、但在统计解释上需要保守的证据。
 
-在 `literature` 层，Δρ LMM 使用 28 名被试、12 个 ROI、1668 个观测。原始均值为：`M1 = +0.00076`，`M2 = -0.00214`，`M3 = -0.00105`，`M7 = -0.00139`，`M8 = +0.00214`。这里最接近显著的是 `M2_pair` 相对 `M1` 的更负变化，`b = -0.0029, SE = 0.0016, z = -1.85, p = .065, 95% CI [-0.006, 0.000]`；其余 `M3`、`M7` 与 `M8` 都未显著。不过，这一层的 MixedLM 标记为 `converged = false`，因此更稳妥的表述应是：**文献 ROI 层支持一个 pair-model 的趋势性证据，但不足以单独构成强主结论**。
+在 `literature` 层，更新后的 Δρ LMM 使用 28 名被试、12 个 ROI、1992 个观测、6 个模型，且总体 MixedLM `converged = true`。原始均值为：`M1 = +0.00076`，`M2 = -0.00214`，`M3 = -0.00105`，`M7_binary = -0.00135`，`M7_continuous_confidence = -0.00011`，`M8 = +0.00214`。这里最接近显著的仍然是 `M2_pair` 相对 `M1` 的更负变化，`b = -0.0029, SE = 0.0016, z = -1.78, p = .076, 95% CI [-0.006, 0.000]`；`M7_binary` 与 `M7_continuous_confidence` 在总体层都未显著（分别 `p = .202` 与 `p = .597`）。这说明连续 M7 的新信号主要停留在少数 ROI，而尚未形成跨文献 ROI 的统一轨迹。
 
-Δρ LMM 的详细系数如下：
+`family-split / ROI-split` 的额外拟合进一步细化了这个图景。对 `main_functional` 而言，按 `base_contrast` 拆开后，`func_Metaphor_gt_Spatial` 与 `func_Spatial_gt_Metaphor` 两个家族都重复了同一个结果：`M3_embedding` 显著更负（前者 `b = -0.0160, p < .001`；后者 `b = -0.0103, p < .001`），而两条 M7 在两个家族中都不显著。对 `literature` 而言，按 ROI split 后，左 IFG 的 `M2/M8` 方向仍与 ROI 级结果一致，但在单 ROI MixedLM 中未单独达到显著；最值得注意的新信号出现在右 pMTG，其中 `M7_continuous_confidence` 相对 `M1` 的额外下降达到趋势水平（`b = -0.0103, p = .067`），而 `M7_binary` 仅为较弱趋势（`b = -0.0093, p = .098`）。此外，`lit_R_AG` 的 ROI-split 拟合出现 singular matrix，因此该 ROI 的 split 结果不应作强解释。
+
+Δρ LMM 的总体详细系数如下：
 
 | ROI set | n_obs | n_roi | Model term | Estimate | SE | z | p | 95% CI |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| main_functional | 973 | 7 | Intercept (`M1_condition`) | 0.0015 | 0.0018 | 0.83 | 0.407 | [-0.002, 0.005] |
-| main_functional | 973 | 7 | `C(model)[T.M2_pair]` | -0.0038 | 0.0022 | -1.71 | 0.087 | [-0.008, 0.001] |
-| main_functional | 973 | 7 | `C(model)[T.M3_embedding]` | -0.0119 | 0.0022 | -5.43 | <0.001 | [-0.016, -0.008] |
-| main_functional | 973 | 7 | `C(model)[T.M7_memory]` | -0.0007 | 0.0022 | -0.31 | 0.753 | [-0.005, 0.004] |
-| main_functional | 973 | 7 | `C(model)[T.M8_reverse_pair]` | 0.0008 | 0.0022 | 0.37 | 0.709 | [-0.003, 0.005] |
-| literature | 1668 | 12 | Intercept (`M1_condition`) | 0.0008 | 0.0013 | 0.58 | 0.563 | [-0.002, 0.003] |
-| literature | 1668 | 12 | `C(model)[T.M2_pair]` | -0.0029 | 0.0016 | -1.85 | 0.065 | [-0.006, 0.000] |
-| literature | 1668 | 12 | `C(model)[T.M3_embedding]` | -0.0018 | 0.0016 | -1.15 | 0.249 | [-0.005, 0.001] |
-| literature | 1668 | 12 | `C(model)[T.M7_memory]` | -0.0021 | 0.0016 | -1.33 | 0.183 | [-0.005, 0.001] |
-| literature | 1668 | 12 | `C(model)[T.M8_reverse_pair]` | 0.0014 | 0.0016 | 0.88 | 0.379 | [-0.002, 0.004] |
+| main_functional | 1162 | 7 | Intercept (`M1_condition`) | 0.0015 | 0.0020 | 0.75 | 0.451 | [-0.002, 0.005] |
+| main_functional | 1162 | 7 | `C(model)[T.M2_pair]` | -0.0038 | 0.0023 | -1.65 | 0.098 | [-0.008, 0.001] |
+| main_functional | 1162 | 7 | `C(model)[T.M3_embedding]` | -0.0119 | 0.0023 | -5.24 | <0.001 | [-0.016, -0.007] |
+| main_functional | 1162 | 7 | `C(model)[T.M7_binary]` | -0.0007 | 0.0023 | -0.29 | 0.770 | [-0.005, 0.004] |
+| main_functional | 1162 | 7 | `C(model)[T.M7_continuous_confidence]` | 0.0002 | 0.0023 | 0.10 | 0.917 | [-0.004, 0.005] |
+| main_functional | 1162 | 7 | `C(model)[T.M8_reverse_pair]` | 0.0008 | 0.0023 | 0.36 | 0.718 | [-0.004, 0.005] |
+| literature | 1992 | 12 | Intercept (`M1_condition`) | 0.0008 | 0.0016 | 0.47 | 0.636 | [-0.002, 0.004] |
+| literature | 1992 | 12 | `C(model)[T.M2_pair]` | -0.0029 | 0.0016 | -1.78 | 0.076 | [-0.006, 0.000] |
+| literature | 1992 | 12 | `C(model)[T.M3_embedding]` | -0.0018 | 0.0016 | -1.11 | 0.268 | [-0.005, 0.001] |
+| literature | 1992 | 12 | `C(model)[T.M7_binary]` | -0.0021 | 0.0016 | -1.27 | 0.202 | [-0.005, 0.001] |
+| literature | 1992 | 12 | `C(model)[T.M7_continuous_confidence]` | -0.0009 | 0.0016 | -0.53 | 0.597 | [-0.004, 0.002] |
+| literature | 1992 | 12 | `C(model)[T.M8_reverse_pair]` | 0.0014 | 0.0016 | 0.85 | 0.398 | [-0.002, 0.005] |
+
+family-split / ROI-split 的关键系数如下：
+
+| Split level | Family / ROI | Model term | Estimate | p | Note |
+| --- | --- | --- | --- | --- | --- |
+| main_functional family | `func_Metaphor_gt_Spatial` | `C(model)[T.M3_embedding]` | -0.0160 | <0.001 | 显著更负，方向稳定 |
+| main_functional family | `func_Spatial_gt_Metaphor` | `C(model)[T.M3_embedding]` | -0.0103 | <0.001 | 显著更负，方向稳定 |
+| literature ROI split | `lit_L_IFG` | `C(model)[T.M2_pair]` | -0.0063 | 0.277 | 方向与 ROI 级结果一致，但单 ROI MixedLM 不显著 |
+| literature ROI split | `lit_L_IFG` | `C(model)[T.M8_reverse_pair]` | 0.0066 | 0.261 | 方向与 ROI 级结果一致，但单 ROI MixedLM 不显著 |
+| literature ROI split | `lit_R_pMTG` | `C(model)[T.M7_binary]` | -0.0093 | 0.098 | 二值 M7 仅趋势 |
+| literature ROI split | `lit_R_pMTG` | `C(model)[T.M7_continuous_confidence]` | -0.0103 | 0.067 | 连续 M7 趋势更强，支持其灵敏度提升 |
 
 ### 5.4 `main_functional` 与 `literature` 的整合结论
 
-把 ROI 级结果和跨 ROI 的 Δρ LMM 合在一起看，Step 5D 当前已经给出一条比 Step 5C 更细的机制约束。第一，真正稳定重复的不是 `M1_condition` 或 `M7_memory`，而是 pair-based 模型与语义模型的组合效应：在主功能 ROI 中，左 Precuneous 出现了显著的 `M2_pair` 下降与 `M8_reverse_pair` 上升；在文献 ROI 中，左 IFG 出现了同方向、甚至更强的 `M2/M8` 效应。与此同时，跨 ROI 的 Δρ LMM 又表明，在 `main_functional` 层真正最稳定下行的是 `M3_embedding`，而在 `literature` 层 `M2_pair` 只呈趋势性更负变化。这说明学习后最稳的变化并不是“神经几何更按条件类别组织”，也不是“更按回忆强弱排序”，而是**一方面偏离同 pair 聚合，另一方面在部分语义枢纽中偏离原有预训练语义几何**。
+把 ROI 级结果、总体 Δρ LMM 与 family/ROI split 合在一起看，Step 5D 当前给出了一条比 Step 5C 更细的机制约束。第一，pair-based 模型与语义模型的组合效应仍然是最稳定的主线：在主功能 ROI 中，左 Precuneous 出现显著的 `M2_pair` 下降与 `M8_reverse_pair` 上升；在文献 ROI 中，左 IFG 出现同方向、甚至更强的 `M2/M8` ROI 级效应。与此同时，跨 ROI 的 Δρ LMM 与 family split 又共同表明，在 `main_functional` 层真正最稳定下行的是 `M3_embedding`，而不是 M7。也就是说，学习后最稳的变化并不是“神经几何更按条件类别组织”，也不是“更按回忆强弱排序”，而是**一方面偏离同 pair 聚合，另一方面在部分语义枢纽中偏离原有预训练语义几何**。
 
-第二，预训练语义模型 `M3_embedding` 只在主功能 ROI 的左侧颞极出现了明确的 ROI 级下降，而 Δρ LMM 又显示它在主功能 ROI 层的跨区平均下降最为稳定。这一点为 Step 5C 中观察到的 `yy` 去相似化提供了一个更细的机制入口，即隐喻学习可能并不是把两个词简单压到一起，而是在原有语义结构上重构关系几何。第三，记忆强度模型 `M7_memory` 在 ROI 级和 Δρ LMM 两层中都没有形成稳定显著模式，说明当前行为收益虽存在，但还不能简单解释为“记得越好，表征几何就越按回忆分数组织”。
+第二，新的双 M7 结果把“记忆强度不重要”和“记忆强度已是主导机制”这两个极端都排除了。`M7_binary` 在两层 ROI 中仍然较弱，说明旧的低分辨率版本确实不足以解释主效应；但 `M7_continuous_confidence` 在文献 ROI 的右 pMTG 出现了 ROI 级显著下降，并在 ROI-split Δρ LMM 中呈现更强的趋势性负向系数，说明把正确项内部的 RT 差异纳入记忆强度之后，M7 对局部后部语义区的变化开始更敏感。不过，这种支持目前仍是局部的、探索性的，而不是一个跨 ROI 的统一主结论。
 
-因此，结合第 4 节的 Step 5C 结果，当前最稳妥的总故事已经比较清晰：`yy` 在多个 ROI 集中表现为学习后 pair similarity 下降；Step 5D 进一步说明，这种下降并不伴随稳定的 `M2_pair` 增强，反而在左 Precuneous 和左 IFG 中表现为 `M2` 下降、`M8` 上升，说明 neural geometry 正在偏离“pair convergence”而转向更强的 differentiation / reorganization。与此同时，左侧颞极的 `M3` 减弱，以及 `main_functional` 跨 ROI 层面 `M3` 的显著负向 Δρ，都提示学习后表征也不再完全受预存语义结构支配，而是在语义底盘之上引入了新的关系约束。换句话说，当前 `main_functional` 与 `literature` 两层 ROI 的 Model-RSA 汇总后，更支持这样一种机制解释：**隐喻学习引发的不是简单的配对聚合，而是沿着 pair-based differentiation 与 semantic reweighting 共同展开的表征重组。**
-
+因此，结合第 4 节的 Step 5C 结果，当前最稳妥的总故事可以更新为：`yy` 在多个 ROI 集中表现为学习后 pair similarity 下降；Step 5D 进一步说明，这种下降并不伴随稳定的 `M2_pair` 增强，反而在左 Precuneous 和左 IFG 中表现为 `M2` 下降、`M8` 上升，说明 neural geometry 正在偏离“pair convergence”而转向更强的 differentiation / reorganization。与此同时，左侧颞极的 `M3` 减弱，以及 `main_functional` 两个 family 中都显著为负的 `M3 Δρ`，都提示学习后表征也不再完全受预存语义结构支配，而是在语义底盘之上引入了新的关系约束。M7 的连续化升级并没有推翻这条主线，而是把记忆强度几何从“整体无信号”推进到了“局部、次级、值得继续追踪”的位置。换句话说，当前 `main_functional` 与 `literature` 两层 ROI 的 Model-RSA 汇总后，更支持这样一种机制解释：**隐喻学习引发的不是简单的配对聚合，而是沿着 pair-based differentiation 与 semantic reweighting 共同展开的表征重组；连续记忆强度则可能在少数后部语义节点上提供附加调制。**
 ## 6、主文固定口径（当前版本）
 
 这一节不是新增结果，而是把当前最稳妥、最适合放进主文的写法固定下来，避免后续表述来回摇摆。
@@ -293,7 +330,7 @@
 
 讨论段建议优先这样写：
 
-> 当前结果表明，隐喻学习相较空间联结学习，更可能诱发学习后神经表征的重组。重要的是，这种变化并未表现为同 pair 项目在 post 阶段变得更相似，而是表现为 `yy` 的 pair similarity 更明显下降，并在部分 ROI 中伴随 pair-based 模型减弱与预训练语义模型减弱。这提示隐喻学习可能不是把两个词条简单压缩为一个更接近的联合表征，而是在原有语义结构之上形成了更精细、区分度更高的新关系几何。与此同时，即使把分析范围进一步限制到经典空间网络 ROI，`kj` 也没有表现出跨 ROI、一致、可靠的 pre/post 去相似化；因此，当前 `yy` 效应并不能简单归因为 ROI 选择偏向语义网络，而更像是一种对隐喻学习更敏感、跨网络可见的表征重组。因而，本研究更支持隐喻学习体现为 representational differentiation / reorganization，而不是简单的 pair convergence。
+> 当前结果表明，隐喻学习相较空间联结学习，更可能诱发学习后神经表征的重组。重要的是，这种变化并未表现为同 pair 项目在 post 阶段变得更相似，而是表现为 `yy` 的 pair similarity 更明显下降，并在部分 ROI 中伴随 pair-based 模型减弱与预训练语义模型减弱。这提示隐喻学习可能不是把两个词条简单压缩为一个更接近的联合表征，而是在原有语义结构之上形成了更精细、区分度更高的新关系几何。与此同时，即使把分析范围进一步限制到经典空间网络 ROI，`kj` 也没有表现出跨 ROI、一致、可靠的 pre/post 去相似化；因此，当前 `yy` 效应并不能简单归因为 ROI 选择偏向语义网络，而更像是一种对隐喻学习更敏感、跨网络可见的表征重组。连续记忆强度模型进一步提示，记忆几何并非全局主导机制，但在右 pMTG 等局部后部语义节点上可能提供次级调制。因而，本研究更支持隐喻学习体现为 representational differentiation / reorganization，而不是简单的 pair convergence。
 
 ### 6.4 必须保留的克制表述
 
@@ -301,8 +338,9 @@
 
 - 不把结果写成“已经证明隐喻学习失败所以没有收敛”
 - 不把结果写成“已经完全排除所有质量解释”
-- 不把 `literature` 层 `delta_rho_lmm` 写成强裁决，因为该层 MixedLM 目前 `converged = false`
-- 不把 `M7_memory` 写成当前主导机制，因为它尚未形成稳定显著模式
+- 不把 `main_functional` 层总体或 family-split 的 `delta_rho_lmm` 写成强裁决，因为这些 MixedLM 目前仍有 `converged = false`
+- 不把 `literature` 层 ROI-split 写成强裁决，因为虽然总体 MixedLM 已收敛，但个别 ROI split 仍可能出现 singular fit（如 `lit_R_AG`）
+- 不把 `M7_binary` 或 `M7_continuous_confidence` 写成当前主导机制；更准确的说法是：连续 M7 在右 pMTG 提供了局部、次级支持，但尚未形成跨 ROI 的统一主结论
 - 不把空间 ROI 的阴性结果写成“空间学习没有任何神经变化”；更准确的说法是：`kj` 缺乏跨 ROI、一致、可靠的去相似化模式
 
 QC / reliability 建议固定写法为：

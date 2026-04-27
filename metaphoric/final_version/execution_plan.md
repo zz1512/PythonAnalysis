@@ -1,318 +1,377 @@
-# 子刊冲刺 8 周详细执行规划
+# 收敛版执行计划
 
-> 本文件是基于 [`todo.md`](./todo.md) 的**可执行工程排期**，面向 NN / NC / NHB（最低 PNAS）投稿。
->
-> 配套文档：
-> - 任务定义 + 验收标准：[`todo.md`](./todo.md)
-> - 当前结果与口径：[`result.md`](./result.md)
-> - 每步方法解读（汇报用）：[`result_walkthrough.md`](./result_walkthrough.md)
-> - 怎么跑：[`README.md`](./README.md)
->
-> **使用方式**：每天开工前勾选当天任务；每周三、周日做交付检查点；若进度落后 50%，触发第五节的风险应对决策树。
+最后更新：2026-04-27
 
----
+这份文档是 [`todo.md`](./todo.md) 的执行版。它的目标不是把所有工作平均铺开，而是用更现实的节奏推进：
 
-## 零、规划制定原则
-
-1. **工程依赖优先**：有些任务是其他任务的前置依赖，必须先跑
-2. **致命缺口前置**：P0.0a/b（技术债）和 P0.1（救场）放最前，防止主文故事在投稿前崩
-3. **长尾并行**：计算密集型任务（searchlight / permutation / LSS）在后台跑，不阻塞前端分析
-4. **每周两次"交付检查点"**：周三和周日，防止任务堆积
-5. **留 20% buffer**：8 周计划里第 7–8 周留机动时间应对突发问题
+1. 先修解释硬债
+2. 再补主故事最短板
+3. 然后做高收益的机制增强
+4. 最后才考虑高成本扩展
 
 ---
 
-## 一、任务依赖关系图
+## 一、执行原则
 
-```
-P0.0a (M7 修复)                   ──┐
-P0.0b (Δρ LMM 修复)              ──┼──► 主文 Fig 3 重绘 (依赖)
-P0.6 (刺激控制)                   ──┘
+### 1. 先地基，后扩展
 
-P0.1 (within-subject 耦合) ────────► P1.3 (中介分析) ────► Fig 6 主图
-P0.2 (searchlight RSA) ─────────────► P1.4 (noise ceiling) ────► Fig 2 升级
-P0.3 (learning dynamics) ───────────► Fig 5 主图
-P0.4 (M9 relational + VP) ──────────► Fig 3 升级
+如果以下三件事没有完成，不应继续大规模扩展：
 
-P0.5 (BF/LOSO/split-half) ──────────► SI 表（不阻塞任何下游）
+- `M7` 的解释降级与连续变体修复
+- `Δρ LMM` 的异质 ROI 处理
+- within-subject item-level 脑-行为分析
 
-P1.1 (hippocampal subfield) ────────► Fig 7 (可选)
-P1.2 (gPPI + repr-conn) ────────────► Fig 4 主图
-P1.5 (CV-RSA)  ─────────────────────► SI 表
+### 2. 每一阶段只设一个主目标
 
-P2.1 (CPM) ─────────────────────────► SI
-P2.2 (Career of Metaphor) ──────────► SI
-P2.3 (LI) ──────────────────────────► SI
-P2.4 (RD/GPS) ──────────────────────► SI
+每个阶段可以并行做若干支持任务，但只能有一个“必须产出”的主结果。
 
-P3 (SI 整理 + QC + 可复现) ──────────► 投稿前 1 周集中
-```
+### 3. 不丢任务，但可以后置任务
 
-**关键依赖（不能逆转）**：
+高成本任务保留，不删除；只有当更前面的结果稳定后才启动。
 
-- **P0.0a + P0.0b 必须先做**，否则下游所有机制分析的解读都有风险
-- **P0.1 必须先做**，否则 "So what" 是空的，新做的分析没有意义
-- P1.3 依赖 P0.1 完成后的 item-level 耦合数据
-- P1.4 noise ceiling 依赖 P0.2 searchlight 数据
+### 4. 统一写入 `paper_outputs/`
+
+从这一版计划开始，新增分析默认都应落地到：
+
+- `paper_outputs/figures_main`
+- `paper_outputs/figures_si`
+- `paper_outputs/tables_main`
+- `paper_outputs/tables_si`
+- `paper_outputs/qc`
 
 ---
 
-## 二、8 周详细排期
+## 二、阶段结构
 
-### 🔴 Week 1：技术债清零 + 救场分析启动（最关键一周）
+### Phase A：修解释硬债
 
-**目标**：把 P0.0a/b 两个解读风险修掉，**不做新分析只做修复**；同时启动 P0.1 的救场路径。
+目标：让当前主故事在统计与解释上站稳。
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | **P0.0a step 1**：扩展 `build_memory_strength_table.py` 支持 `--score-mode {binary, confidence, learning_weighted, irt}` | 4h | 代码完成 |
-|  | **P0.0a step 2**：生成 `confidence_score = memory + 0.4 × (1 - normalized_log_rt)` | 2h | 数据表 |
-| **Tue** | **P0.0a step 3**：重跑 Model-RSA，输出 `M7_binary` / `M7_continuous_confidence` / `M7_learning_weighted` 三个变体的 Δρ 对比表 | 6h | `table_m7_variants_comparison.tsv` |
-| **Wed** | **P0.0b step 1**：扩展 `delta_rho_lmm.py --family-split`；按 `base_contrast` 分 `main_functional` 为两家族 | 4h | 代码完成 |
-|  | **P0.0b step 2**：跑家族分层 Δρ LMM（两家族 × 5 模型），输出系数表 | 2h | `table_delta_rho_family_split.tsv` |
-|  | **🔶 交付检查点 1**：M7 修复 + Δρ LMM 家族分层结果是否改变故事 | — | 决策：Fig 3 改造方案 |
-| **Thu** | **P0.0b step 3**：仅用 "Metaphor>Spatial" 派生 ROI 重跑 Δρ LMM | 3h | 第二个 SI 表 |
-|  | **P0.0b step 4**：随机斜率 `(C(model)\|roi)` 敏感性 + leave-one-ROI-out | 3h | `table_delta_rho_random_slope.tsv` |
-| **Fri** | **P0.6**：刺激语言学控制表（词频、笔画、具象性、imageability） | 6h | `table_stimulus_control.tsv` |
-|  | 若不均衡 → 把协变量加入 LMM 重跑主分析 | — | 主结果 sensitivity |
-| **Sat** | **P0.1 step 1**：实现 `itemlevel_brain_behavior.py` 框架 | 5h | 代码完成 |
-| **Sun** | **P0.1 step 2**：构造 `Δ similarity = item_sim_post - item_sim_pre` 的逐 trial 表 | 3h | item-level 表 |
-|  | **🔶 交付检查点 2**：Week 1 全部技术债修复 + P0.1 脚手架就位 | — | Week 1 总结 |
+包含：
 
-**Week 1 产出清单**：
+- A1 `M7` 修复与降级
+- A2 `Δρ LMM` family split
+- A3 within-subject item-level 脑-行为
+- A4 刺激控制
+- A5 统一输出体系
 
-- [ ] `table_m7_variants_comparison.tsv`
-- [ ] `table_delta_rho_family_split.tsv`
-- [ ] `table_delta_rho_random_slope.tsv`
-- [ ] `table_stimulus_control.tsv`
-- [ ] `itemlevel_brain_behavior.py` 脚手架 + item-level 表
+### Phase B：补主文增强证据
 
----
+目标：把稿件从“可投”提升到“有说服力”。
 
-### 🔴 Week 2：救场完成 + 动态 / 搜索光启动
+包含：
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | **P0.1 step 3**：拟合 trial-level GLMM：`memory ~ delta_similarity × condition + (1 + delta_similarity\|subject) + (1\|item)`，binomial family | 5h | 主 LMM 结果 |
-| **Tue** | **P0.1 step 4**：within-subject logistic 逐被试版本，对 27 个斜率做 one-sample t 复核 | 3h | 复核表 |
-|  | **P0.1 step 5**：4 层 ROI × yy/kj 两条件批量运行 | 3h | 完整结果表 |
-| **Wed** | **P0.1 step 6**：绘制 `fig_itemlevel_coupling.png`（小提琴 + 被试斜率点 + 组均值） | 4h | 主 Fig 6 |
-|  | **🔶 交付检查点 3**：P0.1 是否显著？救场是否成功？→ 影响后续策略 | — | 是否启动风险退路 |
-| **Thu** | **P0.3 step 1**：运行 `learning_dynamics.py --window-size 20 --compute-mvpa` 在主功能 + literature ROI 上 | 6h（后台） | sliding-window 数据 |
-| **Fri** | **P0.3 step 2**：拟合 `similarity ~ window_index` 斜率（yy / kj 各一组），paired t + BF10 | 4h | 组水平结果 |
-|  | **P0.3 step 3**：slope × behavior 相关（Spearman + bootstrap 95% CI） | 2h | 个体差异结果 |
-| **Sat** | **P0.3 step 4**：绘制 `fig_learning_dynamics.png`（多 ROI 轨迹 + 组斜率条） | 4h | 主 Fig 5 |
-| **Sun** | **P0.2 step 1**：运行 `rd_searchlight.py` 三条件 × pre/post 单被试 map（**后台跑，可能 >12h**） | 12h（后台） | 单被试 map |
-|  | **🔶 交付检查点 4**：Week 2 主救场 + 动态 + searchlight 启动 | — | Week 2 总结 |
+- B1 learning dynamics
+- B2 representational connectivity
+- B4 稳健性三件套
+- B5 noise ceiling
 
-**Week 2 产出**：P0.1 救场结果 + P0.3 完整结果 + P0.2 后台进行中
+### Phase C：补空间与机制外延
+
+目标：补 where / why 的更高层级版本。
+
+包含：
+
+- B3 searchlight
+- C1 M9 relational
+- C2 hippocampal subfield
+
+### Phase D：高风险高收益扩展
+
+目标：只在前面都顺利时再冲。
+
+包含：
+
+- C3 gPPI
+- C4 effective connectivity
+- C5 CPM
+- C6 Career of Metaphor
+- C7 LI / RD / GPS
 
 ---
 
-### 🟡 Week 3：机制深化（M9 + searchlight 完成）
+## 三、依赖关系
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | **P0.2 step 2**：group-level cluster permutation（5000 次） | 6h（后台） | group map |
-|  | **P0.4 step 1**：标注 yy pair 的关系类型（空间→时间 / 物理→情感等映射类别），或用 BERT relational embedding + PCA | 4h | `M9_relational` RDM 文件 |
-| **Tue** | **P0.4 step 2**：构造 `M10_source_domain` / `M11_target_domain` RDM | 3h | 额外模型 RDM |
-|  | **P0.4 step 3**：扩展 `model_rdm_comparison.py` 支持 variance partitioning（M3 / M9 / M10 / M11 联合回归，拆出独立贡献） | 4h | 代码 |
-| **Wed** | **P0.4 step 4**：跑 variance partitioning，输出 pre vs post 各模型独立贡献率 | 3h | VP 表 |
-|  | **P0.4 step 5**：关键假设检验：**post 阶段 M9 独立贡献率 > pre** | 2h | 主结论 |
-|  | **🔶 交付检查点 5**：M9 是否显著？机制故事是否深化 | — | 决策 |
-| **Thu** | **P0.4 step 6**：绘制 `fig_variance_partitioning.png`（甜甜圈 / 堆叠柱图） | 4h | 主 Fig 3 升级 |
-| **Fri** | **P0.2 step 3**：提取 searchlight 显著 cluster peak，与 Huang 2023 ALE 元分析做 spatial correlation（10000 次置换） | 4h | 外部一致性证据 |
-|  | **P0.2 step 4**：绘制 `fig_searchlight_delta.png` + 输出 peak 表 | 3h | 主 Fig 2 升级 |
-| **Sat** | **P0.5 step 1**：对 primary endpoint 的 condition×time 交互加 Bayes Factor（调用 `utils/bayesian_stats.py`） | 4h | BF10 表 |
-|  | **P0.5 step 2**：LOSO（去掉 1 被试循环 28 次，验证主效应仍显著） | 3h | LOSO 表 |
-| **Sun** | **P0.5 step 3**：split-half replication（随机划 14+14，1000 次重随机） | 4h | split-half 表 |
-|  | **P0.5 step 4**：bootstrap 95% CI（subject-level Δ similarity，5000 次） | 2h | bootstrap 表 |
-|  | **🔶 交付检查点 6**：P0 全部完成 → 进入 P1 | — | Week 3 总结 |
+### 强依赖
 
-**Week 3 结束时 P0 100% 完成**。此时已有主文 Fig 1–Fig 6 的第一版底稿（Fig 1 / 2 / 3 / 5 / 6）。
+- `M7` 修复 → 决定后续 Model-RSA 的主/辅模型口径
+- `Δρ LMM` family split → 决定 Fig 3 / 机制段如何写
+- item-level 脑-行为 → 决定 “so what” 是否能进入主文
+- learning dynamics → 决定 “when” 是否能进入主文
 
----
+### 弱依赖
 
-### 🟡 Week 4：网络层 + MTL（P1.1 + P1.2 启动）
+- representational connectivity 不依赖 searchlight
+- searchlight 不依赖 M9 relational
+- hippocampal subfield 不依赖 CPM
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | **P1.1 step 1**：生成 hippocampal subfield mask（ASHS 或用 HCP 现成 subfield atlas 简化版） | 6h | mask 文件 |
-| **Tue** | **P1.1 step 2**：实现 `hippocampal_subfield_rsa.py`，跑 CA1 / CA3-DG / subiculum / anterior-posterior hippocampus 的 pre→post Δ similarity | 5h | 代码 + 初步结果 |
-| **Wed** | **P1.1 step 3**：检验 CA3-DG repulsion vs CA1 integration 假设 | 3h | 假设检验表 |
-|  | **P1.1 step 4**：hippocampus × cortex 的 seed-based representational connectivity | 4h | 连接结果 |
-|  | **🔶 交付检查点 7**：subfield 是否给出 CA3-DG differentiation 证据 | — | Fig 7 决策 |
-| **Thu** | **P1.1 step 5**：绘制 `fig_hippocampal_subfield.png` | 4h | Fig 7 |
-| **Fri** | **P1.2 step 1**：跑 `gPPI_analysis.py` 以学习期 `yy > kj` 左前颞 peak 为 seed，生成 seed × target 调制矩阵 | 6h | gPPI 结果 |
-| **Sat** | **P1.2 step 2**：实现 `representational_connectivity.py`（Basti 2020 方法，ROI 对之间 neural RDM 的 Spearman 相关） | 5h | 代码 + 结果 |
-| **Sun** | **P1.2 step 3**：跑 `effective_connectivity.py --time learn --condition yy`（简化 Granger / beta-series 方向回归） | 4h | EC 结果 |
-|  | **🔶 交付检查点 8**：Week 4 网络层 + MTL 完成 | — | Week 4 总结 |
+### 默认后置
+
+- gPPI
+- effective connectivity
+- CPM
+- Career of Metaphor
+
+这些都不应阻塞前面的主线闭环。
 
 ---
 
-### 🟡 Week 5：网络层收尾 + 中介 + noise ceiling / CV-RSA
+## 四、推荐时间表
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | **P1.2 step 4**：整合 gPPI + representational connectivity + EC 三条证据，绘制 `fig_network_directionality.png`（箭头图 / circular plot） | 6h | 主 Fig 4 |
-| **Tue** | **P1.3 step 1**：运行 `mediation_analysis.py` 对 3–5 个关键 ROI（左 IFG / 左 Precuneous / 左颞极 / 左前颞 / 左 AG）做 X=activation → M=Δ similarity → Y=memory 的 bootstrap 中介（5000 次） | 5h | 中介结果 |
-| **Wed** | **P1.3 step 2**：FDR 跨 ROI 校正 + 绘制 `fig_mediation_path.png` | 4h | 中介主图 |
-|  | **🔶 交付检查点 9**：中介是否显著 → 影响主文叙事 | — | 决策 |
-| **Thu** | **P1.4 step 1**：对每个 ROI 的 Step 5C similarity 计算 lower / upper noise ceiling（leave-one-subject-out） | 5h | noise ceiling 表 |
-|  | **P1.4 step 2**：在 Fig 2 中叠加 noise ceiling 灰带 | 2h | Fig 2 升级 |
-| **Fri** | **P1.5 step 1**：改写 RSA 流程为 leave-one-run-out cross-validated pattern correlation | 5h | CV-RSA 代码 |
-| **Sat** | **P1.5 step 2**：跑 CV-RSA，对比 CV vs non-CV 方向一致性 | 4h | `table_cv_rsa.tsv` |
-| **Sun** | 主文第一版文字稿：**从 Week 1–5 的所有结果组装出 Methods + Results 初稿** | 6h | 论文 draft v1 |
-|  | **🔶 交付检查点 10**：P1 全部完成 + 论文第一版初稿 | — | Week 5 总结 |
+这里不再假设每周都能完整跑完整包分析，而是按更稳妥的阶段推进。
 
-**Week 5 结束时**：如果冲 Communications Biology / Cerebral Cortex 已经足够，**可以选择在此投稿**；如冲 NC/NHB 继续 Week 6–8。
+### 第 1 周：只做解释硬债
 
----
+主目标：
 
-### 🟢 Week 6：NC/NHB 冲刺（P2.1 + P2.2）
+- 完成 `M7` 修复与降级口径
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon–Tue** | **P2.1 step 1–3**：实现 `cpm_prediction.py`，用 Schaefer 200 ROI 功能连接矩阵做 LOO CPM 预测 `memory_yy - memory_kj` | 12h | CPM 代码 + 预测结果 |
-| **Wed** | **P2.1 step 4**：5000 次 permutation 显著性 + 正 / 负 edge 与 DMN / FPCN / Salience 网络 overlap | 5h | CPM 显著性 |
-| **Thu** | **P2.1 step 5**：绘制 `fig_cpm_edges.png` | 4h | CPM 图 |
-| **Fri** | **P2.2 step 1**：对每个 yy trial 计算 `exposure_count`（学习阶段第 k 次暴露） | 3h | 元数据 |
-|  | **P2.2 step 2**：用 `parametric_modulation.py` 重跑 GLM，exposure_count 作参数调制 | 4h | PM GLM 结果 |
-| **Sat** | **P2.2 step 3**：预测验证：右半球激活随熟悉度衰减 / pair similarity 非线性轨迹 | 4h | 主结论 |
-| **Sun** | **P2.2 step 4**：绘制 `fig_career_of_metaphor.png` | 3h | Career 图 |
-|  | **🔶 交付检查点 11**：P2.1–P2.2 完成 | — | Week 6 总结 |
+并行支持：
 
----
+- 为 `Δρ LMM family split` 搭建代码入口
+- 整理刺激控制数据源
 
-### 🟢 Week 7：NN 冲刺（P2.3 + P2.4）+ 主文定稿
+本周验收：
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | **P2.3**：运行 `lateralization_analysis.py`，对比 yy / kj 在 IFG / AG / pMTG / temporal pole 的 LI | 5h | LI 表 |
-| **Tue** | **P2.4 step 1**：运行 `rd_analysis.py`（阈值 70% / 80% / 90% 三档敏感性） | 5h | RD 结果 |
-| **Wed** | **P2.4 step 2**：运行 `gps_analysis.py`，验证 RD 下降 + GPS 变化是否同向支持 RSA | 4h | GPS 结果 |
-|  | **P2.4 step 3**：绘制 `fig_rd_gps_complement.png` | 3h | 互补图 |
-| **Thu–Fri** | **主文 7 张图定稿**（Fig 1 行为 / Fig 2 RSA+searchlight+noise ceiling / Fig 3 机制+M9+VP / Fig 4 网络 / Fig 5 动态 / Fig 6 耦合+中介 / Fig 7 subfield） | 12h | 定稿图 |
-| **Sat–Sun** | **Results + Discussion 完稿 v2**（根据所有新结果重写） | 10h | 论文 v2 |
-|  | **🔶 交付检查点 12**：P2 完成 + 主文定稿 | — | Week 7 总结 |
+- 有 `M7` 变体表
+- 默认主机制模型中不再强绑 `M7`
+- 文稿口径更新完
 
----
+### 第 2 周：完成 Δρ LMM 异质性处理
 
-### 🟢 Week 8：SI + QC + 投稿准备（P3）
+主目标：
 
-| 天 | 任务 | 预计耗时 | 交付物 |
-|---|---|---|---|
-| **Mon** | 整理 `paper_outputs/qc/` 全部 QC 文件：`lss_qc_summary.tsv`、`pattern_qc_summary.tsv`、`motion_scrubbing_summary.tsv`、`fake_handling_note.md` | 5h | QC 全套 |
-| **Tue** | 完成 `analysis_plan.tsv`（Confirmatory / Secondary / Exploratory 分层 + 多重比较策略） | 4h | 交付物 |
-| **Wed** | 完成 `figure_stats_map.tsv`（每张主图 ↔ 唯一主统计检验 ↔ 校正 ↔ 输出路径） | 4h | 交付物 |
-| **Thu** | SI 组装：约 20 个 SI 表 + 10 张 SI 图 | 6h | SI 文档 |
-| **Fri** | 代码 + ROI mask + 刺激模板打包可复现 release（GitHub private repo 或 OSF） | 5h | 复现包 |
-| **Sat** | **Cover letter 起草 + response-to-reviewer 预演**（按 reviewer 常见问题列 FAQ） | 6h | Cover |
-| **Sun** | 全文交叉检查：所有 p 值 / CI / N / 图注 / 引用对齐 | 5h | 终稿 |
-|  | **🔶 交付检查点 13**：准备投稿 NC/NHB | — | 投稿！ |
+- 完成 `Δρ LMM family split`
 
----
+并行支持：
 
-## 三、每周的"两次交付检查点"规则（防止堆积）
+- leave-one-roi-out
+- random-slope sensitivity（若实现成本可控）
 
-| 检查点 | 周三 | 周日 |
-|---|---|---|
-| 做什么 | 评估当周剩余风险 | 完整产出 + 写进 result_walkthrough.md |
-| 强制问自己 | "有没有任务进度落后 50%？" | "主文的这个结论能不能写下来？" |
-| 退路触发 | 若落后，砍 P2 层任务保 P0/P1 | 若失败，触发 todo.md §十一 风险与退路 |
+本周验收：
 
----
+- 有 family-split 结果表
+- 能明确说清 `main_functional` pooled fit 的边界
 
-## 四、并行化策略（节省时间关键）
+### 第 3 周：完成 item-level 脑-行为
 
-### 后台任务（挂着跑，不阻塞）
+主目标：
 
-- **P0.2 searchlight**：12–24h 后台，Week 2 周日启动
-- **P1.1 subfield 分析**：可与 P1.2 并行
-- **P1.2 gPPI + RepConn + EC**：三个脚本可独立跑
-- **P2.1 CPM permutation**：5000 次置换建议过夜跑
+- 跑通 within-subject item-level 脑-行为耦合
 
-### 串行必须等的
+并行支持：
 
-- P0.0a/b **必须先于** 所有机制分析解读
-- P0.1 结果 **必须先于** P1.3 中介
-- P0.2 结果 **必须先于** P1.4 noise ceiling 叠加
+- refined 行为表与 RSA 表的 trial-level 对齐
+- 先只做主功能 ROI
 
----
+本周验收：
 
-## 五、风险应对决策树
+- 有 `table_itemlevel_coupling.tsv`
+- 有一版主图
+- 能判断“so what”是否真正补强
 
-| 触发条件 | 决策 | 后续行动 |
-|---|---|---|
-| Week 1 末：P0.0b 家族分层发现两家族方向**相反** | 触发 | 主文机制叙事必须拆写；Fig 3 改两排小图 |
-| Week 2 末：**P0.1 仍阴性** | 触发 | 退至 M9_relational 作为"So what"替代证据（见 todo.md §十一） |
-| Week 3 末：**M9 不显著** | 触发 | 退至 PNAS 档，主卖点变成"多层 ROI × baseline × within-subject 耦合" |
-| Week 4 末：**subfield 数据精度差** | 触发 | 退至 anterior-posterior hippocampus 粗分 |
-| Week 5 末：**gPPI 效应弱** | 触发 | 退至 representational connectivity 为主 |
-| Week 5 末：**Searchlight 在 cluster-FWE 无显著** | 触发 | 改用 TFCE + 5000 permutation，或降级为 ROI-based support figure |
-| Week 6 初：**CPM 阴性** | 触发 | CPM 放 SI，不放主文 |
+### 第 4 周：刺激控制 + 输出体系
 
----
+主目标：
 
-## 六、这周（Week 1）就要立刻做的 5 件事
+- 统一 `paper_outputs/`
 
-按优先级顺序：
+并行支持：
 
-1. **今天**：扩展 `build_memory_strength_table.py` 的 `--score-mode`，产出 `M7_continuous_confidence` 表
-2. **今天**：扩展 `delta_rho_lmm.py` 支持 `--family-split`
-3. **明天**：跑两个家族的 Δρ LMM，看方向是否一致（**这决定主文 Fig 3 的结构**）
-4. **明天**：开始 `itemlevel_brain_behavior.py` 的脚手架
-5. **后天**：跑 P0.6 刺激控制表（最简单但必不可少）
+- 刺激控制表
+- 若需要，主 LMM 加 covariate sensitivity
 
----
+本周验收：
 
-## 七、里程碑概览（投稿节点）
+- 新增结果不再散落在老目录
+- 刺激控制可写入方法和 SI
 
-| 节点 | 累计周数 | 可投稿档次 | 主要支柱证据 |
-|---|---|---|---|
-| M1 | Week 3 末 | **PNAS / Communications Biology** 保底档 | P0 全部完成：技术债 + within-subject 耦合 + searchlight + 动态 + M9 + 稳健性三件套 |
-| M2 | Week 5 末 | **Nature Communications / NHB** 主目标档 | + P1.1 subfield + P1.2 网络方向性 + P1.3 中介 + P1.4 noise ceiling |
-| M3 | Week 7 末 | **Nature Neuroscience / Neuron** 冲刺档 | + P2.1 CPM 跨被试预测 + P2.2 Career of Metaphor + P2.3 LI + P2.4 RD/GPS |
-| M4 | Week 8 末 | 投稿 NC/NHB（默认主目标） | + P3 SI + QC + 可复现包 + cover letter |
+### 第 5 周：learning dynamics
 
-**推荐投稿策略**：
-- 冲到 M3 后直接投 **Nature Communications**
-- 若 desk reject → 退到 Communications Biology / Cerebral Cortex（此时 M1 的证据已足够）
-- 不在 M1 就先投保底档，浪费顶档机会
+主目标：
 
----
+- 补 “when”
 
-## 八、每日执行模板（复制到每天 standup）
+并行支持：
 
-```
-日期：YYYY-MM-DD  |  第 X 周 Day Y
+- slope-behavior
+- 主图第一版
 
-今日任务：
-- [ ] 任务 1（预计 Xh）
-- [ ] 任务 2（预计 Xh）
+本周验收：
 
-昨日产出：
-- ...
+- 有 `table_learning_slope.tsv`
+- 有 `fig_learning_dynamics.png`
 
-阻塞项：
-- ...
+### 第 6 周：representational connectivity + 稳健性
 
-是否触发风险决策树？
-- 否 / 是（原因：...，决策：...）
-```
+主目标：
+
+- 补网络层最贴主线的证据
+
+并行支持：
+
+- BF
+- LOSO
+- bootstrap
+- noise ceiling
+
+本周验收：
+
+- 有一条可写入主文的网络层证据
+- 主结果稳健性表齐
+
+### 第 7 周：searchlight / M9 二选一优先
+
+主目标：
+
+- 二选一：
+  - 若你最需要 `where`，优先 searchlight
+  - 若你最需要 `why`，优先 M9 relational
+
+并行支持：
+
+- 另一项只做搭架子，不强求当周完成
+
+本周验收：
+
+- 至少有一个高价值扩展进入可写状态
+
+### 第 8 周：是否继续冲高
+
+条件判断：
+
+- 如果 Phase A + B 结果都稳，可以考虑进入：
+  - hippocampal subfield
+  - gPPI
+  - CPM
+
+- 如果前面仍有未闭环项，优先写稿，不再继续扩张
 
 ---
 
-## 九、补充说明
+## 五、每阶段的停止规则
 
-- **所有交付物必须落盘到 `${PYTHON_METAPHOR_ROOT}/paper_outputs/` 下**（见 todo.md 第四节目录约定）
-- **新增分析必须同步更新**：
-  - `result_walkthrough.md` 新增"做了什么 / 怎么做 / 关键数字 / 一句结论"段落
-  - `todo.md` 把对应 checkbox 打勾
-  - `analysis_plan.tsv` 标注 Confirmatory / Secondary / Exploratory
-- **遇到方法学不确定**：默认先做 Secondary 标注，投稿前再根据结果决定是否升级为主文 Confirmatory
-- **Bayes Factor 阈值**：BF10 > 10 报告为 strong evidence，3 < BF10 < 10 为 moderate，其他为 inconclusive
+### Stop Rule 1
+
+如果 `M7` 连续变体仍然不稳定：
+
+- 不继续把精力投在 `M7`
+- 直接把它降级到 SI
+- 主文专注 `M1/M2/M3/M8`
+
+### Stop Rule 2
+
+如果 item-level 脑-行为仍然阴性：
+
+- 不再把“强脑-行为耦合”当主卖点
+- 主文改为组水平现象 + 机制重组
+- 后续优先补 dynamics 或 network，而不是继续死磕相关
+
+### Stop Rule 3
+
+如果 representational connectivity 不稳：
+
+- 不立刻转去 effective connectivity
+- 先用 learning dynamics + searchlight 补足主文
+
+### Stop Rule 4
+
+如果 searchlight 长时间卡住：
+
+- 直接降级到支持性 SI
+- 不阻塞主稿
 
 ---
 
-*最后更新：2026-04-27；负责人：项目主笔*
+## 六、输出映射
+
+### 主文优先输出
+
+- `fig_itemlevel_coupling.png`
+- `fig_learning_dynamics.png`
+- `fig_repr_connectivity.png`
+- 必要时 `fig_searchlight_delta.png`
+
+### SI 优先输出
+
+- `table_m7_variants_comparison.tsv`
+- `table_delta_rho_family_split.tsv`
+- `table_delta_rho_leave_one_roi_out.tsv`
+- `table_stimulus_control.tsv`
+- `table_bayes_factors.tsv`
+- `table_loso.tsv`
+- `table_bootstrap_ci.tsv`
+- `table_noise_ceiling.tsv`
+
+---
+
+## 七、现实版投稿门槛
+
+### 可投第一档：PNAS / Communications Biology / Cerebral Cortex
+
+满足以下即可：
+
+- Phase A 完成
+- Phase B 至少完成两项
+- 主文图与 SI 已经闭环
+
+### 可冲更高一档：NC / NHB
+
+建议额外满足：
+
+- item-level 脑-行为显著
+- learning dynamics 清楚
+- 至少一条网络层证据清楚
+
+### 更高风险目标：NN / Neuron
+
+不作为当前默认目标，只在以下条件同时满足时考虑：
+
+- 前述条件全部成立
+- M9 relational 或 hippocampal subfield 给出强机制增益
+- 至少一项高风险扩展真的显著且解释稳
+
+---
+
+## 八、每周检查模板
+
+### 本周主目标
+
+- [ ] 只写 1 项
+
+### 本周支持任务
+
+- [ ] 最多 2–3 项
+
+### 本周输出
+
+- [ ] 表
+- [ ] 图
+- [ ] 文稿口径更新
+
+### 本周决策
+
+- [ ] 继续当前路径
+- [ ] 降级某个任务
+- [ ] 推迟某个任务
+
+---
+
+## 九、当前建议的立刻行动
+
+按顺序：
+
+1. `M7`
+2. `Δρ LMM family split`
+3. item-level 脑-行为
+4. 刺激控制
+5. `paper_outputs`
+
+在这 5 件事完成前，不建议重新把精力放到：
+
+- gPPI
+- effective connectivity
+- CPM
+- Career of Metaphor
+
+这些工作都保留，但现在不该抢占主线资源。

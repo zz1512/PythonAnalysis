@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -91,6 +92,45 @@ def _resolve_output_dir(path_arg: Path | None, *, metrics_file: Path) -> Path:
     return metrics_file.parent / "lmm"
 
 
+def _slug(text: object) -> str:
+    out = str(text).strip()
+    for src, dst in [
+        (" ", "_"),
+        ("/", "_"),
+        ("\\", "_"),
+        (":", "_"),
+        ("*", "_"),
+        ("?", "_"),
+        ('"', "_"),
+        ("<", "_"),
+        (">", "_"),
+        ("|", "_"),
+    ]:
+        out = out.replace(src, dst)
+    return out or "unknown"
+
+
+def _derive_base_contrast(roi_name: object) -> str | None:
+    text = str(roi_name).strip()
+    if not text:
+        return None
+    match = re.match(r"^(.*?)(_c\d+_.*)$", text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _ensure_family_column(frame: pd.DataFrame, family_col: str) -> tuple[pd.DataFrame, str | None]:
+    if family_col in frame.columns:
+        return frame, family_col
+    if family_col == "base_contrast":
+        out = frame.copy()
+        out["base_contrast"] = out["roi"].map(_derive_base_contrast)
+        if out["base_contrast"].notna().any():
+            return out, "base_contrast"
+    return frame, None
+
+
 def compute_delta(frame: pd.DataFrame, value_col: str, condition_col: str | None) -> pd.DataFrame:
     required = {"subject", "roi", "time", "model"}
     missing = required - set(frame.columns)
@@ -137,6 +177,42 @@ def fit_lmm(delta_frame: pd.DataFrame, condition_col: str | None):
     return model.fit(method="lbfgs", maxiter=200, disp=False), formula
 
 
+def _write_fit_outputs(
+    fit,
+    *,
+    formula: str,
+    delta_frame: pd.DataFrame,
+    output_dir: Path,
+    value_col: str,
+    source: Path,
+    condition_col: str | None,
+    extra_json: dict[str, object] | None = None,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    summary_text = str(fit.summary())
+    (output_dir / "delta_rho_lmm_summary.txt").write_text(summary_text, encoding="utf-8")
+    params = pd.DataFrame({"term": fit.params.index, "estimate": fit.params.values})
+    write_table(params, output_dir / "delta_rho_lmm_params.tsv")
+    model_info = {
+        "formula": formula,
+        "value_col": value_col,
+        "source_file": str(source),
+        "condition_col": condition_col,
+        "aic": float(fit.aic),
+        "bic": float(fit.bic),
+        "n_obs": int(fit.nobs),
+        "n_subjects": int(delta_frame["subject"].nunique()),
+        "n_rois": int(delta_frame["roi"].nunique()),
+        "n_models": int(delta_frame["model"].nunique()),
+        "converged": bool(getattr(fit, "converged", True)),
+        "random_effects_note": "groups=subject; roi modeled via vc_formula (nested within subject "
+                                "as a pragmatic approximation of crossed RE given statsmodels limits).",
+    }
+    if extra_json:
+        model_info.update(extra_json)
+    save_json(model_info, output_dir / "delta_rho_lmm_model.json")
+    return params, model_info
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Δρ LMM on Model-RSA outputs.")
     parser.add_argument("--metrics-file", type=Path, default=None,
@@ -150,6 +226,11 @@ def main() -> None:
                         help="Optional output directory. Default: <model_rdm_results_dir>/lmm")
     parser.add_argument("--condition-col", default=None,
                         help="Optional condition-group column for the interaction.")
+    parser.add_argument("--family-split", action="store_true",
+                        help="Also fit separate LMMs within ROI families (e.g. main_functional base_contrast families).")
+    parser.add_argument("--family-col", default="base_contrast",
+                        help="Family column used with --family-split. "
+                             "If absent, base_contrast will be auto-derived from ROI names when possible.")
     args = parser.parse_args()
 
     metrics_file = _resolve_metrics_file(args.metrics_file)
@@ -185,29 +266,78 @@ def main() -> None:
     write_table(delta_frame, output_dir / "delta_rho_long.tsv")
 
     fit, formula = fit_lmm(delta_frame, condition_col)
-
-    summary_text = str(fit.summary())
-    (output_dir / "delta_rho_lmm_summary.txt").write_text(summary_text, encoding="utf-8")
-    params = pd.DataFrame({"term": fit.params.index, "estimate": fit.params.values})
-    write_table(params, output_dir / "delta_rho_lmm_params.tsv")
-    save_json(
-        {
-            "formula": formula,
-            "value_col": value_col,
-            "source_file": str(source),
-            "condition_col": condition_col,
-            "aic": float(fit.aic),
-            "bic": float(fit.bic),
-            "n_obs": int(fit.nobs),
-            "n_subjects": int(delta_frame["subject"].nunique()),
-            "n_rois": int(delta_frame["roi"].nunique()),
-            "n_models": int(delta_frame["model"].nunique()),
-            "converged": bool(getattr(fit, "converged", True)),
-            "random_effects_note": "groups=subject; roi modeled via vc_formula (nested within subject "
-                                    "as a pragmatic approximation of crossed RE given statsmodels limits).",
-        },
-        output_dir / "delta_rho_lmm_model.json",
+    _write_fit_outputs(
+        fit,
+        formula=formula,
+        delta_frame=delta_frame,
+        output_dir=output_dir,
+        value_col=value_col,
+        source=source,
+        condition_col=condition_col,
     )
+
+    if args.family_split:
+        family_ready, resolved_family_col = _ensure_family_column(delta_frame, args.family_col)
+        if resolved_family_col is None:
+            raise ValueError(
+                f"--family-split requested, but could not resolve family column '{args.family_col}'."
+            )
+        family_ready = family_ready[family_ready[resolved_family_col].notna()].copy()
+        family_rows = []
+        family_param_rows = []
+        family_root = ensure_dir(output_dir / "family_split")
+        for family_value, family_frame in family_ready.groupby(resolved_family_col):
+            family_frame = family_frame.copy()
+            family_out = ensure_dir(family_root / f"{resolved_family_col}__{_slug(family_value)}")
+            write_table(family_frame, family_out / "delta_rho_long.tsv")
+            summary_row = {
+                "family_col": resolved_family_col,
+                "family_value": family_value,
+                "n_obs_input": int(len(family_frame)),
+                "n_subjects": int(family_frame["subject"].nunique()),
+                "n_rois": int(family_frame["roi"].nunique()),
+                "n_models": int(family_frame["model"].nunique()),
+                "skip_reason": "",
+            }
+            if family_frame["subject"].nunique() < 2 or family_frame["roi"].nunique() < 1 or family_frame["model"].nunique() < 2:
+                summary_row["skip_reason"] = "insufficient_data"
+                family_rows.append(summary_row)
+                continue
+            try:
+                family_fit, family_formula = fit_lmm(family_frame, condition_col)
+                family_params, family_info = _write_fit_outputs(
+                    family_fit,
+                    formula=family_formula,
+                    delta_frame=family_frame,
+                    output_dir=family_out,
+                    value_col=value_col,
+                    source=source,
+                    condition_col=condition_col,
+                    extra_json={"family_col": resolved_family_col, "family_value": family_value},
+                )
+                family_rows.append({
+                    **summary_row,
+                    "formula": family_formula,
+                    "aic": family_info["aic"],
+                    "bic": family_info["bic"],
+                    "n_obs_model": family_info["n_obs"],
+                    "converged": family_info["converged"],
+                    "output_dir": str(family_out),
+                })
+                family_params = family_params.assign(
+                    family_col=resolved_family_col,
+                    family_value=family_value,
+                    output_dir=str(family_out),
+                )
+                family_param_rows.append(family_params)
+            except Exception as exc:
+                summary_row["skip_reason"] = f"error: {exc}"
+                family_rows.append(summary_row)
+
+        if family_rows:
+            write_table(pd.DataFrame(family_rows), output_dir / "delta_rho_family_split.tsv")
+        if family_param_rows:
+            write_table(pd.concat(family_param_rows, ignore_index=True), output_dir / "delta_rho_family_split_params.tsv")
     print(f"[delta_rho_lmm] fit ({formula}) -> {output_dir}")
 
 
