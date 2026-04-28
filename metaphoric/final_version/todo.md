@@ -11,11 +11,10 @@
 相关文档：
 
 - 核心结果口径：[result.md](./result.md)
-- 详细执行排期：[execution_plan.md](./execution_plan.md)
-- 方法与设计说明：[readme_detail.md](./readme_detail.md)
-- 结果逐步解读：[result_walkthrough.md](./result_walkthrough.md)
+- 方法与设计说明：[readme\_detail.md](./readme_detail.md)
+- 结果逐步解读：[result\_walkthrough.md](./result_walkthrough.md)
 
----
+***
 
 ## 一、当前固定主线
 
@@ -31,7 +30,7 @@
 
 后续所有新增分析都必须直接服务这条主线，而不是平行堆砌结果。
 
----
+***
 
 ## 二、优先级原则
 
@@ -47,7 +46,7 @@
 
 这些任务有价值，但高成本、高风险，或者当前不是解释闭环的最短路径。
 
----
+***
 
 ## 三、A层：必须先完成
 
@@ -126,47 +125,103 @@
 
 目标：停止把结果散落在多个老目录中，保证后续图表、SI、主文可追踪。
 
-- [ ] 为关键脚本提供统一输出入口或包装层：
+- [x] 为关键脚本提供统一输出入口或包装层：
   - behavior
   - RSA
   - Model-RSA
   - brain-behavior
   - QC
-- [ ] 至少保证新增结果统一落到：
+- [x] 至少保证新增结果统一落到：
   - `paper_outputs/figures_main`
   - `paper_outputs/figures_si`
   - `paper_outputs/tables_main`
   - `paper_outputs/tables_si`
   - `paper_outputs/qc`
 
----
+***
 
 ## 四、B层：强烈建议完成
 
 ### B1. Learning dynamics
 
-目标：补上 “when”。
+目标：补上 “when”，但这里的 `when` 不再定义为“学习期所有句子的原始平均 similarity 随窗口变化”，而是定义为：**同一 pair / 同一句子在第一次与第二次暴露之间，表征是否发生了条件特异的重组**。
 
 - [ ] 运行 [`temporal_dynamics/learning_dynamics.py`](./temporal_dynamics/learning_dynamics.py)
-- [ ] 核心检验：
-  - `similarity ~ window_index`
-  - 比较 `slope_yy` 与 `slope_kj`
-- [ ] 输出：
-  - `paper_outputs/tables_main/table_learning_slope.tsv`
+- [x] 主分析：**A2. pair-based repeated-exposure discrimination**
+  - 设计前提：
+    - `Run3` 与 `Run4` 使用**同一批句子**（每句各出现一次），但顺序不同
+    - 每个句子稳定对应一个词对，因此可把 `Run3 -> Run4` 视为**第一次暴露 -> 第二次暴露**
+  - 主指标：
+    - `same_pair_cross_run_similarity`
+      - 定义：`sim(run3_sentence_i, run4_sentence_i)`
+    - `different_pair_cross_run_similarity`
+      - 定义：`mean(sim(run3_sentence_i, run4_sentence_j))`, `j != i`
+      - 限制：在**同一 condition 内**比较（`yy` 只和 `yy` 比；`kj` 只和 `kj` 比）
+    - `pair_discrimination`
+      - 定义：`same_pair_cross_run_similarity - different_pair_cross_run_similarity`
+  - 核心检验：
+    - 比较 `pair_discrimination_yy` 与 `pair_discrimination_kj`
+    - 口径：检验 `yy` 是否在 repeated exposure 后形成了**更强的 pair-specific representational structure**
+  - 解释边界：
+    - 不把主指标写成 “yy 一定更稳定”
+    - 因为当前总故事更接近 `yy` 的**重组 / 分化更强**，所以 `yy` 的 raw same-pair similarity 可能**不高于** `kj`
+    - 因此主分析必须看 `same - different` 的 discrimination，而不是只看 raw similarity
+- [x] 补充分析：**A1. same-sentence cross-run stability**
+  - 补充指标：
+    - `same_sentence_cross_run_similarity = sim(run3_sentence_i, run4_sentence_i)`
+  - 用途：
+    - 作为 repeated exposure 的稳定性描述指标
+    - 可报告 `yy` 与 `kj` 的均值差异，但**不作为 B1 主指标**
+  - 解释边界：
+    - 若出现 `kj > yy`，并不与主线矛盾；这更可能说明 `kj` 更偏向重复稳定，而 `yy` 更偏向重组
+- [x] 不采用的旧方案（明确废弃）
+  - 不再用：`similarity ~ window_index`
+  - 不再把 learning dynamics 写成“学习期所有不同句子的平均原始 similarity 轨迹”
+  - 原因：学习期 trial 是**不同句子**，raw similarity 的窗口变化会被刺激内容差异严重混淆
+- [ ] 结果输出（主指标 + 补充指标都要保留）：
+  - `paper_outputs/tables_main/table_learning_repeated_exposure.tsv`
+  - `paper_outputs/tables_si/table_learning_repeated_exposure_subject.tsv`
+  - `paper_outputs/tables_si/table_learning_repeated_exposure_family.tsv`
   - `paper_outputs/figures_main/fig_learning_dynamics.png`
+  - `paper_outputs/qc/learning_repeated_exposure_itemwise.tsv`
+  - `paper_outputs/qc/learning_repeated_exposure_group.tsv`
+  - `paper_outputs/qc/learning_dynamics_meta.json`
+- [x] ROI 范围固定：
+  - **主分析 ROI**：`literature`
+  - **补充 ROI**：`main_functional`，但必须按 family split 分开报告：
+    - `Metaphor > Spatial`
+    - `Spatial > Metaphor`
+  - **不允许**：把 `main_functional` 直接 pooled union 后当作 B1 主结果
+  - `literature_spatial / atlas_robustness` 暂不作为 B1 第一轮主分析
+- [ ] 输出：
+  - 主文优先写 A2 主指标
+  - A1 作为补充指标一起保留，必要时进入 SI 或结果补充段
 
 ### B2. Representational connectivity
 
 目标：优先用更贴近主故事的方法补网络层证据，而不是一上来重押 gPPI / effective connectivity。
 
-- [ ] 新建或完善 `representational_connectivity.py`
-- [ ] 至少覆盖：
-  - left temporal pole
-  - left IFG
-  - AG / Precuneus
-  - hippocampus（如可行）
+- [ ] 运行 [`representation_analysis/representational_connectivity.py`](./representation_analysis/representational_connectivity.py)
+- [x] 方法定义固定：
+  - 不是传统功能连接，而是 **all-by-all ROI pair representational connectivity**
+  - 具体实现：比较两个 ROI 在同一批 item 上的 `post - pre` neural delta 轮廓是否一致
+  - 主指标：`repr_connectivity_rho / repr_connectivity_z`
+  - **主分析 ROI**：`main_functional`
+    - 但必须做 **family-aware** 汇总：
+      - `within_Metaphor_gt_Spatial`
+      - `within_Spatial_gt_Metaphor`
+      - `cross_main_functional_family`
+    - 不允许再把 `main_functional` 直接 pooled union 后只给一个平均 connectivity 结论
+  - **确认性分析 ROI**：`literature + literature_spatial`
+    - 汇总：
+      - `within_literature`
+      - `within_literature_spatial`
+      - `cross_independent_sets`
+  - 不再使用“手工只挑少数 ROI 对”的旧版方案
 - [ ] 输出：
   - `paper_outputs/tables_main/table_repr_connectivity.tsv`
+  - `paper_outputs/tables_si/table_repr_connectivity_subject.tsv`
+  - `paper_outputs/tables_si/table_repr_connectivity_edges.tsv`
   - `paper_outputs/figures_main/fig_repr_connectivity.png`
 
 ### B3. Searchlight RSA
@@ -182,11 +237,19 @@
 - [ ] 输出：
   - `paper_outputs/tables_main/table_searchlight_peaks.tsv`
   - `paper_outputs/figures_main/fig_searchlight_delta.png`
+- [x] 优先级判断：
+  - 当前先做 **RD searchlight**，用于补“where”
+  - **model-based Searchlight RSA 暂不实现**
+  - 原因：
+    - 现阶段主线更缺的是一个可运行、可汇报的全脑空间定位补充
+    - model-based searchlight 工程量更大，且会显著增加计算成本
+    - 应放到 B3 结果出来之后再决定是否升级；当前优先级低于 B4 / B5
 
 ### B4. 稳健性三件套
 
 目标：用最少但高价值的稳健性分析支撑主文。
 
+- [x] 新建 [`rsa_analysis/robustness_suite.py`](./rsa_analysis/robustness_suite.py)
 - [ ] Bayes Factor for primary endpoint
 - [ ] LOSO
 - [ ] bootstrap CI
@@ -204,7 +267,7 @@
   - `paper_outputs/tables_si/table_noise_ceiling.tsv`
 - [ ] 仅在图上作为支持信息，不替代主统计
 
----
+***
 
 ## 五、C层：保留但后置
 
@@ -254,7 +317,7 @@
 - [ ] 保留
 - [ ] 默认 SI / 扩展模块
 
----
+***
 
 ## 六、QC 与交付物
 
@@ -273,7 +336,7 @@
 - [ ] `paper_outputs/figure_stats_map.tsv`
 - [ ] 主文图与 SI 图逐一绑定统计来源
 
----
+***
 
 ## 七、按投稿档次的停止规则
 
@@ -301,7 +364,7 @@
 - CPM
 - Career of Metaphor
 
----
+***
 
 ## 八、最近两周的现实推进顺序
 
@@ -309,12 +372,12 @@
 
 - [ ] A1 `M7`
 - [ ] A2 `Δρ LMM`
-- [ ] A3 item-level 脑-行为
+- [x] A3 item-level 脑-行为
 
 ### 第 2 阶段
 
 - [ ] A4 刺激控制
-- [ ] A5 `paper_outputs`
+- [x] A5 `paper_outputs`
 - [ ] B1 learning dynamics
 
 ### 第 3 阶段
@@ -329,15 +392,39 @@
 - [ ] C1 M9 relational
 - [ ] 其余 C 层任务按时间和结果收益决定
 
----
+***
 
-## 九、已完成工作存档
+## 九、每周检查模板
+
+### 本周主目标
+
+- [ ] 只写 1 项
+
+### 本周支持任务
+
+- [ ] 最多 2-3 项
+
+### 本周输出
+
+- [ ] 表
+- [ ] 图
+- [ ] 文稿口径更新
+
+### 本周决策
+
+- [ ] 继续当前路径
+- [ ] 降级某个任务
+- [ ] 推迟某个任务
+
+***
+
+## 十、已完成工作存档
 
 以下内容已完成，不再重复立项，只在后续文稿中整合：
 
 - [x] 主线口径固定
 - [x] refined behavior
-- [x] 主 ROI / literature / literature_spatial / atlas_robustness 的 Step 5C
+- [x] 主 ROI / literature / literature\_spatial / atlas\_robustness 的 Step 5C
 - [x] 主 ROI / literature 的 Model-RSA 与 `Δρ LMM`
 - [x] trial / voxel robustness
 - [x] QC / reliability 第一轮
@@ -345,9 +432,9 @@
 
 这些是当前主线地基，不是当前待办。
 
----
+***
 
-## 十、执行边界
+## 十一、执行边界
 
 继续允许的表述：
 
@@ -362,9 +449,9 @@
 - “Δρ LMM 直接证明主导机制”
 - “已经完全排除所有质量解释”
 
----
+***
 
-## 十一、如果进度受阻，优先牺牲什么
+## 十二、如果进度受阻，优先牺牲什么
 
 按顺序后撤：
 

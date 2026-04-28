@@ -86,7 +86,7 @@ ROI_CONTRAST_MAP = {
 # 为避免三层 ROI（main_functional / literature / atlas_robustness）同时跑时互相覆盖，
 # 输出目录自动带上当前 ROI_SET 后缀。可通过环境变量 METAPHOR_RSA_OUT_DIR 覆盖。
 OUTPUT_DIR = default_roi_tagged_out_dir(
-    BASE_DIR,
+    BASE_DIR / "paper_outputs" / "qc",
     "rsa_results_optimized",
     override_env="METAPHOR_RSA_OUT_DIR",
     roi_set=ROI_SET,

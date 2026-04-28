@@ -62,7 +62,7 @@ import rsa_config as cfg  # noqa: E402
 
 def _default_model_rdm_dir() -> Path:
     roi_tag = sanitize_roi_tag(getattr(cfg, "ROI_SET", ""))
-    return Path(cfg.BASE_DIR) / f"model_rdm_results_{roi_tag}"
+    return Path(cfg.BASE_DIR) / "paper_outputs" / "qc" / f"model_rdm_results_{roi_tag}"
 
 
 def _resolve_metrics_file(path_arg: Path | None) -> Path:
@@ -89,7 +89,20 @@ def _resolve_output_dir(path_arg: Path | None, *, metrics_file: Path) -> Path:
     override = os.environ.get("METAPHOR_DELTA_RHO_OUT_DIR", "").strip()
     if override:
         return Path(override)
-    return metrics_file.parent / "lmm"
+    # Default: write into paper_outputs so all new analysis outputs are centralized.
+    # We keep a ROI-tagged subfolder to avoid collisions across ROI sets.
+    roi_tag = _infer_roi_tag(metrics_file)
+    return Path(cfg.BASE_DIR) / "paper_outputs" / "tables_si" / "delta_rho_lmm" / roi_tag
+
+
+def _infer_roi_tag(metrics_file: Path) -> str:
+    parent = metrics_file.parent
+    name = parent.name.strip()
+    prefix = "model_rdm_results_"
+    if name.startswith(prefix) and len(name) > len(prefix):
+        return _slug(name[len(prefix):])
+    # Fallback to current config ROI_SET when available
+    return _slug(getattr(cfg, "ROI_SET", "unknown"))
 
 
 def _slug(text: object) -> str:
@@ -167,14 +180,26 @@ def fit_lmm(delta_frame: pd.DataFrame, condition_col: str | None):
     if condition_col and condition_col in delta_frame.columns:
         formula = f"delta_rho ~ C({condition_col}) * C(model)"
 
-    model = smf.mixedlm(
-        formula,
-        data=delta_frame,
-        groups=delta_frame["subject"],
-        vc_formula={"roi": "0 + C(roi)"},
-        re_formula="1",
+    has_multiple_rois = delta_frame["roi"].nunique() > 1
+    fit_kwargs = {
+        "data": delta_frame,
+        "groups": delta_frame["subject"],
+        "re_formula": "1",
+    }
+    random_effects_note = (
+        "groups=subject; roi modeled via vc_formula (nested within subject "
+        "as a pragmatic approximation of crossed RE given statsmodels limits)."
     )
-    return model.fit(method="lbfgs", maxiter=200, disp=False), formula
+    fallback_mode = "subject_plus_roi_vc"
+    if has_multiple_rois:
+        fit_kwargs["vc_formula"] = {"roi": "0 + C(roi)"}
+    else:
+        random_effects_note = "groups=subject only; single-ROI split so roi variance component is omitted."
+        fallback_mode = "subject_only_single_roi"
+
+    model = smf.mixedlm(formula, **fit_kwargs)
+    fit = model.fit(method="lbfgs", maxiter=200, disp=False)
+    return fit, formula, random_effects_note, fallback_mode
 
 
 def _write_fit_outputs(
@@ -186,11 +211,30 @@ def _write_fit_outputs(
     value_col: str,
     source: Path,
     condition_col: str | None,
+    random_effects_note: str,
+    fallback_mode: str,
     extra_json: dict[str, object] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     summary_text = str(fit.summary())
     (output_dir / "delta_rho_lmm_summary.txt").write_text(summary_text, encoding="utf-8")
-    params = pd.DataFrame({"term": fit.params.index, "estimate": fit.params.values})
+    conf_int = fit.conf_int()
+    if isinstance(conf_int, pd.DataFrame):
+        ci_low = conf_int.iloc[:, 0].to_numpy()
+        ci_high = conf_int.iloc[:, 1].to_numpy()
+    else:
+        ci_low = conf_int[:, 0]
+        ci_high = conf_int[:, 1]
+    params = pd.DataFrame(
+        {
+            "term": fit.params.index,
+            "estimate": fit.params.values,
+            "std_error": fit.bse.loc[fit.params.index].to_numpy(),
+            "z_value": fit.tvalues.loc[fit.params.index].to_numpy(),
+            "p_value": fit.pvalues.loc[fit.params.index].to_numpy(),
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+        }
+    )
     write_table(params, output_dir / "delta_rho_lmm_params.tsv")
     model_info = {
         "formula": formula,
@@ -204,8 +248,8 @@ def _write_fit_outputs(
         "n_rois": int(delta_frame["roi"].nunique()),
         "n_models": int(delta_frame["model"].nunique()),
         "converged": bool(getattr(fit, "converged", True)),
-        "random_effects_note": "groups=subject; roi modeled via vc_formula (nested within subject "
-                                "as a pragmatic approximation of crossed RE given statsmodels limits).",
+        "random_effects_note": random_effects_note,
+        "fallback_mode": fallback_mode,
     }
     if extra_json:
         model_info.update(extra_json)
@@ -265,7 +309,7 @@ def main() -> None:
     delta_frame = compute_delta(frame, value_col=value_col, condition_col=condition_col)
     write_table(delta_frame, output_dir / "delta_rho_long.tsv")
 
-    fit, formula = fit_lmm(delta_frame, condition_col)
+    fit, formula, random_effects_note, fallback_mode = fit_lmm(delta_frame, condition_col)
     _write_fit_outputs(
         fit,
         formula=formula,
@@ -274,6 +318,8 @@ def main() -> None:
         value_col=value_col,
         source=source,
         condition_col=condition_col,
+        random_effects_note=random_effects_note,
+        fallback_mode=fallback_mode,
     )
 
     if args.family_split:
@@ -304,7 +350,7 @@ def main() -> None:
                 family_rows.append(summary_row)
                 continue
             try:
-                family_fit, family_formula = fit_lmm(family_frame, condition_col)
+                family_fit, family_formula, family_re_note, family_fallback_mode = fit_lmm(family_frame, condition_col)
                 family_params, family_info = _write_fit_outputs(
                     family_fit,
                     formula=family_formula,
@@ -313,6 +359,8 @@ def main() -> None:
                     value_col=value_col,
                     source=source,
                     condition_col=condition_col,
+                    random_effects_note=family_re_note,
+                    fallback_mode=family_fallback_mode,
                     extra_json={"family_col": resolved_family_col, "family_value": family_value},
                 )
                 family_rows.append({
@@ -322,6 +370,7 @@ def main() -> None:
                     "bic": family_info["bic"],
                     "n_obs_model": family_info["n_obs"],
                     "converged": family_info["converged"],
+                    "fallback_mode": family_info["fallback_mode"],
                     "output_dir": str(family_out),
                 })
                 family_params = family_params.assign(

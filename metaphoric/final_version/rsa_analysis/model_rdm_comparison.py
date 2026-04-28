@@ -285,10 +285,12 @@ def _load_memory_table(memory_dir: Path | None, subject: str, variant: str = "bi
     return None
 
 
-def _default_output_dir() -> Path:
+def _default_output_dir(*, paper_output_root: Path | None = None) -> Path:
     from rsa_analysis.rsa_config import BASE_DIR, ROI_SET  # type: ignore
+    base = paper_output_root or (Path(BASE_DIR) / "paper_outputs" / "qc")
+    # Keep the ROI_SET suffix to avoid collisions across ROI sets.
     return default_roi_tagged_out_dir(
-        BASE_DIR,
+        base,
         "model_rdm_results",
         override_env="METAPHOR_MODEL_RDM_OUT_DIR",
         roi_set=ROI_SET,
@@ -478,6 +480,14 @@ def main() -> None:
     parser.add_argument("output_dir", type=Path, nargs="?", default=None,
                         help="Defaults to {BASE_DIR}/model_rdm_results_{ROI_SET}; "
                              "override via METAPHOR_MODEL_RDM_OUT_DIR env var.")
+    parser.add_argument(
+        "--paper-output-root",
+        type=Path,
+        default=None,
+        help="Unified output root. If set and output_dir is omitted, defaults to "
+             "<paper_output_root>/qc/model_rdm_results_{ROI_SET}. If omitted, defaults to "
+             "{BASE_DIR}/paper_outputs/qc/model_rdm_results_{ROI_SET}.",
+    )
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
     parser.add_argument("--metadata-template", default="{time}_{condition}_metadata.tsv")
     parser.add_argument("--conditions", nargs="*", default=["yy", "kj", "baseline"])
@@ -531,7 +541,9 @@ def main() -> None:
     args.enabled_models = _normalize_enabled_models(args.enabled_models)
 
     args.pattern_root = args.pattern_root or _default_pattern_root()
-    output_dir = ensure_dir(args.output_dir if args.output_dir is not None else _default_output_dir())
+    output_dir = ensure_dir(
+        args.output_dir if args.output_dir is not None else _default_output_dir(paper_output_root=args.paper_output_root)
+    )
     audit_root = None
     if args.save_rdm_audit:
         audit_root = ensure_dir(

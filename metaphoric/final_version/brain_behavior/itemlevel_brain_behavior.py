@@ -135,7 +135,11 @@ def _prepare_behavior_trials(behavior_trials_path: Path, template: pd.DataFrame)
     merged["pair_id"] = pd.to_numeric(merged["pair_id"], errors="coerce")
     merged = merged.dropna(subset=["pair_id", "memory"])
     merged["pair_id"] = merged["pair_id"].astype(int)
-    merged["word_label_template"] = merged["word_label"]
+    # `word_label` after the merge is the canonical stimulus label from the template
+    # (e.g., yyw_1 / yyew_1). We'll use it to join to the neural item-wise RSA rows.
+    if "word_label" in merged.columns:
+        merged["word_label"] = merged["word_label"].astype(str).str.strip()
+    merged["word_label_template"] = merged.get("word_label")
     return merged
 
 
@@ -148,6 +152,10 @@ def _prepare_neural_pair_delta(rsa_path: Path, roi_set: str) -> pd.DataFrame:
     frame["pair_id"] = pd.to_numeric(frame["pair_id"], errors="coerce")
     frame = frame.dropna(subset=["pair_id", "similarity"])
     frame["pair_id"] = frame["pair_id"].astype(int)
+    if "word_label" in frame.columns:
+        frame["word_label"] = frame["word_label"].astype(str).str.strip()
+    if "partner_label" in frame.columns:
+        frame["partner_label"] = frame["partner_label"].astype(str).str.strip()
 
     pivot = (
         frame.pivot_table(
@@ -176,14 +184,23 @@ def _build_itemlevel_long(
     qc_rows: list[dict[str, object]] = []
 
     for roi_set, neural in neural_frames.items():
-        merged = behavior_trials.merge(
+        # Avoid implicit cartesian products: join behavior trials to the matching
+        # item-wise neural delta by `(subject, condition, pair_id, word_label)`.
+        #
+        # Context: for each learned pair_id, RSA item-wise tables usually contain
+        # two rows (w and ew). If we join only on pair_id, each behavior row would
+        # match both neural rows, duplicating observations and inflating significance.
+        behavior_for_join = behavior_trials.copy()
+        if "condition" in behavior_for_join.columns:
+            behavior_for_join = behavior_for_join.rename(columns={"condition": "condition_behavior"})
+        merged = behavior_for_join.merge(
             neural,
             how="inner",
-            left_on=["subject", "condition_neural", "pair_id"],
-            right_on=["subject", "condition", "pair_id"],
+            left_on=["subject", "condition_neural", "pair_id", "word_label"],
+            right_on=["subject", "condition", "pair_id", "word_label"],
             suffixes=("", "_neural"),
         )
-        merged = merged.drop(columns=["condition_neural"]).rename(columns={"condition": "condition"})
+        merged = merged.drop(columns=["condition_neural"])
         joined_frames.append(merged)
         qc_rows.append(
             {
@@ -368,13 +385,13 @@ def _fit_interaction_models(long_frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _plot_primary_effects(primary: pd.DataFrame, figure_path: Path) -> None:
-    plot_frame = primary[
-        (primary["roi_set"] == "main_functional")
-        & (primary["response"] == "memory")
-        & (primary["term"] == "delta_similarity_within_z")
-        & (primary["condition"].isin(["Metaphor", "Spatial"]))
-    ].copy()
+def _plot_primary_effects(
+    plot_frame: pd.DataFrame,
+    figure_path: Path,
+    *,
+    x_label: str,
+    title: str,
+) -> None:
     if plot_frame.empty:
         return
 
@@ -414,10 +431,10 @@ def _plot_primary_effects(primary: pd.DataFrame, figure_path: Path) -> None:
     ax.axvline(0.0, color="#6b7280", linestyle="--", linewidth=1.0)
     ax.set_yticks(range(len(roi_order)))
     ax.set_yticklabels(roi_order, fontsize=9)
-    ax.set_xlabel("Within-subject item-level coupling coefficient")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("ROI")
     ax.legend(frameon=False, loc="lower right")
-    ax.set_title("Run-7 memory predicted by item-level neural change", fontsize=11)
+    ax.set_title(title, fontsize=11)
     fig.tight_layout()
     ensure_dir(figure_path.parent)
     fig.savefig(figure_path, dpi=300, bbox_inches="tight")
@@ -429,7 +446,7 @@ def main() -> None:
     parser.add_argument(
         "--behavior-trials",
         type=Path,
-        default=BASE_DIR / "behavior_results" / "refined" / "behavior_trials.tsv",
+        default=BASE_DIR / "paper_outputs" / "qc" / "behavior_results" / "refined" / "behavior_trials.tsv",
         help="Refined trial-level behavior table.",
     )
     parser.add_argument(
@@ -441,13 +458,13 @@ def main() -> None:
     parser.add_argument(
         "--main-rsa",
         type=Path,
-        default=BASE_DIR / "rsa_results_optimized_main_functional" / "rsa_itemwise_details.csv",
+        default=BASE_DIR / "paper_outputs" / "qc" / "rsa_results_optimized_main_functional" / "rsa_itemwise_details.csv",
         help="Main functional item-wise RSA table.",
     )
     parser.add_argument(
         "--literature-rsa",
         type=Path,
-        default=BASE_DIR / "rsa_results_optimized_literature" / "rsa_itemwise_details.csv",
+        default=BASE_DIR / "paper_outputs" / "qc" / "rsa_results_optimized_literature" / "rsa_itemwise_details.csv",
         help="Literature item-wise RSA table.",
     )
     parser.add_argument(
@@ -499,8 +516,31 @@ def main() -> None:
     ].copy() if not full.empty else pd.DataFrame()
     write_table(rt_primary, tables_si / "table_itemlevel_coupling_rt.tsv")
 
+    memory_plot = primary[
+        (primary["roi_set"] == "main_functional")
+        & (primary["response"] == "memory")
+        & (primary["term"] == "delta_similarity_within_z")
+        & (primary["condition"].isin(["Metaphor", "Spatial"]))
+    ].copy() if not primary.empty else pd.DataFrame()
     figure_path = figures_main / "fig_itemlevel_coupling.png"
-    _plot_primary_effects(primary, figure_path)
+    _plot_primary_effects(
+        memory_plot,
+        figure_path,
+        x_label="Within-subject item-level coupling coefficient",
+        title="Run-7 memory predicted by item-level neural change",
+    )
+
+    rt_plot = rt_primary[
+        (rt_primary["roi_set"] == "main_functional")
+        & (rt_primary["condition"].isin(["Metaphor", "Spatial"]))
+    ].copy() if not rt_primary.empty else pd.DataFrame()
+    rt_figure_path = figures_main / "fig_itemlevel_coupling_rt.png"
+    _plot_primary_effects(
+        rt_plot,
+        rt_figure_path,
+        x_label="Within-subject RT coupling coefficient",
+        title="Correct-trial RT predicted by item-level neural change",
+    )
 
     save_json(
         {
@@ -515,7 +555,8 @@ def main() -> None:
             "n_main_rois": int(long_frame.loc[long_frame["roi_set"] == "main_functional", "roi"].nunique()),
             "n_literature_rois": int(long_frame.loc[long_frame["roi_set"] == "literature", "roi"].nunique()) if "literature" in long_frame["roi_set"].unique() else 0,
             "primary_table": str(tables_main / "table_itemlevel_coupling.tsv"),
-            "figure": str(figure_path),
+            "figure_memory": str(figure_path),
+            "figure_rt": str(rt_figure_path),
         },
         qc_dir / "itemlevel_coupling_manifest.json",
     )

@@ -46,7 +46,12 @@ from common.final_utils import ensure_dir, save_json, write_table
 
 _ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 DATA_DIR = Path(os.environ.get("METAPHOR_DATA_EVENTS", str(_ROOT / "data_events")))
-OUT_DIR = Path(os.environ.get("METAPHOR_BEHAVIOR_RESULTS", str(_ROOT / "behavior_results")))
+OUT_DIR = Path(
+    os.environ.get(
+        "METAPHOR_BEHAVIOR_RESULTS",
+        str(_ROOT / "paper_outputs" / "qc" / "behavior_results"),
+    )
+)
 FILE_PATTERN = "*run-7_events.tsv"
 
 YY_SET = {"yyw", "yyew"}

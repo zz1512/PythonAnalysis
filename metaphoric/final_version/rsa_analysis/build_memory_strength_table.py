@@ -79,6 +79,22 @@ def _normalize_to_unit_interval(values: pd.Series) -> pd.Series:
     return (numeric - low) / (high - low)
 
 
+def _normalize_with_mask(values: pd.Series, mask: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    valid_mask = mask.fillna(False).astype(bool) & np.isfinite(numeric)
+    if not valid_mask.any():
+        return pd.Series(np.nan, index=values.index, dtype=float)
+    low = float(numeric[valid_mask].min())
+    high = float(numeric[valid_mask].max())
+    if np.isclose(low, high):
+        out = pd.Series(np.nan, index=values.index, dtype=float)
+        out.loc[valid_mask] = 1.0
+        return out
+    out = pd.Series(np.nan, index=values.index, dtype=float)
+    out.loc[valid_mask] = (numeric.loc[valid_mask] - low) / (high - low)
+    return out
+
+
 def derive_binary_memory(frame: pd.DataFrame) -> pd.Series:
     if "memory" in frame.columns:
         return pd.to_numeric(frame["memory"], errors="coerce").fillna(0.0).clip(lower=0.0, upper=1.0)
@@ -94,7 +110,12 @@ def derive_explicit_memory_score(frame: pd.DataFrame, score_col: str | None) -> 
     return None
 
 
-def derive_rt_components(frame: pd.DataFrame, rt_cols: list[str]) -> tuple[pd.Series, pd.Series, str | None]:
+def derive_rt_components(
+    frame: pd.DataFrame,
+    rt_cols: list[str],
+    *,
+    binary_memory: pd.Series | None = None,
+) -> tuple[pd.Series, pd.Series, str | None]:
     available = [col for col in rt_cols if col in frame.columns]
     if not available:
         empty = pd.Series(np.nan, index=frame.index, dtype=float)
@@ -103,7 +124,11 @@ def derive_rt_components(frame: pd.DataFrame, rt_cols: list[str]) -> tuple[pd.Se
     rt_raw = pd.to_numeric(frame[rt_col], errors="coerce")
     rt_raw = rt_raw.where(rt_raw > 0)
     log_rt = np.log(rt_raw)
-    norm_log_rt = _normalize_to_unit_interval(log_rt)
+    if binary_memory is not None:
+        correct_mask = pd.to_numeric(binary_memory, errors="coerce").fillna(0.0).gt(0)
+        norm_log_rt = _normalize_with_mask(log_rt, correct_mask)
+    else:
+        norm_log_rt = _normalize_to_unit_interval(log_rt)
     speed_component = 1.0 - norm_log_rt
     return rt_raw, speed_component, rt_col
 
@@ -176,7 +201,11 @@ def process_subject(
     word_col = pick_column(frame, word_cols, kind="word label")
     binary_memory = derive_binary_memory(frame)
     explicit_score = derive_explicit_memory_score(frame, score_col)
-    rt_raw, speed_component, rt_col = derive_rt_components(frame, rt_cols)
+    rt_raw, speed_component, rt_col = derive_rt_components(
+        frame,
+        rt_cols,
+        binary_memory=binary_memory,
+    )
 
     base_rows = pd.DataFrame({
         "word_label": frame[word_col].astype(str).str.strip(),
@@ -223,6 +252,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build per-subject memory-strength tables for Model-RSA M7 variants.")
     parser.add_argument("--events-root", type=Path, default=None)
     parser.add_argument("--target-run", type=int, default=7)
+    parser.add_argument(
+        "--paper-output-root",
+        type=Path,
+        default=None,
+        help="Unified output root. If set and --output-dir is omitted, defaults to "
+             "<paper_output_root>/qc/memory_strength. If omitted, defaults to {BASE_DIR}/paper_outputs/qc/memory_strength.",
+    )
     parser.add_argument("--output-dir", type=Path, default=None,
                         help="Defaults to {BASE_DIR}/memory_strength.")
     parser.add_argument("--score-col", default=None,
@@ -245,7 +281,9 @@ def main() -> None:
     from rsa_analysis.rsa_config import BASE_DIR  # noqa: E402
 
     events_root = args.events_root or default_events_root()
-    output_dir = ensure_dir(args.output_dir or (BASE_DIR / "memory_strength"))
+    paper_root = args.paper_output_root or (BASE_DIR / "paper_outputs")
+    default_out = paper_root / "qc" / "memory_strength"
+    output_dir = ensure_dir(args.output_dir or default_out)
 
     summaries: list[dict[str, object]] = []
     for i in range(args.subject_range[0], args.subject_range[1] + 1):
