@@ -62,10 +62,25 @@ def write_table(frame: pd.DataFrame, path: str | Path) -> None:
     raise ValueError(f"Unsupported table format: {path}")
 
 
+def _clean_json_value(value):
+    if isinstance(value, dict):
+        return {str(key): _clean_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean_json_value(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _clean_json_value(value.tolist())
+    if isinstance(value, np.generic):
+        return _clean_json_value(value.item())
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
 def save_json(payload: dict, path: str | Path) -> None:
     path = Path(path)
     ensure_dir(path.parent)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    cleaned = _clean_json_value(payload)
+    path.write_text(json.dumps(cleaned, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
 
 
 def list_subject_dirs(root: str | Path) -> list[Path]:

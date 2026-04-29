@@ -76,6 +76,7 @@ CONDITION_MAP = {
 ROI_SET_SHORT_LABELS = {
     "main_functional": "Main functional",
     "literature": "Literature",
+    "literature_spatial": "Literature spatial",
 }
 
 
@@ -173,7 +174,24 @@ def _prepare_neural_pair_delta(rsa_path: Path, roi_set: str) -> pd.DataFrame:
     pivot["delta_similarity_post_minus_pre"] = pivot["similarity_post"] - pivot["similarity_pre"]
     pivot["differentiation_strength_pre_minus_post"] = pivot["similarity_pre"] - pivot["similarity_post"]
     pivot["roi_set"] = roi_set
-    return pivot
+
+    first_item = pivot.copy()
+    first_item["matched_pair_position"] = "word_label"
+
+    second_item = pivot[pivot["partner_label"].notna()].copy()
+    second_item = second_item[second_item["partner_label"].astype(str).str.strip().ne("")]
+    second_item = second_item[second_item["partner_label"].astype(str).str.strip().ne("nan")]
+    second_item["matched_pair_position"] = "partner_label"
+    original_word = second_item["word_label"].copy()
+    second_item["word_label"] = second_item["partner_label"].astype(str).str.strip()
+    second_item["partner_label"] = original_word.astype(str).str.strip()
+
+    expanded = pd.concat([first_item, second_item], ignore_index=True)
+    expanded = expanded.drop_duplicates(
+        subset=["subject", "roi", "condition", "pair_id", "word_label"],
+        keep="first",
+    )
+    return expanded
 
 
 def _build_itemlevel_long(
@@ -187,9 +205,9 @@ def _build_itemlevel_long(
         # Avoid implicit cartesian products: join behavior trials to the matching
         # item-wise neural delta by `(subject, condition, pair_id, word_label)`.
         #
-        # Context: for each learned pair_id, RSA item-wise tables usually contain
-        # two rows (w and ew). If we join only on pair_id, each behavior row would
-        # match both neural rows, duplicating observations and inflating significance.
+        # Context: RSA pair deltas are pair-level values. `_prepare_neural_pair_delta`
+        # expands each pair into two word-level rows so both words can join exactly
+        # without creating a pair_id-only cartesian product.
         behavior_for_join = behavior_trials.copy()
         if "condition" in behavior_for_join.columns:
             behavior_for_join = behavior_for_join.rename(columns={"condition": "condition_behavior"})
@@ -206,6 +224,7 @@ def _build_itemlevel_long(
             {
                 "roi_set": roi_set,
                 "n_behavior_rows": int(len(behavior_trials)),
+                "n_neural_rows": int(len(neural)),
                 "n_joined_rows": int(len(merged)),
                 "n_subjects": int(merged["subject"].nunique()) if not merged.empty else 0,
                 "n_rois": int(merged["roi"].nunique()) if not merged.empty else 0,
@@ -468,6 +487,12 @@ def main() -> None:
         help="Literature item-wise RSA table.",
     )
     parser.add_argument(
+        "--literature-spatial-rsa",
+        type=Path,
+        default=BASE_DIR / "paper_outputs" / "qc" / "rsa_results_optimized_literature_spatial" / "rsa_itemwise_details.csv",
+        help="Spatial-literature item-wise RSA table.",
+    )
+    parser.add_argument(
         "--paper-output-root",
         type=Path,
         default=BASE_DIR / "paper_outputs",
@@ -489,6 +514,11 @@ def main() -> None:
     }
     if args.literature_rsa.exists():
         neural_frames["literature"] = _prepare_neural_pair_delta(args.literature_rsa, "literature")
+    if args.literature_spatial_rsa.exists():
+        neural_frames["literature_spatial"] = _prepare_neural_pair_delta(
+            args.literature_spatial_rsa,
+            "literature_spatial",
+        )
 
     long_frame, join_qc = _build_itemlevel_long(behavior_trials, neural_frames)
     write_table(long_frame, qc_dir / "itemlevel_behavior_neural_long.tsv")
@@ -548,12 +578,14 @@ def main() -> None:
             "stimuli_template": str(args.stimuli_template),
             "main_rsa": str(args.main_rsa),
             "literature_rsa": str(args.literature_rsa),
+            "literature_spatial_rsa": str(args.literature_spatial_rsa),
             "paper_output_root": str(args.paper_output_root),
             "n_behavior_rows": int(len(behavior_trials)),
             "n_itemlevel_joined_rows": int(len(long_frame)),
             "n_subjects": int(long_frame["subject"].nunique()),
             "n_main_rois": int(long_frame.loc[long_frame["roi_set"] == "main_functional", "roi"].nunique()),
             "n_literature_rois": int(long_frame.loc[long_frame["roi_set"] == "literature", "roi"].nunique()) if "literature" in long_frame["roi_set"].unique() else 0,
+            "n_literature_spatial_rois": int(long_frame.loc[long_frame["roi_set"] == "literature_spatial", "roi"].nunique()) if "literature_spatial" in long_frame["roi_set"].unique() else 0,
             "primary_table": str(tables_main / "table_itemlevel_coupling.tsv"),
             "figure_memory": str(figure_path),
             "figure_rt": str(rt_figure_path),

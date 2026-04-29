@@ -55,7 +55,11 @@ if str(FINAL_ROOT) not in sys.path:
 
 from common.final_utils import ensure_dir, save_json, write_table  # noqa: E402
 from common.final_utils import paired_t_summary  # noqa: E402
-from common.roi_library import current_roi_set, default_roi_tagged_out_dir, sanitize_roi_tag  # noqa: E402
+from common.roi_library import current_roi_set, default_roi_tagged_out_dir, sanitize_roi_tag
+
+GLM_ROOT = FINAL_ROOT / "glm_analysis"
+if str(GLM_ROOT) not in sys.path:
+    sys.path.append(str(GLM_ROOT))# noqa: E402
 from glm_config import config  # noqa: E402
 import glm_utils  # noqa: E402
 

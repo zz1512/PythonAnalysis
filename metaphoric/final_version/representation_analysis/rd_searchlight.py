@@ -346,6 +346,26 @@ def _plot_group_deltas(plot_payload: list[dict[str, object]], figure_path: Path)
     plt.close(fig)
 
 
+def _resolve_subject_mask(subject_mask_root: Path, subject: str, mask_filename: str) -> Path | None:
+    subject_root = subject_mask_root / subject
+    requested = subject_root / mask_filename
+    candidates = [requested]
+    if requested.suffix == ".nii":
+        candidates.append(requested.with_suffix(".nii.gz"))
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    mask_name = Path(mask_filename).name
+    nested_candidates = sorted(subject_root.glob(f"*/{mask_name}"))
+    if Path(mask_name).suffix == ".nii":
+        nested_candidates.extend(sorted(subject_root.glob(f"*/{Path(mask_name).with_suffix('.nii.gz').name}")))
+    for candidate in nested_candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def compute_cell_maps(
     subject_dirs,
     subject_mask_root: Path,
@@ -358,21 +378,50 @@ def compute_cell_maps(
     mask_filename: str = "mask.nii",
 ):
     paths = []
+    qc_rows = []
     for subject_dir in subject_dirs:
         image_path = subject_dir / filename_template.format(time=time, condition=condition)
-        subject_mask = subject_mask_root / subject_dir.name / mask_filename
-        if not subject_mask.exists() and subject_mask.suffix == ".nii":
-            alt = subject_mask.with_suffix(".nii.gz")
-            if alt.exists():
-                subject_mask = alt
-        if not image_path.exists() or not subject_mask.exists():
+        subject_mask = _resolve_subject_mask(subject_mask_root, subject_dir.name, mask_filename)
+        if not image_path.exists():
+            qc_rows.append({
+                "subject": subject_dir.name,
+                "time": time,
+                "condition": condition,
+                "image_path": str(image_path),
+                "mask_path": str(subject_mask) if subject_mask else "",
+                "status": "skipped",
+                "skip_reason": "missing_pattern",
+                "output_path": "",
+            })
+            continue
+        if subject_mask is None:
+            qc_rows.append({
+                "subject": subject_dir.name,
+                "time": time,
+                "condition": condition,
+                "image_path": str(image_path),
+                "mask_path": "",
+                "status": "skipped",
+                "skip_reason": "missing_mask",
+                "output_path": "",
+            })
             continue
         reference_img, mask, values = compute_searchlight_dimension_map(image_path, subject_mask, explained_threshold, voxel_count)
         subject_output = ensure_dir(output_dir / subject_dir.name)
         out_path = subject_output / f"rd_{time}_{condition}.nii.gz"
         save_scalar_map(reference_img, mask, values, out_path)
         paths.append(out_path)
-    return paths
+        qc_rows.append({
+            "subject": subject_dir.name,
+            "time": time,
+            "condition": condition,
+            "image_path": str(image_path),
+            "mask_path": str(subject_mask),
+            "status": "ok",
+            "skip_reason": "",
+            "output_path": str(out_path),
+        })
+    return paths, qc_rows
 
 
 def main() -> None:
@@ -405,9 +454,10 @@ def main() -> None:
     subject_dirs = sorted([path for path in pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
 
     cell_paths = {}
+    map_qc_rows = []
     for time in ["pre", "post"]:
         for condition in args.conditions:
-            cell_paths[(time, condition)] = compute_cell_maps(
+            paths, qc_rows = compute_cell_maps(
                 subject_dirs,
                 subject_mask_root,
                 qc_root,
@@ -418,6 +468,11 @@ def main() -> None:
                 args.voxel_count,
                 mask_filename=args.mask_filename,
             )
+            cell_paths[(time, condition)] = paths
+            map_qc_rows.extend(qc_rows)
+    map_qc = pd.DataFrame(map_qc_rows)
+    if not map_qc.empty:
+        write_table(map_qc, qc_root / "rd_searchlight_map_qc.tsv")
 
     summaries: dict[str, dict[str, object]] = {}
     peak_frames: list[pd.DataFrame] = []
@@ -469,6 +524,9 @@ def main() -> None:
             "subject_mask_root": str(subject_mask_root),
             "conditions": list(args.conditions),
             "n_permutations": int(args.n_permutations),
+            "cell_counts": {f"{time}_{condition}": len(paths) for (time, condition), paths in cell_paths.items()},
+            "n_skipped_cells": int((map_qc["status"] == "skipped").sum()) if not map_qc.empty else 0,
+            "map_qc": str(qc_root / "rd_searchlight_map_qc.tsv"),
             "qc_root": str(qc_root),
             "tables_main": str(tables_main),
             "figures_main": str(figures_main),

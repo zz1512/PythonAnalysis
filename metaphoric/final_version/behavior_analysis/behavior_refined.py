@@ -52,7 +52,7 @@ from behavior_analysis.behavior_lmm import (  # noqa: E402
     FILE_PATTERN,
     OUT_DIR,
     collect_paths,
-    fit_mixed_model,
+    fit_behavior_model,
     prepare_trials,
 )
 
@@ -162,7 +162,7 @@ def export_lmm(frame: pd.DataFrame, response_col: str, output_dir: Path) -> dict
     if model_frame.empty:
         return {"ran": False, "reason": f"no_non_missing_{response_col}"}
 
-    fit, fit_strategy, formula = fit_mixed_model(model_frame, response_col)
+    fit, fit_strategy, formula, model_family = fit_behavior_model(model_frame, response_col)
     export_outputs(
         fit,
         output_dir,
@@ -170,14 +170,17 @@ def export_lmm(frame: pd.DataFrame, response_col: str, output_dir: Path) -> dict
         response_label=response_col,
         response_col=response_col,
         fit_strategy=fit_strategy,
+        model_family=model_family,
         model_frame=model_frame,
     )
+    n_obs = int(getattr(fit, "nobs", len(model_frame)))
     return {
         "ran": True,
         "response": response_col,
         "formula": formula,
         "fit_strategy": fit_strategy,
-        "n_obs": int(fit.nobs),
+        "model_family": model_family,
+        "n_obs": n_obs,
         "n_subjects": int(model_frame["subject"].nunique()),
         "n_items": int(model_frame["item"].nunique()),
         "converged": bool(getattr(fit, "converged", True)),

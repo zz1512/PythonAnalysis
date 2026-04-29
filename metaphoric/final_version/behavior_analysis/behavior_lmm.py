@@ -195,7 +195,31 @@ def build_model_frame(trials: pd.DataFrame, response_col: str) -> pd.DataFrame:
     return model_frame
 
 
-def fit_mixed_model(model_frame: pd.DataFrame, response_col: str):
+def is_binary_response(model_frame: pd.DataFrame, response_col: str) -> bool:
+    values = pd.to_numeric(model_frame[response_col], errors="coerce").dropna().unique()
+    if len(values) == 0 or len(values) > 2:
+        return False
+    return set(float(value) for value in values).issubset({0.0, 1.0})
+
+
+def fit_binomial_gee(model_frame: pd.DataFrame, response_col: str):
+    from statsmodels.genmod.cov_struct import Exchangeable
+    from statsmodels.genmod.families import Binomial
+    from statsmodels.genmod.generalized_estimating_equations import GEE
+
+    formula = f"{response_col} ~ C(condition)"
+    model = GEE.from_formula(
+        formula,
+        groups="subject",
+        cov_struct=Exchangeable(),
+        family=Binomial(),
+        data=model_frame,
+    )
+    fit = model.fit()
+    return fit, "binomial_gee_subject_exchangeable", formula, "binomial_gee"
+
+
+def fit_gaussian_mixed_model(model_frame: pd.DataFrame, response_col: str):
     import statsmodels.formula.api as smf
 
     formula = f"{response_col} ~ C(condition)"
@@ -221,11 +245,34 @@ def fit_mixed_model(model_frame: pd.DataFrame, response_col: str):
                 **attempt["kwargs"],
             )
             fit = model.fit(reml=False, method="lbfgs", maxiter=200, disp=False)
-            return fit, attempt["label"], formula
+            return fit, attempt["label"], formula, "gaussian_mixedlm"
         except Exception as exc:
             fit_errors.append(f"{attempt['label']}: {exc}")
 
     raise RuntimeError(" ; ".join(fit_errors))
+
+
+def fit_behavior_model(model_frame: pd.DataFrame, response_col: str):
+    if is_binary_response(model_frame, response_col):
+        return fit_binomial_gee(model_frame, response_col)
+    return fit_gaussian_mixed_model(model_frame, response_col)
+
+
+def _as_series(values, index: pd.Index) -> pd.Series:
+    if isinstance(values, pd.Series):
+        return values.reindex(index)
+    try:
+        return pd.Series(values, index=index).reindex(index)
+    except Exception:
+        return pd.Series(float("nan"), index=index)
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        result = float(value)
+    except Exception:
+        return None
+    return None if pd.isna(result) else result
 
 
 def export_outputs(
@@ -236,32 +283,39 @@ def export_outputs(
     response_label: str,
     response_col: str,
     fit_strategy: str,
+    model_family: str,
     model_frame: pd.DataFrame,
 ) -> None:
     output_dir = ensure_dir(output_dir)
     (output_dir / "behavior_lmm_summary.txt").write_text(str(fit.summary()), encoding="utf-8")
 
+    param_index = fit.params.index
+    bse = _as_series(getattr(fit, "bse", None), param_index)
+    test_values = _as_series(getattr(fit, "tvalues", None), param_index)
+    pvalues = _as_series(getattr(fit, "pvalues", None), param_index)
     params = pd.DataFrame(
         {
-            "term": fit.params.index,
+            "term": param_index,
             "estimate": fit.params.values,
-            "std_error": fit.bse.reindex(fit.params.index).values,
-            "z_value": fit.tvalues.reindex(fit.params.index).values,
-            "p_value": fit.pvalues.reindex(fit.params.index).values,
+            "std_error": bse.values,
+            "z_value": test_values.values,
+            "p_value": pvalues.values,
         }
     )
     write_table(params, output_dir / "behavior_lmm_params.tsv")
 
+    n_obs = int(getattr(fit, "nobs", len(model_frame)))
     save_json(
         {
             "formula": formula,
             "response_label": response_label,
             "response_column": response_col,
             "fit_strategy": fit_strategy,
-            "aic": None if pd.isna(fit.aic) else float(fit.aic),
-            "bic": None if pd.isna(fit.bic) else float(fit.bic),
-            "log_likelihood": float(fit.llf),
-            "n_obs": int(fit.nobs),
+            "model_family": model_family,
+            "aic": _safe_float(getattr(fit, "aic", None)),
+            "bic": _safe_float(getattr(fit, "bic", None)),
+            "log_likelihood": _safe_float(getattr(fit, "llf", None)),
+            "n_obs": n_obs,
             "n_subjects": int(model_frame["subject"].nunique()),
             "n_items": int(model_frame["item"].nunique()),
         },
@@ -309,9 +363,9 @@ def main() -> None:
     response_specs = choose_response_specs(trials, args.response)
 
     for response_label, response_col in response_specs:
-        print(f"\n=== Fitting LMM for {response_label} (column: {response_col}) ===")
+        print(f"\n=== Fitting behavior model for {response_label} (column: {response_col}) ===")
         model_frame = build_model_frame(trials, response_col)
-        fit, fit_strategy, formula = fit_mixed_model(model_frame, response_col)
+        fit, fit_strategy, formula, model_family = fit_behavior_model(model_frame, response_col)
         output_dir = args.output_dir / f"run7_{response_label}"
         export_outputs(
             fit,
@@ -320,11 +374,13 @@ def main() -> None:
             response_label=response_label,
             response_col=response_col,
             fit_strategy=fit_strategy,
+            model_family=model_family,
             model_frame=model_frame,
         )
         print(f"Saved outputs to {output_dir}")
         print(
-            f"n_obs={int(fit.nobs)}, n_subjects={model_frame['subject'].nunique()}, "
+            f"n_obs={int(getattr(fit, 'nobs', len(model_frame)))}, "
+            f"n_subjects={model_frame['subject'].nunique()}, "
             f"n_items={model_frame['item'].nunique()}, strategy={fit_strategy}"
         )
 
