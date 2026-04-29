@@ -511,13 +511,14 @@ def main() -> None:
         )
     ].copy() if not group_frame.empty else pd.DataFrame()
 
-    write_table(main_table, tables_main / "table_learning_repeated_exposure.tsv")
-    write_table(subject_frame, tables_si / "table_learning_repeated_exposure_subject.tsv")
-    write_table(family_frame, tables_si / "table_learning_repeated_exposure_family.tsv")
-    write_table(item_frame, qc_dir / "learning_repeated_exposure_itemwise.tsv")
-    write_table(group_frame, qc_dir / "learning_repeated_exposure_group.tsv")
-    write_table(pd.DataFrame(qc_rows), qc_dir / "learning_repeated_exposure_qc.tsv")
-    _plot_learning_dynamics(subject_frame, figures_main / "fig_learning_dynamics.png")
+    roi_tag = sanitize_roi_tag(args.roi_set)
+    write_table(main_table, tables_main / f"table_learning_repeated_exposure_{roi_tag}.tsv")
+    write_table(subject_frame, tables_si / f"table_learning_repeated_exposure_subject_{roi_tag}.tsv")
+    write_table(family_frame, tables_si / f"table_learning_repeated_exposure_family_{roi_tag}.tsv")
+    write_table(item_frame, qc_dir / f"learning_repeated_exposure_itemwise_{roi_tag}.tsv")
+    write_table(group_frame, qc_dir / f"learning_repeated_exposure_group_{roi_tag}.tsv")
+    write_table(pd.DataFrame(qc_rows), qc_dir / f"learning_repeated_exposure_qc_{roi_tag}.tsv")
+    _plot_learning_dynamics(subject_frame, figures_main / f"fig_learning_dynamics_{roi_tag}.png")
     save_json(
         {
             "analysis_definition": "A2 primary + A1 supplementary repeated-exposure analysis",
@@ -530,7 +531,7 @@ def main() -> None:
             "n_qc_rows": int(len(qc_rows)),
             "output_root": str(output_root),
         },
-        qc_dir / "learning_dynamics_meta.json",
+        qc_dir / f"learning_dynamics_meta_{roi_tag}.json",
     )
 
 

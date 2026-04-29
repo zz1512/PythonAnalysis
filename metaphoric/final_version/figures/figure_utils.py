@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -51,6 +52,26 @@ def abbreviate_roi_name(name: str) -> str:
     text = text.replace("Spatial_gt_Metaphor", "S>M")
     text = text.replace("_", " ")
     return text
+
+
+def default_base_dir() -> Path:
+    try:
+        from rsa_analysis.rsa_config import BASE_DIR  # type: ignore
+
+        return Path(BASE_DIR)
+    except Exception:
+        return Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+
+
+def default_paper_output_root() -> Path:
+    return default_base_dir() / "paper_outputs"
+
+
+def default_figure_dir(kind: str = "figures_main") -> Path:
+    override = os.environ.get("METAPHOR_FIG_OUT_DIR", "").strip()
+    if override:
+        return Path(override)
+    return default_paper_output_root() / kind
 
 
 def apply_publication_rcparams() -> None:

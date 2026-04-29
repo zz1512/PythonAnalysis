@@ -13,37 +13,56 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from figure_utils import abbreviate_roi_name, add_panel_label, apply_publication_rcparams, save_png_pdf
+from figure_utils import (
+    abbreviate_roi_name,
+    add_panel_label,
+    apply_publication_rcparams,
+    default_base_dir,
+    default_figure_dir,
+    save_png_pdf,
+)
 
 
-MODEL_ORDER = ["M2_pair", "M8_reverse_pair", "M3_embedding", "M1_condition", "M7_memory"]
+MODEL_ORDER = [
+    "M2_pair",
+    "M8_reverse_pair",
+    "M3_embedding",
+    "M1_condition",
+    "M7_binary",
+    "M7_continuous_confidence",
+]
 MODEL_LABELS = {
     "M2_pair": "M2 pair",
     "M8_reverse_pair": "M8 reverse pair",
     "M3_embedding": "M3 embedding",
     "M1_condition": "M1 condition",
-    "M7_memory": "M7 memory",
+    "M7_binary": "M7 binary",
+    "M7_continuous_confidence": "M7 cont. confidence",
 }
 
 
 def _base_dir() -> Path:
-    return Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+    return default_base_dir()
 
 
 def _default_out_dir() -> Path:
-    override = os.environ.get("METAPHOR_FIG_OUT_DIR", "").strip()
-    if override:
-        return Path(override)
-    return _base_dir() / "figures_main_story"
+    return default_figure_dir("figures_main")
 
 
-def _load_group_summary(path: Path, roi_set: str) -> pd.DataFrame:
+def _load_group_summary(path: Path, roi_set: str, *, condition_group: str) -> pd.DataFrame:
     frame = pd.read_csv(path, sep="\t")
     required = {"roi", "model", "mean_a", "mean_b", "p"}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"Model-RSA summary missing columns: {sorted(missing)} ({path})")
     frame = frame.copy()
+    if "condition_group" in frame.columns:
+        frame["condition_group"] = frame["condition_group"].fillna("all").astype(str)
+        frame = frame[frame["condition_group"] == condition_group].copy()
+    else:
+        frame["condition_group"] = "all"
+    frame["model"] = frame["model"].replace({"M7_memory": "M7_binary"})
+    frame = frame[frame["model"].isin(MODEL_ORDER)].copy()
     frame["roi_set"] = roi_set
     frame["delta_rho"] = frame["mean_a"] - frame["mean_b"]
     frame["model_label"] = frame["model"].map(MODEL_LABELS).fillna(frame["model"])
@@ -60,12 +79,12 @@ def _plot_panel(ax: plt.Axes, subset: pd.DataFrame, title: str, vlim: float, sho
     roi_order = work.groupby("roi_label")["delta_rho"].min().sort_values().index.tolist()
     heat = (
         work.pivot(index="model_label", columns="roi_label", values="delta_rho")
-        .reindex([MODEL_LABELS[m] for m in MODEL_ORDER])
+        .reindex([MODEL_LABELS[m] for m in MODEL_ORDER if MODEL_LABELS[m] in work["model_label"].unique()])
         [roi_order]
     )
     annot = (
         work.pivot(index="model_label", columns="roi_label", values="sig_label")
-        .reindex([MODEL_LABELS[m] for m in MODEL_ORDER])
+        .reindex([MODEL_LABELS[m] for m in MODEL_ORDER if MODEL_LABELS[m] in work["model_label"].unique()])
         [roi_order]
     )
     sns.heatmap(
@@ -95,18 +114,19 @@ def main() -> None:
     parser.add_argument(
         "--main-file",
         type=Path,
-        default=_base_dir() / "model_rdm_results_main_functional" / "model_rdm_group_summary.tsv",
+        default=_base_dir() / "paper_outputs" / "qc" / "model_rdm_results_main_functional" / "model_rdm_group_summary.tsv",
     )
     parser.add_argument(
         "--literature-file",
         type=Path,
-        default=_base_dir() / "model_rdm_results_literature" / "model_rdm_group_summary.tsv",
+        default=_base_dir() / "paper_outputs" / "qc" / "model_rdm_results_literature" / "model_rdm_group_summary.tsv",
     )
+    parser.add_argument("--condition-group", default="all", help="Condition group to plot, default: pooled all.")
     parser.add_argument("--out-dir", type=Path, default=_default_out_dir())
     args = parser.parse_args()
 
-    main_df = _load_group_summary(args.main_file, "main_functional")
-    lit_df = _load_group_summary(args.literature_file, "literature")
+    main_df = _load_group_summary(args.main_file, "main_functional", condition_group=args.condition_group)
+    lit_df = _load_group_summary(args.literature_file, "literature", condition_group=args.condition_group)
     combined = pd.concat([main_df, lit_df], ignore_index=True)
 
     out_dir = args.out_dir
@@ -118,8 +138,8 @@ def main() -> None:
     fig, axes = plt.subplots(2, 1, figsize=(13.5, 8.2), constrained_layout=True)
     vlim = float(combined["delta_rho"].abs().max())
 
-    _plot_panel(axes[0], main_df, "Model-RSA Mechanism: main_functional", vlim=vlim, show_cbar=True)
-    _plot_panel(axes[1], lit_df, "Model-RSA Mechanism: literature", vlim=vlim, show_cbar=False)
+    _plot_panel(axes[0], main_df, f"Model-RSA Mechanism: main_functional ({args.condition_group})", vlim=vlim, show_cbar=True)
+    _plot_panel(axes[1], lit_df, f"Model-RSA Mechanism: literature ({args.condition_group})", vlim=vlim, show_cbar=False)
     add_panel_label(axes[0], "a")
     add_panel_label(axes[1], "b")
 

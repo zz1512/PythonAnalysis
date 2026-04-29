@@ -4,7 +4,8 @@ rd_analysis.py
 用途
 - 在 ROI 内计算表征维度 RD（Representational Dimensionality）：
   对每个 subject、每个 time（pre/post）、每个 condition（yy/kj）的 4D patterns 提取 trials×voxels 样本，
-  计算达到给定解释方差阈值所需的 PCA 成分数（或协方差特征值版本），作为“表征几何复杂度/压缩程度”的指标。
+  默认使用 participation ratio（基于 voxel covariance eigenspectrum 的软维度）；
+  也保留达到给定解释方差阈值所需的 PCA 成分数版本作为敏感性分析。
 
 输入
 - pattern_root: `${PATTERN_ROOT}`（每个 sub-xx 一个目录，包含 `pre_yy.nii.gz` 等）
@@ -18,8 +19,6 @@ rd_analysis.py
 """
 
 from __future__ import annotations
-
-
 
 import argparse
 import os
@@ -42,8 +41,13 @@ if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
 from common.final_utils import difference_in_differences, ensure_dir, paired_t_summary, save_json, write_table
-from common.pattern_metrics import dimensionality_from_samples, load_masked_samples, rd_from_covariance
-from common.roi_library import default_roi_tagged_out_dir
+from common.pattern_metrics import (
+    dimensionality_from_samples,
+    load_masked_samples,
+    participation_ratio_from_samples,
+    rd_from_covariance,
+)
+from common.roi_library import current_roi_set, default_roi_tagged_out_dir, sanitize_roi_tag, select_roi_masks
 
 
 def run_anova(frame: pd.DataFrame) -> dict[str, float]:
@@ -63,27 +67,85 @@ def run_anova(frame: pd.DataFrame) -> dict[str, float]:
     return output
 
 
+def _default_base_dir() -> Path:
+    try:
+        from rsa_analysis.rsa_config import BASE_DIR  # noqa: E402
+
+        return Path(BASE_DIR)
+    except Exception:
+        return Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+
+
+def _default_pattern_root(base_dir: Path) -> Path:
+    return base_dir / "pattern_root"
+
+
+def _resolve_roi_paths(roi_dir: Path | None, *, roi_set: str) -> list[Path]:
+    """
+    Prefer ROI library manifest when available so ROI sets remain consistent across analyses.
+    Fallback to the provided roi_dir directory.
+    """
+    if roi_dir is not None:
+        if roi_dir.is_file():
+            return [roi_dir]
+        return sorted(roi_dir.glob("*.nii*"))
+
+    try:
+        from rsa_analysis.rsa_config import ROI_MANIFEST, ROI_MASKS  # noqa: E402
+
+        manifest = Path(ROI_MANIFEST) if ROI_MANIFEST is not None else None
+        if manifest is not None and manifest.exists():
+            masks = select_roi_masks(manifest, roi_set=roi_set, include_flag="include_in_rd")
+            return sorted(masks.values())
+        return sorted([Path(p) for p in dict(ROI_MASKS).values() if Path(p).exists()])
+    except Exception:
+        return []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ROI-level representational dimensionality analysis.")
-    parser.add_argument("pattern_root", type=Path)
-    parser.add_argument("roi_dir", type=Path)
-    # output_dir 为可选；默认使用 `${PYTHON_METAPHOR_ROOT}/rd_results_<ROI_SET>`，
+    parser.add_argument("pattern_root", type=Path, nargs="?", default=None,
+                        help="Defaults to {BASE_DIR}/pattern_root.")
+    parser.add_argument("roi_dir", type=Path, nargs="?", default=None,
+                        help="Optional ROI directory. If omitted, uses roi_library manifest + METAPHOR_ROI_SET.")
+    # output_dir 为可选；默认使用 `${BASE_DIR}/paper_outputs/qc/rd_results_<ROI_SET>`，
     # 可通过环境变量 METAPHOR_RD_OUT_DIR 强制覆盖。
     parser.add_argument("output_dir", type=Path, nargs="?", default=None)
+    parser.add_argument("--paper-output-root", type=Path, default=None,
+                        help="Unified output root. Default: {BASE_DIR}/paper_outputs.")
+    parser.add_argument("--roi-set", default=None,
+                        help="Override ROI set (default: METAPHOR_ROI_SET).")
     parser.add_argument("--threshold", type=float, default=80.0)
     parser.add_argument("--filename-template", default="{time}_{condition}.nii.gz")
-    parser.add_argument("--rd-mode", choices=["rdm", "covariance"], default="rdm")
+    parser.add_argument(
+        "--rd-mode",
+        choices=["participation_ratio", "covariance", "rdm"],
+        default="participation_ratio",
+    )
     args = parser.parse_args()
 
+    base_dir = _default_base_dir()
+    roi_set = (args.roi_set or current_roi_set()).strip() or "main_functional"
+    roi_tag = sanitize_roi_tag(roi_set)
+    pattern_root = args.pattern_root or _default_pattern_root(base_dir)
+    paper_root = args.paper_output_root or (base_dir / "paper_outputs")
+
     if args.output_dir is None:
-        base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+        # Default to paper_outputs/qc and keep ROI-tagged subfolders to avoid collisions.
         args.output_dir = default_roi_tagged_out_dir(
-            base_dir, "rd_results", override_env="METAPHOR_RD_OUT_DIR"
+            paper_root / "qc",
+            "rd_results",
+            override_env="METAPHOR_RD_OUT_DIR",
+            roi_set=roi_set,
         )
     output_dir = ensure_dir(args.output_dir)
+    tables_si = ensure_dir(paper_root / "tables_si")
+
     rows: list[dict[str, object]] = []
-    roi_paths = sorted(args.roi_dir.glob("*.nii*"))
-    subject_dirs = sorted([path for path in args.pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
+    roi_paths = _resolve_roi_paths(args.roi_dir, roi_set=roi_set)
+    if not roi_paths:
+        raise RuntimeError("No ROI masks resolved for RD. Provide roi_dir or check roi_library/manifest.tsv include_in_rd.")
+    subject_dirs = sorted([path for path in pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
 
     for roi_path in roi_paths:
         roi_name = roi_path.stem.replace(".nii", "")
@@ -94,7 +156,9 @@ def main() -> None:
                     if not image_path.exists():
                         continue
                     samples = load_masked_samples(image_path, roi_path)
-                    if args.rd_mode == "covariance":
+                    if args.rd_mode == "participation_ratio":
+                        value = participation_ratio_from_samples(samples)
+                    elif args.rd_mode == "covariance":
                         value = rd_from_covariance(samples, args.threshold)
                     else:
                         value = dimensionality_from_samples(samples, args.threshold)
@@ -120,7 +184,38 @@ def main() -> None:
         summaries.append(summary)
         save_json(summary, output_dir / f"{roi_name}_rd_summary.json")
 
-    write_table(pd.DataFrame(summaries), output_dir / "rd_group_summary.tsv")
+    summary_df = pd.DataFrame(summaries)
+    write_table(summary_df, output_dir / "rd_group_summary.tsv")
+
+    # Paper/SI table with clear column names and ROI set tag.
+    if not summary_df.empty:
+        paper_df = summary_df.copy()
+        rename = {
+            "n": "n_subjects",
+            "mean_a": "mean_yy_delta",
+            "mean_b": "mean_kj_delta",
+            "t": "t_yy_vs_kj_delta",
+            "p": "p_yy_vs_kj_delta",
+            "cohens_dz": "cohens_dz_yy_vs_kj_delta",
+        }
+        for src, dst in rename.items():
+            if src in paper_df.columns:
+                paper_df = paper_df.rename(columns={src: dst})
+        paper_df.insert(1, "roi_set", roi_set)
+        write_table(paper_df, tables_si / f"table_rd_{roi_tag}.tsv")
+        save_json(
+            {
+                "roi_set": roi_set,
+                "pattern_root": str(pattern_root),
+                "n_subjects": int(frame["subject"].nunique()) if not frame.empty else 0,
+                "n_rois": int(frame["roi"].nunique()) if not frame.empty else 0,
+                "threshold": float(args.threshold),
+                "rd_mode": args.rd_mode,
+                "output_dir": str(output_dir),
+                "paper_table": str(tables_si / f"table_rd_{roi_tag}.tsv"),
+            },
+            output_dir / "rd_meta.json",
+        )
 
 
 if __name__ == "__main__":
