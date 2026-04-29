@@ -23,7 +23,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from figure_utils import abbreviate_roi_name, add_panel_label, apply_publication_rcparams, save_png_pdf
+from figure_utils import (
+    abbreviate_roi_name,
+    add_panel_label,
+    apply_publication_rcparams,
+    default_figure_dir,
+    save_png_pdf,
+)
 
 def _final_root() -> Path:
     current = Path(__file__).resolve()
@@ -39,19 +45,7 @@ if str(FINAL_ROOT) not in sys.path:
 
 
 def _default_out_dir() -> Path:
-    try:
-        from rsa_analysis import rsa_config as cfg  # type: ignore
-
-        base = Path(getattr(cfg, "BASE_DIR"))
-        roi_set = str(getattr(cfg, "ROI_SET", "unknown"))
-    except Exception:
-        base = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "."))
-        roi_set = os.environ.get("METAPHOR_ROI_SET", "unknown")
-
-    override = os.environ.get("METAPHOR_FIG_OUT_DIR", "").strip()
-    if override:
-        return Path(override)
-    return base / f"figures_{roi_set}"
+    return default_figure_dir("figures_main")
 
 
 def _load_rsa_summary(path: Path) -> pd.DataFrame:
@@ -244,4 +238,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

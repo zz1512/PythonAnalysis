@@ -21,7 +21,14 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from figure_utils import abbreviate_roi_name, add_panel_label, apply_publication_rcparams, save_png_pdf
+from figure_utils import (
+    abbreviate_roi_name,
+    add_panel_label,
+    apply_publication_rcparams,
+    default_base_dir,
+    default_figure_dir,
+    save_png_pdf,
+)
 
 
 PALETTE = {"Metaphor": "#d9485f", "Spatial": "#3b82f6", "Baseline": "#94a3b8"}
@@ -34,16 +41,13 @@ def _condition_order(frame: pd.DataFrame) -> list[str]:
 
 
 def _default_results_dir() -> Path:
-    base = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+    base = default_base_dir()
     roi_set = os.environ.get("METAPHOR_ROI_SET", "main_functional")
-    return base / f"rsa_results_optimized_{roi_set}"
+    return base / "paper_outputs" / "qc" / f"rsa_results_optimized_{roi_set}"
 
 
 def _default_out_dir(results_dir: Path) -> Path:
-    override = os.environ.get("METAPHOR_FIG_OUT_DIR", "").strip()
-    if override:
-        return Path(override)
-    return results_dir / "figures"
+    return default_figure_dir("figures_main")
 
 
 def _load_summary(path: Path) -> pd.DataFrame:

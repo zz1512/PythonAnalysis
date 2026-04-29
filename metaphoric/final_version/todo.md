@@ -262,7 +262,15 @@
 
 ### B5. Noise ceiling
 
-- [ ] 对 Step 5C / 关键 Model-RSA 结果计算 noise ceiling
+- [x] 新建 [`rsa_analysis/noise_ceiling.py`](./rsa_analysis/noise_ceiling.py)
+- [x] 方法定义固定：
+  - Step 5C 默认覆盖四层 ROI：
+    - `main_functional`
+    - `literature`
+    - `literature_spatial`
+    - `atlas_robustness`
+  - Model-RSA 基于 audit 导出的共享 item-pair 特征对齐后再做跨被试 ceiling
+- [ ] 对 Step 5C / 关键 Model-RSA 结果实际运行 noise ceiling
 - [ ] 输出：
   - `paper_outputs/tables_si/table_noise_ceiling.tsv`
 - [ ] 仅在图上作为支持信息，不替代主统计
@@ -273,7 +281,47 @@
 
 这些任务都保留，不删，但默认不进入最近两周的主执行线。
 
-### C1. M9 relational + variance partitioning
+### C7. LI / RD / GPS（C层内优先）
+
+- [ ] 目标：用“几何指标/侧化”补充 Step 5C 的解释边界（更像压缩？分化？重组？）
+- [ ] 推荐优先级（同为 C7 内部）：
+  - [ ] RD / GPS（更贴主线、解释更直接）
+  - [ ] LI（仅当需要回应侧化相关质疑时）
+- [ ] 输出（默认放 SI / 扩展模块）：
+  - `paper_outputs/tables_si/table_rd.tsv`（或 `rd_group_summary.tsv` 的 paper 版）
+  - `paper_outputs/tables_si/table_gps.tsv`（或 `gps_group_summary.tsv` 的 paper 版）
+  - `paper_outputs/tables_si/table_lateralization.tsv`（如做）
+
+### C3. gPPI（C层内第二优先）
+
+- [x] 新建/重构 [`connectivity_analysis/gPPI_analysis.py`](./connectivity_analysis/gPPI_analysis.py)
+- [x] 目标固定：补网络层机制证据（**pre/post：run1/2 vs run5/6** 的连接调制变化），作为 B2（representational connectivity）的互补而非替代
+- [x] 已实现策略（避免返工）：
+  - [x] 主分析：pre/post 口径
+    - seed 定位可来自 learning `run3/4` 的 GLM（where）
+    - gPPI 本体在 `run1/2/5/6` 上检验 `condition × time` 风格的连接调制变化（how/network）
+  - [x] 支持 pilot：少 seed + 受控 target ROI 集（SI / confirmatory）
+  - [x] 支持 manifest 自动取 seed / target ROI
+  - [x] 支持 generalized PPI 多条件项 + 可选 deconvolution
+  - [ ] 再决定是否扩展到多 seed / 全 target（强多重比较负担）
+- [ ] 输出（建议先进入 SI）：
+  - `paper_outputs/tables_si/table_gppi_summary.tsv`
+  - `paper_outputs/qc/gppi_*`
+
+### C8. MVPA / Decoding（可选，按需触发）
+
+- [ ] 目标：回答“ROI 是否能读出 yy vs kj（可分性/readout）”，避免被质疑“similarity 下降不等于更可分”
+- [ ] 触发条件（满足其一再做）：
+  - [ ] 审稿/组会明确要求“分类证据”
+  - [ ] 你希望把机制表述更靠近“可读出性变化”（而非仅几何变化）
+- [ ] 约束（必须写清楚，避免泄漏/双重使用数据）：
+  - [ ] 优先用 `literature` ROI（独立性更强）；`main_functional` 仅 exploratory 或明确声明来源
+  - [ ] 严格 cross-validation（建议按 run/phase 分层），并做 label permutation / sign-flip
+- [ ] 输出（默认 SI）：
+  - `paper_outputs/tables_si/table_mvpa_decoding.tsv`
+  - `paper_outputs/figures_si/fig_mvpa_decoding.png`
+
+### C1. M9 relational + variance partitioning（第三优先）
 
 - [ ] 关系类别 RDM
 - [ ] source / target domain RDM
@@ -284,7 +332,7 @@
 
 说明：这是很有潜力的机制升级项，但定义和解释风险都高，不再强绑 A 层。
 
-### C2. Hippocampal subfield / MTL 扩展
+### C2. Hippocampal subfield / MTL 扩展（第四优先）
 
 - [ ] subfield mask
 - [ ] CA1 / CA3-DG / subiculum / anterior-posterior hippocampus
@@ -292,30 +340,20 @@
   - `paper_outputs/tables_main/table_hippocampal_subfield.tsv`
   - `paper_outputs/figures_main/fig_hippocampal_subfield.png`
 
-### C3. gPPI
+### C5. CPM（第五优先）
 
-- [ ] 作为网络层补充证据保留
-- [ ] 不再默认和 representational connectivity 同优先级
+- [ ] 保留
+- [ ] 默认后置到较高投稿目标再做（n≈28 情况下严格 CV 很容易不稳定）
 
-### C4. Effective connectivity
+### C4. Effective connectivity（第六优先）
 
 - [ ] 保留
 - [ ] 默认 SI / exploratory
 
-### C5. CPM
-
-- [ ] 保留
-- [ ] 默认后置到较高投稿目标再做
-
-### C6. Career of Metaphor
+### C6. Career of Metaphor（第七优先）
 
 - [ ] 保留
 - [ ] 作为理论扩展，不阻塞当前主线
-
-### C7. LI / RD / GPS
-
-- [ ] 保留
-- [ ] 默认 SI / 扩展模块
 
 ***
 

@@ -14,21 +14,18 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from figure_utils import add_panel_label, apply_publication_rcparams, save_png_pdf
+from figure_utils import add_panel_label, apply_publication_rcparams, default_base_dir, default_figure_dir, save_png_pdf
 
 
 PALETTE = {"Metaphor": "#d9485f", "Spatial": "#3b82f6", "Baseline": "#94a3b8"}
 
 
 def _base_dir() -> Path:
-    return Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
+    return default_base_dir()
 
 
 def _default_out_dir() -> Path:
-    override = os.environ.get("METAPHOR_FIG_OUT_DIR", "").strip()
-    if override:
-        return Path(override)
-    return _base_dir() / "figures_main_story"
+    return default_figure_dir("figures_main")
 
 
 def _load_itemwise(result_dir: Path, roi_set: str) -> pd.DataFrame:
@@ -60,10 +57,10 @@ def main() -> None:
 
     base = _base_dir()
     sources = {
-        "main_functional": base / "rsa_results_optimized_main_functional",
-        "literature": base / "rsa_results_optimized_literature",
-        "literature_spatial": base / "rsa_results_optimized_literature_spatial",
-        "atlas_robustness": base / "rsa_results_optimized_atlas_robustness",
+        "main_functional": base / "paper_outputs" / "qc" / "rsa_results_optimized_main_functional",
+        "literature": base / "paper_outputs" / "qc" / "rsa_results_optimized_literature",
+        "literature_spatial": base / "paper_outputs" / "qc" / "rsa_results_optimized_literature_spatial",
+        "atlas_robustness": base / "paper_outputs" / "qc" / "rsa_results_optimized_atlas_robustness",
     }
 
     frames = [_load_itemwise(path, roi_set) for roi_set, path in sources.items()]

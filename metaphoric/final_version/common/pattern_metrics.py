@@ -153,6 +153,35 @@ def rd_from_covariance(samples: np.ndarray, explained_threshold: float = 80.0) -
     return float(components_to_variance_threshold(eigenvalues, explained_threshold))
 
 
+def participation_ratio_from_samples(samples: np.ndarray) -> float:
+    """
+    Soft effective dimensionality from the voxel covariance eigenspectrum.
+
+    PR = (sum(lambda))^2 / sum(lambda^2)
+
+    This is less threshold-dependent than "number of PCs to explain X% variance"
+    and is a more standard way to summarize representational dimensionality.
+    """
+    samples = np.asarray(samples, dtype=float)
+    if samples.ndim != 2 or samples.shape[0] < 2:
+        return float("nan")
+    centered = samples - samples.mean(axis=0, keepdims=True)
+    if np.allclose(centered, 0.0):
+        return float("nan")
+    cov = np.cov(centered, rowvar=False)
+    eigenvalues = np.linalg.eigvalsh(cov)
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    eigenvalues = eigenvalues[np.isfinite(eigenvalues)]
+    eigenvalues = eigenvalues[eigenvalues > 0]
+    if eigenvalues.size == 0:
+        return float("nan")
+    numerator = float(np.square(eigenvalues.sum()))
+    denominator = float(np.square(eigenvalues).sum())
+    if denominator <= 0:
+        return float("nan")
+    return numerator / denominator
+
+
 def gps_from_samples(samples: np.ndarray) -> float:
     if samples.shape[0] < 2:
         return float("nan")

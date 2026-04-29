@@ -20,23 +20,24 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from figure_utils import add_panel_label, apply_publication_rcparams, save_png_pdf
+from figure_utils import (
+    add_panel_label,
+    apply_publication_rcparams,
+    default_base_dir,
+    default_figure_dir,
+    save_png_pdf,
+)
 
 
 PALETTE = {"KJ": "#3b82f6", "YY": "#d9485f"}
 
 
 def _default_behavior_dir() -> Path:
-    base = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
-    return base / "behavior_results" / "refined"
+    return default_base_dir() / "paper_outputs" / "qc" / "behavior_results" / "refined"
 
 
 def _default_out_dir() -> Path:
-    base = Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
-    override = os.environ.get("METAPHOR_FIG_OUT_DIR", "").strip()
-    if override:
-        return Path(override)
-    return base / "figures_main_story"
+    return default_figure_dir("figures_main")
 
 
 def _load_subject_condition(path: Path) -> pd.DataFrame:
