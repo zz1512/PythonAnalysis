@@ -439,6 +439,7 @@ def main() -> None:
 
     item_frames: list[pd.DataFrame] = []
     qc_rows: list[dict[str, Any]] = []
+    missing_pattern_rows: list[dict[str, Any]] = []
 
     for roi_path in roi_paths:
         roi_name = roi_path.stem.replace(".nii", "")
@@ -447,6 +448,17 @@ def main() -> None:
                 pattern_path = subject_dir / args.filename_template.format(time=args.time, condition=condition)
                 metadata_path = _metadata_path(pattern_path)
                 if not pattern_path.exists() or not metadata_path.exists():
+                    missing_pattern_rows.append(
+                        {
+                            "subject": subject_dir.name,
+                            "roi": roi_name,
+                            "condition": condition,
+                            "pattern_path": str(pattern_path),
+                            "metadata_path": str(metadata_path),
+                            "pattern_exists": bool(pattern_path.exists()),
+                            "metadata_exists": bool(metadata_path.exists()),
+                        }
+                    )
                     continue
                 samples = load_masked_samples(pattern_path, roi_path)
                 metadata = _read_table(metadata_path)
@@ -467,6 +479,27 @@ def main() -> None:
                     qc_rows.append(qc_row)
 
     item_frame = pd.concat(item_frames, ignore_index=True) if item_frames else pd.DataFrame()
+    missing_frame = pd.DataFrame(missing_pattern_rows)
+    if item_frame.empty:
+        missing_preview = []
+        if not missing_frame.empty:
+            missing_preview = (
+                missing_frame[["subject", "condition", "pattern_path", "metadata_path"]]
+                .drop_duplicates()
+                .head(6)
+                .to_dict("records")
+            )
+        raise RuntimeError(
+            "learning_dynamics.py did not find any usable learning-stage pattern stacks. "
+            f"Searched time='{args.time}' with filename template '{args.filename_template}' under '{pattern_root}'. "
+            "The current code expects per-subject files such as 'learn_yy.nii.gz' and 'learn_kj.nii.gz' plus matching "
+            "metadata TSVs. In the current project state, pattern_root appears to contain only pre/post stacks. "
+            "Also note that stack_patterns.py defaults to lss_metadata_index_final.csv, which in this workspace only "
+            "contains runs 1/2/5/6, so rerunning stack_patterns with the default metadata will not create learn stacks. "
+            "You need a learn-inclusive metadata index for runs 3/4, or another upstream source that can generate "
+            "learn_yy / learn_kj before this script can run. "
+            f"Example missing entries: {missing_preview}"
+        )
     subject_frame = _subject_level(item_frame)
     group_frame = _group_summary(subject_frame)
     family_frame = _family_group_summary(subject_frame)
