@@ -52,6 +52,9 @@ def _final_root() -> Path:
 FINAL_ROOT = _final_root()
 if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
+GLM_ROOT = FINAL_ROOT / "glm_analysis"
+if str(GLM_ROOT) not in sys.path:
+    sys.path.append(str(GLM_ROOT))
 
 from common.final_utils import ensure_dir, save_json, write_table  # noqa: E402
 from common.final_utils import paired_t_summary  # noqa: E402
@@ -164,6 +167,17 @@ def apply_sample_mask(values, sample_mask):
     return array[keep]
 
 
+def extract_roi_mean_time_series(masker: NiftiMasker, fmri_path: Path, confounds, sample_mask) -> np.ndarray:
+    """Return one mean ROI time series from a NiftiMasker voxel matrix."""
+    data = masker.fit_transform(str(fmri_path), confounds=confounds, sample_mask=sample_mask)
+    data = np.asarray(data, dtype=float)
+    if data.ndim == 1:
+        return data.ravel()
+    if data.shape[1] == 0:
+        return np.array([], dtype=float)
+    return np.nanmean(data, axis=1).ravel()
+
+
 def _resolve_roi_manifest() -> Path:
     """
     Keep ROI sourcing consistent with model_rdm_comparison.py:
@@ -267,6 +281,8 @@ def main() -> None:
     parser.add_argument("--subjects", nargs="*", default=None, help="Default: glm_config.SUBJECTS")
     parser.add_argument("--runs", nargs="*", type=int, default=None,
                         help="Optional explicit run list. If omitted: prepost uses 1 2 5 6; learning uses 3 4.")
+    parser.add_argument("--checkpoint-every", type=int, default=1,
+                        help="Write partial gppi_subject_metrics.tsv every N subject-run units (default: 1).")
     args = parser.parse_args()
 
     base_dir = Path(os.environ.get("PYTHON_METAPHOR_ROOT", str(getattr(config, "BASE_DIR", "E:/python_metaphor"))))
@@ -327,118 +343,234 @@ def main() -> None:
             )
 
         rows: list[dict[str, Any]] = []
+        run_errors: list[dict[str, Any]] = []
+        checkpoint_every = max(1, int(args.checkpoint_every or 1))
+        checkpoint_i = 0
+        metrics_path = output_dir / "gppi_subject_metrics.tsv"
+        errors_path = output_dir / "gppi_run_errors.tsv"
+        progress_path = output_dir / "gppi_progress.json"
+        save_json(
+            {
+                "status": "running",
+                "seed_roi": seed_roi_name,
+                "seed_mask": str(seed_mask_path),
+                "target_roi_sets": list(args.target_roi_sets) if args.target_roi_sets is not None else None,
+                "n_targets": int(len(target_specs)),
+                "stage": args.stage,
+                "runs": [int(r) for r in args.runs],
+                "n_subjects_planned": int(len(subjects)),
+                "n_rows": 0,
+                "n_errors": 0,
+                "output_dir": str(output_dir),
+            },
+            progress_path,
+        )
+        print(
+            f"[gPPI] seed={seed_roi_name} targets={len(target_specs)} "
+            f"subjects={len(subjects)} runs={list(args.runs)} output={output_dir}",
+            flush=True,
+        )
         for sub in subjects:
             for run in args.runs:
+                checkpoint_i += 1
                 fmri_path = Path(str(config.FMRI_TPL).format(sub=sub, run=run))
                 if not fmri_path.exists():
                     fmri_path = fmri_path.with_suffix(".nii.gz")
                 events_path = Path(str(config.EVENT_TPL).format(sub=sub, run=run))
                 confounds_path = Path(str(config.CONFOUNDS_TPL).format(sub=sub, run=run))
                 if not fmri_path.exists() or not events_path.exists() or not confounds_path.exists():
+                    run_errors.append(
+                        {
+                            "seed_roi": seed_roi_name,
+                            "subject": sub,
+                            "run": int(run),
+                            "stage": "input_check",
+                            "error": "missing fmri/events/confounds",
+                            "fmri_path": str(fmri_path),
+                            "events_path": str(events_path),
+                            "confounds_path": str(confounds_path),
+                        }
+                    )
                     continue
 
-                events = pd.read_csv(events_path, sep="\t")
-                if not {"onset", "duration", "trial_type"}.issubset(events.columns):
-                    continue
-
-                confounds, sample_mask = glm_utils.robust_load_confounds(str(confounds_path), config.DENOISE_STRATEGY)
-                tr = float(getattr(config, "TR", 2.0))
-                full_n_scans = int(nib.load(str(fmri_path)).shape[3])
-
-                seed_masker = NiftiMasker(mask_img=str(seed_mask_path), standardize=True, t_r=tr)
-                seed_ts = seed_masker.fit_transform(str(fmri_path), confounds=confounds, sample_mask=sample_mask).ravel()
-                frame_times_full = np.arange(full_n_scans, dtype=float) * tr
-
-                confounds_kept = apply_sample_mask(confounds, sample_mask)
-                seed_phys = zscore(seed_ts)
-                n_scans = seed_phys.size
-
-                if args.deconvolution == "ridge":
-                    seed_neural = _deconvolve_ridge(seed_phys, tr=tr, l2=float(args.deconv_l2))
-                else:
-                    seed_neural = seed_phys
-
-                psych_regs = []
-                ppi_regs = []
-                psych_names = []
-                ppi_names = []
-                for cond in conditions:
-                    psych_neural_full = _build_neural_boxcar(events, frame_times_full, cond)
-                    psych_neural = np.asarray(apply_sample_mask(psych_neural_full, sample_mask), dtype=float).ravel()
-                    if psych_neural.size != n_scans:
-                        continue
-                    psych_conv = zscore(_convolve_hrf(psych_neural, tr=tr))
-                    ppi_neural = seed_neural * zscore(psych_neural)
-                    ppi_conv = zscore(_convolve_hrf(ppi_neural, tr=tr))
-                    psych_regs.append(psych_conv)
-                    ppi_regs.append(ppi_conv)
-                    psych_names.append(f"psych_{cond}")
-                    ppi_names.append(f"ppi_{cond}")
-
-                base_cols = [np.ones(n_scans), seed_phys]
-                base_names = ["intercept", "seed_phys"]
-                if psych_regs:
-                    base_cols.extend(psych_regs)
-                    base_names.extend(psych_names)
-                if ppi_regs:
-                    base_cols.extend(ppi_regs)
-                    base_names.extend(ppi_names)
-                base = np.column_stack(base_cols)
-                if confounds_kept is not None and len(confounds_kept) == n_scans:
-                    design = np.column_stack([base, np.asarray(confounds_kept, dtype=float)])
-                else:
-                    design = base
-
-                for target_roi_name, target_roi_set, target_mask_path in target_specs:
-                    target_masker = NiftiMasker(mask_img=str(target_mask_path), standardize=True, t_r=tr)
-                    y = target_masker.fit_transform(str(fmri_path), confounds=confounds, sample_mask=sample_mask).ravel()
-                    if y.size != n_scans:
+                try:
+                    events = pd.read_csv(events_path, sep="\t")
+                    if not {"onset", "duration", "trial_type"}.issubset(events.columns):
+                        run_errors.append(
+                            {
+                                "seed_roi": seed_roi_name,
+                                "subject": sub,
+                                "run": int(run),
+                                "stage": "events_check",
+                                "error": "events missing onset/duration/trial_type",
+                                "events_path": str(events_path),
+                            }
+                        )
                         continue
 
-                    coef, _, _, _ = np.linalg.lstsq(design, y, rcond=None)
-                    coef_map = {name: float(val) for name, val in zip(base_names, coef[: len(base_names)])}
+                    confounds, sample_mask = glm_utils.robust_load_confounds(str(confounds_path), config.DENOISE_STRATEGY)
+                    tr = float(getattr(config, "TR", 2.0))
+                    full_n_scans = int(nib.load(str(fmri_path)).shape[3])
+
+                    seed_masker = NiftiMasker(mask_img=str(seed_mask_path), standardize=True, t_r=tr)
+                    seed_ts = extract_roi_mean_time_series(seed_masker, fmri_path, confounds, sample_mask)
+                    frame_times_full = np.arange(full_n_scans, dtype=float) * tr
+
+                    confounds_kept = apply_sample_mask(confounds, sample_mask)
+                    seed_phys = zscore(seed_ts)
+                    n_scans = seed_phys.size
+
+                    if args.deconvolution == "ridge":
+                        seed_neural = _deconvolve_ridge(seed_phys, tr=tr, l2=float(args.deconv_l2))
+                    else:
+                        seed_neural = seed_phys
+
+                    psych_regs = []
+                    ppi_regs = []
+                    psych_names = []
+                    ppi_names = []
+                    for cond in conditions:
+                        psych_neural_full = _build_neural_boxcar(events, frame_times_full, cond)
+                        psych_neural = np.asarray(apply_sample_mask(psych_neural_full, sample_mask), dtype=float).ravel()
+                        if psych_neural.size != n_scans:
+                            continue
+                        psych_conv = zscore(_convolve_hrf(psych_neural, tr=tr))
+                        ppi_neural = seed_neural * zscore(psych_neural)
+                        ppi_conv = zscore(_convolve_hrf(ppi_neural, tr=tr))
+                        psych_regs.append(psych_conv)
+                        ppi_regs.append(ppi_conv)
+                        psych_names.append(f"psych_{cond}")
+                        ppi_names.append(f"ppi_{cond}")
+
+                    base_cols = [np.ones(n_scans), seed_phys]
+                    base_names = ["intercept", "seed_phys"]
+                    if psych_regs:
+                        base_cols.extend(psych_regs)
+                        base_names.extend(psych_names)
+                    if ppi_regs:
+                        base_cols.extend(ppi_regs)
+                        base_names.extend(ppi_names)
+                    base = np.column_stack(base_cols)
+                    if confounds_kept is not None and len(confounds_kept) == n_scans:
+                        design = np.column_stack([base, np.asarray(confounds_kept, dtype=float)])
+                    else:
+                        design = base
 
                     if args.stage == "prepost":
                         phase = "pre" if int(run) in {1, 2} else ("post" if int(run) in {5, 6} else "other")
                     else:
                         phase = "learning"
 
-                    for cond in conditions:
-                        term = f"ppi_{cond}"
-                        if term not in coef_map:
-                            continue
-                        rows.append(
-                            {
-                                "seed_roi": seed_roi_name,
-                                "subject": sub,
-                                "run": int(run),
-                                "phase": phase,
-                                "target_roi": target_roi_name,
-                                "target_roi_set": target_roi_set,
-                                "target_scope": _target_scope(target_roi_set),
-                                "ppi_condition": cond,
-                                "gppi_beta": float(coef_map[term]),
-                                "deconvolution": args.deconvolution,
-                            }
-                        )
-                    if "ppi_yy" in coef_map and "ppi_kj" in coef_map:
-                        rows.append(
-                            {
-                                "seed_roi": seed_roi_name,
-                                "subject": sub,
-                                "run": int(run),
-                                "phase": phase,
-                                "target_roi": target_roi_name,
-                                "target_roi_set": target_roi_set,
-                                "target_scope": _target_scope(target_roi_set),
-                                "ppi_condition": "yy_minus_kj",
-                                "gppi_beta": float(coef_map["ppi_yy"] - coef_map["ppi_kj"]),
-                                "deconvolution": args.deconvolution,
-                            }
-                        )
+                    for target_roi_name, target_roi_set, target_mask_path in target_specs:
+                        try:
+                            target_masker = NiftiMasker(mask_img=str(target_mask_path), standardize=True, t_r=tr)
+                            y = extract_roi_mean_time_series(target_masker, fmri_path, confounds, sample_mask)
+                            if y.size != n_scans:
+                                run_errors.append(
+                                    {
+                                        "seed_roi": seed_roi_name,
+                                        "subject": sub,
+                                        "run": int(run),
+                                        "target_roi": target_roi_name,
+                                        "target_roi_set": target_roi_set,
+                                        "stage": "target_fit",
+                                        "error": f"target time series length {y.size} != seed/design length {n_scans}",
+                                        "target_mask_path": str(target_mask_path),
+                                    }
+                                )
+                                continue
+
+                            coef, _, _, _ = np.linalg.lstsq(design, y, rcond=None)
+                            coef_map = {name: float(val) for name, val in zip(base_names, coef[: len(base_names)])}
+
+                            for cond in conditions:
+                                term = f"ppi_{cond}"
+                                if term not in coef_map:
+                                    continue
+                                rows.append(
+                                    {
+                                        "seed_roi": seed_roi_name,
+                                        "subject": sub,
+                                        "run": int(run),
+                                        "phase": phase,
+                                        "target_roi": target_roi_name,
+                                        "target_roi_set": target_roi_set,
+                                        "target_scope": _target_scope(target_roi_set),
+                                        "ppi_condition": cond,
+                                        "gppi_beta": float(coef_map[term]),
+                                        "deconvolution": args.deconvolution,
+                                    }
+                                )
+                            if "ppi_yy" in coef_map and "ppi_kj" in coef_map:
+                                rows.append(
+                                    {
+                                        "seed_roi": seed_roi_name,
+                                        "subject": sub,
+                                        "run": int(run),
+                                        "phase": phase,
+                                        "target_roi": target_roi_name,
+                                        "target_roi_set": target_roi_set,
+                                        "target_scope": _target_scope(target_roi_set),
+                                        "ppi_condition": "yy_minus_kj",
+                                        "gppi_beta": float(coef_map["ppi_yy"] - coef_map["ppi_kj"]),
+                                        "deconvolution": args.deconvolution,
+                                    }
+                                )
+                        except Exception as exc:
+                            run_errors.append(
+                                {
+                                    "seed_roi": seed_roi_name,
+                                    "subject": sub,
+                                    "run": int(run),
+                                    "target_roi": target_roi_name,
+                                    "target_roi_set": target_roi_set,
+                                    "stage": "target_fit",
+                                    "error": repr(exc),
+                                    "target_mask_path": str(target_mask_path),
+                                }
+                            )
+                except Exception as exc:
+                    run_errors.append(
+                        {
+                            "seed_roi": seed_roi_name,
+                            "subject": sub,
+                            "run": int(run),
+                            "stage": "seed_run",
+                            "error": repr(exc),
+                            "fmri_path": str(fmri_path),
+                            "events_path": str(events_path),
+                            "confounds_path": str(confounds_path),
+                        }
+                    )
+
+                if checkpoint_i % checkpoint_every == 0:
+                    write_table(pd.DataFrame(rows), metrics_path)
+                    if run_errors:
+                        write_table(pd.DataFrame(run_errors), errors_path)
+                    save_json(
+                        {
+                            "status": "running",
+                            "seed_roi": seed_roi_name,
+                            "last_subject": sub,
+                            "last_run": int(run),
+                            "completed_subject_run_units": int(checkpoint_i),
+                            "planned_subject_run_units": int(len(subjects) * len(args.runs)),
+                            "n_rows": int(len(rows)),
+                            "n_errors": int(len(run_errors)),
+                            "output_dir": str(output_dir),
+                        },
+                        progress_path,
+                    )
+                    print(
+                        f"[gPPI] checkpoint seed={seed_roi_name} subject={sub} run={run} "
+                        f"rows={len(rows)} errors={len(run_errors)}",
+                        flush=True,
+                    )
 
         frame = pd.DataFrame(rows)
         write_table(frame, output_dir / "gppi_subject_metrics.tsv")
+        if run_errors:
+            write_table(pd.DataFrame(run_errors), errors_path)
 
         summaries: list[dict[str, Any]] = []
         if not frame.empty:
@@ -584,11 +716,26 @@ def main() -> None:
                 "stage": args.stage,
                 "runs": [int(r) for r in args.runs],
                 "n_rows": int(len(frame)),
+                "n_errors": int(len(run_errors)),
                 "n_subjects": int(frame["subject"].nunique()) if not frame.empty else 0,
                 "output_dir": str(output_dir),
                 "paper_table": str(tables_si / f"table_gppi_summary_{seed_tag}_{roi_tag}.tsv"),
             },
             output_dir / "gppi_meta.json",
+        )
+        save_json(
+            {
+                "status": "completed",
+                "seed_roi": seed_roi_name,
+                "completed_subject_run_units": int(len(subjects) * len(args.runs)),
+                "planned_subject_run_units": int(len(subjects) * len(args.runs)),
+                "n_rows": int(len(frame)),
+                "n_errors": int(len(run_errors)),
+                "output_dir": str(output_dir),
+                "metrics_path": str(metrics_path),
+                "summary_path": str(output_dir / "gppi_group_summary.tsv"),
+            },
+            progress_path,
         )
         all_rows.extend(rows)
 
