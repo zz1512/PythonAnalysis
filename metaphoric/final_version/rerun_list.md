@@ -18,19 +18,23 @@
 3. `build_memory_strength_table.py`
 4. `model_rdm_comparison.py`
 5. `delta_rho_lmm.py`
-6. `itemlevel_brain_behavior.py`
-7. `stack_patterns.py`（如果学习期 pattern 尚未存在）
-8. `learning_dynamics.py`
-9. `representational_connectivity.py`
-10. `rd_searchlight.py`
-11. `robustness_suite.py`
-12. `noise_ceiling.py`
+6. `mechanism_behavior_prediction.py`
+7. `itemlevel_brain_behavior.py`
+8. `stack_patterns.py`（如果学习期 pattern 尚未存在）
+9. `learning_dynamics.py`
+10. `representational_connectivity.py`
+11. `export_gppi_summary.py`
+12. `pair_similarity_searchlight.py`
+13. `rd_searchlight.py`（仅补充探索版）
+14. `robustness_suite.py`
+15. `noise_ceiling.py`
 
 其中：
-- **1-6** 是这次代码修复后的主链，优先级最高
-- **7-9** 是 B 层新增分析链
-- **10** 是 B3 的“where”补充链
-- **11** 是 B4 的稳健性三件套
+- **1-7** 是这次代码修复后的主链，优先级最高
+- **8-10** 是 B 层新增分析链
+- **11** 是 S2 的轻量导出层
+- **12-13** 是 S3 的“where”补充链（主版 + 探索版）
+- **14** 是 B4 的稳健性三件套
 - `rsa_lmm.py`、`trial_voxel_robustness.py` 仅在你需要同步 QC / LMM 表时再跑
 
 ---
@@ -223,7 +227,38 @@ python metaphoric/final_version/brain_behavior/itemlevel_brain_behavior.py
 
 ---
 
-## 7) 学习期 pattern（仅 B1 需要）
+## 7) S1 机制 → 行为 / 记忆预测
+
+原因：
+- S1 主分析现已固定为**被试级机制分数预测 run-7 最终学习收益**
+- 默认主模型只保留：`M3_embedding + M8_reverse_pair`
+- `M7_continuous_confidence` 仅在你需要补充局部记忆强度结果时，才通过 `--include-m7` 加入
+- 已明确移除：
+  - `M2_pair`（避免与 `M8_reverse_pair` 的镜像编码重复记账）
+  - `run3/4 learning accuracy`（learning-phase 在线表现，不作为 S1 主终点）
+
+默认主分析运行：
+
+```bash
+python metaphoric/final_version/brain_behavior/mechanism_behavior_prediction.py
+```
+
+如需把 `M7_continuous_confidence` 作为补充项一起跑：
+
+```bash
+python metaphoric/final_version/brain_behavior/mechanism_behavior_prediction.py \
+  --include-m7
+```
+
+默认关键产物：
+- `${BASE_DIR}/paper_outputs/tables_main/table_mechanism_behavior_prediction.tsv`
+- `${BASE_DIR}/paper_outputs/tables_si/table_mechanism_behavior_prediction_perm.tsv`
+- `${BASE_DIR}/paper_outputs/figures_main/fig_mechanism_behavior_prediction.png`
+- `${BASE_DIR}/paper_outputs/qc/mechanism_behavior_prediction_long.tsv`
+
+---
+
+## 8) 学习期 pattern（仅 B1 需要）
 
 先检查以下文件是否已存在：
 - `${BASE_DIR}/pattern_root/sub-XX/learn_yy.nii.gz`
@@ -241,7 +276,7 @@ python metaphoric/final_version/representation_analysis/stack_patterns.py
 
 ---
 
-## 8) B1 学习阶段 repeated-exposure
+## 9) B1 学习阶段 repeated-exposure
 
 原因：
 - B1 已重定义为：
@@ -291,7 +326,7 @@ python metaphoric/final_version/figures/plot_learning_dynamics_final.py
 
 ---
 
-## 9) B2 representational connectivity
+## 10) B2 representational connectivity
 
 原因：
 - B2 已重构为 **all-by-all ROI pair representational connectivity**
@@ -325,15 +360,68 @@ python metaphoric/final_version/figures/plot_repr_connectivity_final.py
 
 ---
 
-## 10) B3 Searchlight RD
+## 11) S2 gPPI 导出汇总
 
 原因：
-- B3 现已补齐：
-  - `yy / kj / baseline`
-  - group-level sign-flip permutation
-  - `table_searchlight_peaks.tsv`
-  - `fig_searchlight_delta.png`
-- 默认输出已统一到 `paper_outputs/`
+- `gPPI_analysis.py` 已负责重计算与 seed 级 SI 表输出
+- 这个脚本只做**不影响现有运行**的轻量收口，把现有 seed 级表整合成论文正式总表
+
+运行：
+
+```bash
+python metaphoric/final_version/connectivity_analysis/export_gppi_summary.py
+```
+
+默认产物：
+- `${BASE_DIR}/paper_outputs/tables_main/table_gppi_summary_main.tsv`
+- `${BASE_DIR}/paper_outputs/tables_si/table_gppi_summary_full.tsv`
+- `${BASE_DIR}/paper_outputs/qc/gppi_summary_export_manifest.json`
+
+---
+
+## 12) S3 Searchlight 主版：Pair Similarity
+
+原因：
+- 这是当前 `todo` 里正式的 S3 主版
+- 它和 Step 5C 主结果同构，直接回答“哪里出现了 pair-level representational reorganization”
+- 默认产物沿用主文路径：
+  - `table_searchlight_pair_similarity_peaks.tsv`
+  - `fig_searchlight_pair_similarity_delta.png`
+
+运行：
+
+```bash
+python metaphoric/final_version/representation_analysis/pair_similarity_searchlight.py \
+  --permutation-backend auto
+```
+
+时间紧张时，只跑 `yy` 最小版：
+
+```bash
+python metaphoric/final_version/representation_analysis/pair_similarity_searchlight.py \
+  --conditions yy \
+  --permutation-backend auto
+```
+
+默认会读取：
+- `${BASE_DIR}/pattern_root/sub-XX/{pre,post}_{yy,kj,baseline}.nii.gz`
+- `${BASE_DIR}/pattern_root/sub-XX/{pre,post}_{yy,kj,baseline}_metadata.tsv`
+- `${BASE_DIR}/lss_betas_final/sub-XX/mask.nii.gz`（若 `mask.nii` 不存在会自动尝试 `.nii.gz`）
+
+默认产物：
+- `${BASE_DIR}/paper_outputs/tables_main/table_searchlight_pair_similarity_peaks.tsv`
+- `${BASE_DIR}/paper_outputs/figures_main/fig_searchlight_pair_similarity_delta.png`
+- `${BASE_DIR}/paper_outputs/qc/pair_similarity_searchlight/group_yy_post_vs_pre/...`
+- `${BASE_DIR}/paper_outputs/qc/pair_similarity_searchlight/group_kj_post_vs_pre/...`
+- `${BASE_DIR}/paper_outputs/qc/pair_similarity_searchlight/group_baseline_post_vs_pre/...`
+
+---
+
+## 13) S3 补充探索版：RD Searchlight
+
+原因：
+- RD searchlight 回答的是局部表征维度变化，不是 pair-level relation change
+- 适合写成 supplementary / exploratory 几何描述，不建议与 S3 主版并列主打
 
 运行：
 
@@ -355,7 +443,7 @@ python metaphoric/final_version/representation_analysis/rd_searchlight.py \
 
 ---
 
-## 11) B4 稳健性三件套
+## 14) B4 稳健性三件套
 
 原因：
 - B4 已统一到一个脚本里，围绕 Step 5C 的 subject-level interaction delta 输出：
@@ -384,7 +472,7 @@ python metaphoric/final_version/rsa_analysis/robustness_suite.py
 
 ---
 
-## 12) B5 Noise ceiling
+## 15) B5 Noise ceiling
 
 原因：
 - 为 Step 5C 与 Model-RSA 提供可汇报的上限参考（supporting information）

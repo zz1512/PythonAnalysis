@@ -1,6 +1,6 @@
 # 子刊冲刺收敛版 TODO
 
-最后更新：2026-04-27
+最后更新：2026-04-29
 
 这份文档是当前阶段唯一的任务清单。目标不是“把所有能做的分析都立刻做完”，而是：
 
@@ -34,6 +34,11 @@
 
 ## 二、优先级原则
 
+### S层：冲刺 NN / NC / NHB 必做
+
+这些任务是“从 PNAS 档次升到顶刊子刊档次”的关键闭环，缺一个就很难冲顶刊。
+S 层的设计原则：**不是再堆新分析，而是把现有主线补成** **`行为 → 表征 → 机制 → 预测 → 网络 → 全脑`** **的完整闭环**。
+
 ### A层：必须先完成
 
 这些任务不做，后面的机制扩展会建立在不稳的地基上。
@@ -45,6 +50,98 @@
 ### C层：保留但后置
 
 这些任务有价值，但高成本、高风险，或者当前不是解释闭环的最短路径。
+
+***
+
+## 二·S、S层：冲刺顶刊必做四件套
+
+### S0. 刺激控制（从 A4 抬到 S 层）
+
+目标：提前封住顶刊审稿最常见的“刺激混淆”质疑，成本低但性价比极高。
+
+- [ ] 整理：
+  - 词频
+  - 笔画
+  - 具象性
+  - 熟悉度
+  - imageability
+- [ ] 输出：
+  - `paper_outputs/tables_si/table_stimulus_control.tsv`
+- [ ] 如存在不平衡：
+  - 将相关变量作为 covariate 重跑核心 LMM sensitivity
+- [ ] 与 A4 共用同一组产物，完成后 A4 同步勾选
+
+### S1. 机制 → 行为 / 记忆预测链（新增，核心闭环）
+
+目标：把 Step 5D 的被试层机制分数与 run-7 行为/记忆直接连起来，建立
+“被试 differentiation 越强 → 行为/记忆越好”的**个体差异预测闭环**。
+
+- [ ] 新建 [`brain_behavior/mechanism_behavior_prediction.py`](./brain_behavior/mechanism_behavior_prediction.py)
+- [ ] 输入（全部复用已有 paper\_outputs 产物）：
+  - Step 5D 的 subject-level Δρ：`M3_embedding`、`M8_reverse_pair`（主）
+  - `M7_continuous_confidence` 仅作为可选补充项，默认不进入主分析
+  - Step 5C 的 subject-level 表征变化分数（可选作为 sanity check）
+  - `paper_outputs/qc/behavior_results/refined/*.tsv` 的 run-7 memory / 正确提取效率
+- [ ] 分析设计：
+  - 样本单位：**被试**（不是 trial；明确区别于 MVPA）
+  - 模型：被试间回归或 Spearman（样本量 n≈28 下优先用稳健方法 + permutation）
+  - 至少报告：
+    - `β / r / 95% CI / permutation p`
+    - 对 `yy` 机制分数预测 `yy` 行为 / 记忆
+    - 对 `kj` 机制分数预测 `kj` 行为 / 记忆（对照）
+    - interaction：机制 × condition 是否存在
+- [ ] 与 C8 MVPA 的区别（必须写清楚）：
+  - **MVPA**：样本=trial，预测条件标签，回答“ROI 中是否含有可读出的条件信息”
+  - **S1**：样本=被试，预测行为/记忆，回答“机制分数是否解释学习效果的个体差异”
+  - 二者论点层不同，不冗余
+- [ ] 输出：
+  - `paper_outputs/tables_main/table_mechanism_behavior_prediction.tsv`
+  - `paper_outputs/tables_si/table_mechanism_behavior_prediction_perm.tsv`
+  - `paper_outputs/figures_main/fig_mechanism_behavior_prediction.png`
+- [ ] 文稿口径：
+  - 作为主文机制闭环的一部分，而非 SI
+  - 不允许写成“脑结构因果证据”，只能写成“机制分数预测学习效果的个体差异”
+  - `M8_reverse_pair` 与 `M2_pair` 属于同一 pair 规则的镜像编码，S1 里只保留 `M8_reverse_pair`，避免重复加权 pair-based 机制
+  - `run3/4` 只代表 learning phase 在线表现，不作为 S1 主终点；S1 只预测 run-7 最终学习收益
+
+### S2. 网络层重配置（C3 gPPI 正式产出，从 C 层抬到 S 层）
+
+目标：把网络层从“阴性/未做”抬到“至少有一条正式证据”，这是顶刊对 RSA 类论文几乎必问的一条。
+
+- [x] 代码已完成：[`connectivity_analysis/gPPI_analysis.py`](./connectivity_analysis/gPPI_analysis.py)
+- [x] pre/post 主分析口径已固定
+- [x] manifest 自动取 seed / target 已实现
+- [x] generalized PPI 多条件项 + 可选 deconvolution 已实现
+- [ ] 正式运行：
+  - seed：`Metaphor > Spatial` 左颞极两个簇（分开跑）
+  - targets：`literature + literature_spatial`
+  - 汇总：`within_literature` / `within_literature_spatial` / `cross_sets`
+- [ ] 输出（建议同时进主文和 SI）：
+  - `paper_outputs/tables_main/table_gppi_summary_main.tsv`（至少 yy\_minus\_kj 的 post vs pre）
+  - `paper_outputs/tables_si/table_gppi_summary_full.tsv`
+  - `paper_outputs/qc/gppi_*`
+- [ ] 允许的表述：
+  - 作为“伴随 Step 5C 表征重组的网络再配置”的补充证据
+- [ ] 禁止的表述：
+  - 不能写成“连接驱动表征变化”的因果主张
+
+### S3. Searchlight（B3 最小版，从 B 层抬到 S 层）
+
+目标：补一张“where”大图，让 ROI 级主结论不再只停留在 ROI 层。
+
+- [ ] 主版运行 [`representation_analysis/pair_similarity_searchlight.py`](./representation_analysis/pair_similarity_searchlight.py)
+- [ ] 最低要求（最小版）：
+  - `yy` / `kj` / `baseline` 的 `post - pre` delta pair similarity searchlight
+  - group-level sign-flip permutation（`--permutation-backend auto`）
+  - 只做 pair similarity searchlight，**不做 model-based searchlight**
+- [ ] 输出：
+  - `paper_outputs/tables_main/table_searchlight_peaks.tsv`
+  - `paper_outputs/figures_main/fig_searchlight_delta.png`
+- [ ] 补充探索版：
+  - [`representation_analysis/rd_searchlight.py`](./representation_analysis/rd_searchlight.py) 保留为 supplementary / exploratory 几何描述
+  - 只有在主版 pair similarity searchlight 已完成后，才决定是否把 RD searchlight 写入 SI
+- [ ] model-based searchlight 仍保留“暂不实现”决策，只有在 S3 最小版完成后才考虑是否升级
+- [ ] 时间紧张时只保留 `yy` 的 delta searchlight 亦可作为最小可接受版本
 
 ***
 
@@ -106,20 +203,13 @@
   - `paper_outputs/tables_main/table_itemlevel_coupling.tsv`
   - `paper_outputs/figures_main/fig_itemlevel_coupling.png`
 
-### A4. 刺激控制表
+### A4. 刺激控制表（已抬升到 S0，保留此条以便定位）
 
 目标：提前封住“yy / kj 刺激不均衡导致效应”的常见质疑。
 
-- [ ] 整理：
-  - 词频
-  - 笔画
-  - 具象性
-  - 熟悉度
-  - imageability
-- [ ] 输出：
-  - `paper_outputs/tables_si/table_stimulus_control.tsv`
-- [ ] 如存在不平衡：
-  - 将相关变量作为 covariate 重跑核心 LMM sensitivity
+> 本条目已整合进 **S0（S 层）**，请直接在 S0 勾选推进；此处仅保留任务上下文，不再重复追踪状态。
+
+- 详见 S0 的执行项与输出要求
 
 ### A5. 统一输出目录到 `paper_outputs/`
 
@@ -224,26 +314,22 @@
   - `paper_outputs/tables_si/table_repr_connectivity_edges.tsv`
   - `paper_outputs/figures_main/fig_repr_connectivity.png`
 
-### B3. Searchlight RSA
+### B3. Searchlight RSA（已抬升到 S3，保留此条以便定位）
 
-目标：补 “where”，但优先级低于 A 层和 dynamics。
+目标：补 “where”。
 
-- [ ] 运行 [`representation_analysis/rd_searchlight.py`](./representation_analysis/rd_searchlight.py)
-- [ ] 最低要求：
-  - `yy`
-  - `kj`
-  - `baseline`
-  - group-level permutation
-- [ ] 输出：
-  - `paper_outputs/tables_main/table_searchlight_peaks.tsv`
-  - `paper_outputs/figures_main/fig_searchlight_delta.png`
-- [x] 优先级判断：
-  - 当前先做 **RD searchlight**，用于补“where”
+> 本条目已整合进 **S3（S 层）最小版**，请直接在 S3 勾选推进；此处仅保留原有优先级判断作为历史上下文。
+
+- [x] 优先级判断（保留为决策记录）：
+  - 当前正式 S3 主版改为 **pair similarity searchlight**，用于补“where”
+  - **RD searchlight** 降为 supplementary / exploratory
   - **model-based Searchlight RSA 暂不实现**
   - 原因：
-    - 现阶段主线更缺的是一个可运行、可汇报的全脑空间定位补充
+    - 现阶段主线更缺的是一个与 Step 5C 主结果直接同构的全脑空间定位补充
+    - pair similarity searchlight 更直接回答“哪里出现了 pair-level representational reorganization”
+    - RD searchlight 回答的是局部表征维度变化，适合作为几何补充，不适合和主线并列主打
     - model-based searchlight 工程量更大，且会显著增加计算成本
-    - 应放到 B3 结果出来之后再决定是否升级；当前优先级低于 B4 / B5
+    - 应放到 S3 最小版结果出来之后再决定是否升级
 
 ### B4. 稳健性三件套
 
@@ -292,7 +378,9 @@
   - `paper_outputs/tables_si/table_gps.tsv`（或 `gps_group_summary.tsv` 的 paper 版）
   - `paper_outputs/tables_si/table_lateralization.tsv`（如做）
 
-### C3. gPPI（C层内第二优先）
+### C3. gPPI（已抬升到 S2，保留此条以便定位）
+
+> 本条目已整合进 **S2（S 层）**，请直接在 S2 勾选推进；此处仅保留历史实现决策作为上下文。
 
 - [x] 新建/重构 [`connectivity_analysis/gPPI_analysis.py`](./connectivity_analysis/gPPI_analysis.py)
 - [x] 目标固定：补网络层机制证据（**pre/post：run1/2 vs run5/6** 的连接调制变化），作为 B2（representational connectivity）的互补而非替代
@@ -304,13 +392,14 @@
   - [x] 支持 manifest 自动取 seed / target ROI
   - [x] 支持 generalized PPI 多条件项 + 可选 deconvolution
   - [ ] 再决定是否扩展到多 seed / 全 target（强多重比较负担）
-- [ ] 输出（建议先进入 SI）：
-  - `paper_outputs/tables_si/table_gppi_summary.tsv`
-  - `paper_outputs/qc/gppi_*`
 
 ### C8. MVPA / Decoding（可选，按需触发）
 
 - [ ] 目标：回答“ROI 是否能读出 yy vs kj（可分性/readout）”，避免被质疑“similarity 下降不等于更可分”
+- [x] 与 **S1 机制→行为预测** 的区别（必须在代码和方法中写清）：
+  - **C8 MVPA**：样本=trial，预测条件标签，回答“ROI 中是否含有可读出的条件信息”
+  - **S1**：样本=被试，预测行为/记忆，回答“机制分数是否解释学习效果的个体差异”
+  - 二者论点层不同，不冗余；S1 优先级高于 C8
 - [ ] 触发条件（满足其一再做）：
   - [ ] 审稿/组会明确要求“分类证据”
   - [ ] 你希望把机制表述更靠近“可读出性变化”（而非仅几何变化）
@@ -321,7 +410,9 @@
   - `paper_outputs/tables_si/table_mvpa_decoding.tsv`
   - `paper_outputs/figures_si/fig_mvpa_decoding.png`
 
-### C1. M9 relational + variance partitioning（第三优先）
+### C1. M9 relational + variance partitioning（A 层扩展项，顶刊冲刺备选）
+
+> 本条被评估为“A 级加分、S 级次优”：建议在 S0–S3 四件套完成后、或其中任何一项卡住时，作为首选的机制深化任务立即推进。
 
 - [ ] 关系类别 RDM
 - [ ] source / target domain RDM
@@ -330,7 +421,7 @@
   - `paper_outputs/tables_main/table_variance_partitioning.tsv`
   - `paper_outputs/figures_main/fig_variance_partitioning.png`
 
-说明：这是很有潜力的机制升级项，但定义和解释风险都高，不再强绑 A 层。
+说明：这是很有潜力的机制升级项，但定义和解释风险都高，不再强绑 A 层，但冲顶刊时价值远高于 C2/C4/C5/C6。
 
 ### C2. Hippocampal subfield / MTL 扩展（第四优先）
 
@@ -373,6 +464,10 @@
 - [ ] `paper_outputs/analysis_plan.tsv`
 - [ ] `paper_outputs/figure_stats_map.tsv`
 - [ ] 主文图与 SI 图逐一绑定统计来源
+- [ ] `result.md` 同步更新（review 提醒项）
+  - [ ] B5 补写 `atlas_robustness` 的 Step 5C noise ceiling 汇报，保持与四层 ROI 默认覆盖一致
+  - [ ] 第 12 节主文图路径统一到 `paper_outputs/figures_main` / `paper_outputs/figures_si`
+  - [ ] Figure 1/2/4/5 的图片嵌入路径不再继续引用旧 `figures_main_story`
 
 ***
 
@@ -382,53 +477,69 @@
 
 满足以下即可进入写稿：
 
-- A层全部完成
-- B层至少完成 2 项
+- A 层全部完成（A4 以 S0 产出为准）
+- B 层至少完成 2 项
   - 优先 `Learning dynamics`
   - 优先 `Representational connectivity` 或 `Searchlight`
+- **S 层在该档次允许缓做**
+  - S0 / S1 至少有一条进入 SI 级别的结果即可
+  - S2 gPPI / S3 Searchlight 可暂缓到修稿阶段
 
-### 到达“可冲 NC / NHB”门槛
+### 到达“可冲 NN / NC / NHB”门槛
 
-在上一层基础上，再至少满足：
+在上一层基础上，**S 层四件套必须全部有正式产出**：
 
-- `Learning dynamics`
-- 一条稳定的网络层证据
-- 一条比现有 between-subject 更强的脑-行为证据
+- [ ] **S0 刺激控制**：`table_stimulus_control.tsv` 完成，若存在不平衡已完成 covariate sensitivity
+- [ ] **S1 机制 → 行为 / 记忆预测链**：至少在主机制模型（`M3_embedding` / `M8_reverse_pair`）上报告 subject-level 预测 + permutation；`M7_continuous_confidence` 仅作可选补充
+- [ ] **S2 gPPI**：pre/post 主分析至少跑出一条方向性证据（post vs pre 的 `yy_minus_kj`）
+- [ ] **S3 Searchlight 最小版**：至少 `yy` 的 `post - pre` delta pair similarity group-level searchlight 完成
+
+并满足：
+
+- `Learning dynamics` 有主文级结论
+- 一条稳定的网络层证据（S2 即可）
+- 一条比现有 between-subject 更强的脑-行为证据（S1 即可）
 
 ### 冲更高档前再考虑
 
-- M9 relational
-- hippocampal subfield
-- CPM
-- Career of Metaphor
+- M9 relational（C1）
+- hippocampal subfield（C2）
+- CPM（C5）
+- Career of Metaphor（C6）
+- C8 MVPA（仅当审稿明确要求，或 S1 不足以支撑“可读出性”表述时）
 
 ***
 
 ## 八、最近两周的现实推进顺序
 
-### 第 1 阶段
+以 **S 层四件套 + 关键 A/B 补洞** 为骨架，而非简单按 A→B→C 顺序。
 
-- [ ] A1 `M7`
-- [ ] A2 `Δρ LMM`
-- [x] A3 item-level 脑-行为
+### 第 1 阶段（本周上半）：S0 + S1 代码闭环
 
-### 第 2 阶段
+- [ ] **S0 刺激控制**：整理 5 个控制变量，跑出 `table_stimulus_control.tsv`；如不平衡，立刻加 covariate sensitivity
+- [ ] **S1 代码落地**：`mechanism_behavior_prediction.py` 已完成；下一步跑默认主分析（`M3_embedding + M8_reverse_pair`），必要时再加 `--include-m7`
+- [ ] A1 `M7` 变体对比表落盘
+- [ ] A2 `Δρ LMM` family-split / leave-one-roi-out 产出 SI 表
 
-- [ ] A4 刺激控制
-- [x] A5 `paper_outputs`
-- [ ] B1 learning dynamics
+### 第 2 阶段（本周下半）：S2 gPPI 正式产出
 
-### 第 3 阶段
+- [ ] **S2 gPPI**：pre/post 主分析在左颞极两 seed × `literature + literature_spatial` 上正式跑出 `post vs pre` 的 `yy_minus_kj`
+- [ ] `table_gppi_summary_main.tsv` + `table_gppi_summary_full.tsv` 落盘（可由 `export_gppi_summary.py` 在现有 gPPI 运行结束后独立导出）
+- [ ] 配套 `fig_gppi_network.png` 进 `figures_main`
 
-- [ ] B2 representational connectivity
-- [ ] B4 稳健性三件套
-- [ ] B5 noise ceiling
+### 第 3 阶段（下周上半）：S3 Searchlight 最小版 + B 层补洞
 
-### 第 4 阶段
+- [ ] **S3 Searchlight 最小版**：先跑 `pair_similarity_searchlight.py`，至少完成 `yy` / `kj` / `baseline` 的 `post - pre` delta pair similarity searchlight + sign-flip permutation
+- [ ] **RD searchlight**：仅作为 supplementary / exploratory 几何描述，主版完成后再决定是否保留进 SI
+- [ ] B1 learning dynamics 主文图定稿
+- [ ] B2 representational connectivity 主文图定稿
 
-- [ ] B3 searchlight
-- [ ] C1 M9 relational
-- [ ] 其余 C 层任务按时间和结果收益决定
+### 第 4 阶段（下周下半）：稳健性 + ceiling + 文稿同步
+
+- [ ] B4 稳健性三件套（Bayes / LOSO / bootstrap / split-half）
+- [ ] B5 noise ceiling 全量跑完（含 `atlas_robustness`）并落 `table_noise_ceiling.tsv`
+- [ ] `result.md` 两处同步项补齐（B5 atlas 摘要 + 第 12 节主文图路径）
+- [ ] C 层任务（C1 M9 / C7 RD+GPS / 其他）按剩余时间和结果收益决定是否启动
 
 ***
 
@@ -497,13 +608,16 @@
 2. 再牺牲 `CPM`
 3. 再牺牲 `Career of Metaphor`
 4. 再牺牲 `LI / RD / GPS`
-5. 最后才考虑牺牲 `Searchlight`
+5. 再牺牲 `C8 MVPA`（S1 已经覆盖个体差异闭环，MVPA 不是必需）
+6. 最后才考虑把 **S3 Searchlight 从最小版再缩小**（例如只保留 `yy` 一个 contrast）
 
 不应牺牲：
 
 - `M7` 修复
 - `Δρ LMM` 异质性处理
 - item-level 脑-行为
-- 刺激控制
+- **S0 刺激控制**
+- **S1 机制 → 行为/记忆预测链**
+- **S2 gPPI 至少一条方向性 pre/post 结果**
 
-因为这些直接关系到当前主文解释是否站得住。
+因为这些直接关系到当前主文解释是否站得住，以及是否能冲 NN/NC/NHB。
