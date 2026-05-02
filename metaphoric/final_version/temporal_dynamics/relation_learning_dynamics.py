@@ -377,7 +377,8 @@ def main() -> None:
     write_table(metrics, out_dir / "relation_learning_dynamics_long.tsv")
     write_table(qc, out_dir / "relation_learning_window_qc.tsv")
     write_table(failures, out_dir / "relation_learning_failures.tsv")
-    write_table(summary, args.paper_output_root / "tables_si" / "table_relation_learning_dynamics_subject.tsv")
+    write_table(summary, out_dir / "relation_learning_group_summary_fdr.tsv")
+    write_table(metrics, args.paper_output_root / "tables_si" / "table_relation_learning_dynamics_subject.tsv")
     main_summary = summary[summary["is_primary_model"].astype(bool)].copy() if not summary.empty else summary
     write_table(main_summary, args.paper_output_root / "tables_main" / "table_relation_learning_dynamics.tsv")
     save_json(

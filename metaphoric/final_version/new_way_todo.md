@@ -867,3 +867,37 @@ PNAS 冲刺主张：
 - 优先推进 C1/C2：检查 relation-vector effect 是否沿学习阶段或 run-level 呈现轨迹，这比继续扩展 subject-level 脑-行为更可能增强 PNAS 叙事。
 - 若要加强 B 阶段，应新增 pair-level relation fit 输出，再做 item-level memory/RT 的 mixed model 或 GEE；仅 subject-level n=27 的相关分析很难承载强主张。
 - 写作上把机制命名为 `relation-vector realignment/decoupling`，并明确它不是简单的 similarity decrease，而是从 item-pair similarity 下降推进到 relation geometry 的重组。
+
+## 16. 2026-05-02 执行记录：C 阶段
+
+### 16.1 已新增脚本
+
+- `temporal_dynamics/relation_learning_dynamics.py`：完成 C1。由于 learning-stage patterns 是 pair/item-level 图像，不是 cue/target 分离的 word-pattern，该脚本检验 run3 与 run4 的 pair-pattern RDM 是否贴近 relation-vector model RDM，并统计 run4 - run3。
+- `figures/plot_relation_learning_dynamics.py`：完成 C2。输出 learning trajectory forest plot、run3/run4 subject-level alignment 图和 top 表。
+
+### 16.2 已生成核心输出
+
+- `paper_outputs/qc/relation_learning_dynamics/relation_learning_dynamics_long.tsv`
+- `paper_outputs/qc/relation_learning_dynamics/relation_learning_window_qc.tsv`
+- `paper_outputs/qc/relation_learning_dynamics/relation_learning_group_summary_fdr.tsv`
+- `paper_outputs/qc/relation_learning_dynamics/relation_learning_failures.tsv`
+- `paper_outputs/qc/relation_learning_dynamics/relation_learning_manifest.json`
+- `paper_outputs/tables_main/table_relation_learning_dynamics.tsv`
+- `paper_outputs/tables_si/table_relation_learning_dynamics_subject.tsv`
+- `paper_outputs/figures_main/fig_relation_learning_dynamics.png`
+- `paper_outputs/figures_main/table_relation_learning_top.tsv`
+
+### 16.3 C1/C2 验收结论
+
+- QC 通过：3472/3472 window cells 为 ok，failure 文件为空。
+- 输出规模：17360 条 subject/run/model metric rows，310 条 group summary rows。
+- primary relation-vector learning trajectory 没有通过 primary-family FDR；当前最佳候选为：
+  - `literature_spatial/litspat_L_RSC/YY/M9_relation_vector_direct`：run4-run3 = 0.0296，p = 0.0567，q = 0.537。
+  - `literature_spatial/litspat_L_hippocampus/YY/M9_relation_vector_abs`：run4-run3 = -0.0267，p = 0.0682，q = 0.537。
+- 因此 C 阶段不能支持“relation geometry 在学习过程中逐步形成”的强主张。它更适合作为边界结果：强 neural mechanism 出现在 pre/post 表征重组中，但 learning run3/run4 的 pair-pattern RDM 没有稳定捕捉到同一轨迹。
+
+### 16.4 写作与下一步判断
+
+- 不建议把 C 阶段放入主文核心链条；可放 SI，说明 learning-stage pattern 的 run3/run4 trajectory 未提供额外支持。
+- PNAS 冲刺主线应继续围绕 A 阶段的 relation-vector realignment/decoupling，以及 Step 5C 原有稳健 RSA 效应。
+- 若必须增强时间过程证据，下一步不是继续在当前 run3/run4 pair-pattern 上挖，而是检查是否能从 trial-level 或 exposure-order 构造更细粒度的 item-level relation fit；否则容易变成弱结果堆叠。

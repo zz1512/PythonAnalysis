@@ -6,7 +6,7 @@
 
 ## 1. 数据与执行状态
 
-当前正式 ROI 范围为三套：`main_functional`、`literature`、`literature_spatial`。本轮已基于最新代码重跑 Step 5C RSA、RSA LMM、Model-RSA、Delta-rho LMM、item-level brain-behavior、S1 机制到行为预测、representational connectivity、robustness suite 和 noise ceiling。两个 searchlight 使用 `--reuse-subject-maps`，复用既有 subject-level `.nii.gz`，刷新 group-level permutation/FWE、peak table、QC 和图。gPPI 本轮执行 `export_gppi_summary.py`，基于既有 raw gPPI 结果刷新 summary 表。
+当前正式 ROI 范围为三套：`main_functional`、`literature`、`literature_spatial`。本轮已基于最新代码重跑 Step 5C RSA、RSA LMM、Model-RSA、Delta-rho LMM、item-level brain-behavior、S1 机制到行为预测、representational connectivity、robustness suite 和 noise ceiling。新增 A 阶段 relation-vector Model-RSA 已完成 A0/A1/A2：构建 pair-level semantic relation-vector model RDM，并在三套 ROI 中检验 pre/post neural geometry 与该模型的关系。两个 searchlight 使用 `--reuse-subject-maps`，复用既有 subject-level `.nii.gz`，刷新 group-level permutation/FWE、peak table、QC 和图。gPPI 本轮执行 `export_gppi_summary.py`，基于既有 raw gPPI 结果刷新 summary 表。
 
 `Step 5C RSA` 三套 ROI set 均完成，failed cell 与 incomplete cell 均为 0。
 
@@ -97,6 +97,8 @@ Step 5C 使用 pre/post 阶段 LSS beta，在 ROI 内计算 item-wise pattern si
 
 ## 6. Model-RSA 机制结果
 
+### 6.1 既有机制 Model-RSA
+
 Model-RSA 用于检验神经 RDM 的变化与不同机制模型的对应关系。当前 primary models 为 `M3_embedding` 与 `M8_reverse_pair`，control/secondary 模型包括 `M1_condition`、`M2_pair`、`M7_binary`、`M7_continuous_confidence`。
 
 `literature` 中，左 IFG 的 `M8_reverse_pair` 是最强 primary 结果：`t = 3.47`, `p = .00179`, `q_bh_primary_family = .0429`；在更宽的全 model family 中，`q_bh_model_family = .0643`。`main_functional` 中，`Spatial_gt_Metaphor_c02_Precuneus` 的 `M8_reverse_pair` 为 `t = 3.06`, `p = .00494`, `q_bh_primary_family = .0691`；左颞极 c01 的 `M3_embedding` 为 `t = -2.74`, `p = .0107`, `q_bh_primary_family = .0751`。`literature_spatial` 中没有 primary model 通过 FDR，最小 `q_bh_primary_family = .596`。
@@ -114,6 +116,37 @@ Delta-rho LMM 中，`main_functional` 总模型的 `M3_embedding` 相对 `M1_con
 - [delta_rho_lmm_params.tsv: literature](E:/python_metaphor/paper_outputs/tables_si/delta_rho_lmm/literature/delta_rho_lmm_params.tsv)
 - [delta_rho_lmm_params.tsv: literature_spatial](E:/python_metaphor/paper_outputs/tables_si/delta_rho_lmm/literature_spatial/delta_rho_lmm_params.tsv)
 - [fig_model_rsa_mechanism.png](E:/python_metaphor/paper_outputs/figures_main/fig_model_rsa_mechanism.png)
+
+### 6.2 新增 relation-vector Model-RSA（A 阶段）
+
+A 阶段进一步把机制问题从“哪个已有模型更好”推进到 pair-level relation geometry。A0 使用 embedding 中的 `target - cue` 向量为每个学习 pair 构建 relation-vector model RDM；A1 在 ROI 内计算 pre/post neural RDM 与这些模型 RDM 的 Spearman 相关；A2 汇总主机制图与 top 表。由于 pre/post pattern 是 cue 与 target 分离的 word-level pattern，A 阶段的 neural relation-vector 使用 `target pattern - cue pattern`，并同时检查 pair centroid 作为补充 neural RDM。
+
+QC 完整通过：`main_functional` 为 `784/784` cells ok，`literature` 为 `1344/1344` cells ok，`literature_spatial` 为 `1344/1344` cells ok；三套 ROI 均无 failed cells。primary relation-vector 模型共有 11 个结果达到 `q_bh_primary_family < .05`。最强结果如下：
+
+| ROI set | ROI | Condition | Model | Pre | Post | Post - Pre | t | p | q |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `literature` | `lit_L_pMTG` | KJ | `M9_relation_vector_direct` | 0.0253 | -0.0251 | -0.0504 | -5.06 | 2.58e-05 | 0.00040 |
+| `literature` | `lit_R_temporal_pole` | KJ | `M9_relation_vector_abs` | 0.0282 | -0.0149 | -0.0432 | -4.97 | 3.30e-05 | 0.00040 |
+| `literature_spatial` | `litspat_R_OPA` | YY | `M9_relation_vector_direct` | 0.0260 | -0.0283 | -0.0544 | -4.32 | 0.00019 | 0.00458 |
+| `literature` | `lit_L_temporal_pole` | YY | `M9_relation_vector_direct` | 0.0266 | -0.0128 | -0.0395 | -4.05 | 0.00038 | 0.00669 |
+| `literature` | `lit_R_pMTG` | YY | `M9_relation_vector_direct` | 0.0190 | -0.0128 | -0.0318 | -3.91 | 0.00056 | 0.00669 |
+| `literature_spatial` | `litspat_L_OPA` | KJ | `M9_relation_vector_direct` | 0.0218 | -0.0139 | -0.0357 | -4.04 | 0.00040 | 0.00956 |
+
+方向解释需要谨慎：这些显著结果大多为负向 `post - pre`，即学习后 neural relation geometry 与通用 embedding relation-vector RDM 的对应下降。因此当前更稳妥的解释不是“学习后更贴近通用语义向量关系”，而是 **relation-vector realignment / decoupling**：学习后的神经关系几何从通用语义 embedding 结构中脱耦，可能转向更任务化、经验化或情境化的关系表征。这个结果与 Step 5C 中 pair similarity 的 post-pre 下降方向一致，但提供了更具体的关系几何解释。
+
+![Relation-vector Model-RSA 主图](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_rsa.png)
+
+源文件：
+- [relation_pair_manifest.tsv](E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv)
+- [relation_model_rdms.npz](E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_rdms.npz)
+- [relation_model_collinearity.tsv](E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_collinearity.tsv)
+- [relation_vector_group_summary_fdr.tsv: main_functional](E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_main_functional/relation_vector_group_summary_fdr.tsv)
+- [relation_vector_group_summary_fdr.tsv: literature](E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_literature/relation_vector_group_summary_fdr.tsv)
+- [relation_vector_group_summary_fdr.tsv: literature_spatial](E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_literature_spatial/relation_vector_group_summary_fdr.tsv)
+- [table_relation_vector_rsa.tsv](E:/python_metaphor/paper_outputs/tables_main/table_relation_vector_rsa.tsv)
+- [table_relation_vector_rsa_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_relation_vector_rsa_full.tsv)
+- [table_relation_vector_rsa_top.tsv](E:/python_metaphor/paper_outputs/figures_main/table_relation_vector_rsa_top.tsv)
+- [fig_relation_vector_rsa.png](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_rsa.png)
 
 ## 7. 脑-行为分析
 
@@ -270,11 +303,10 @@ ROI-level RD/GPS 当前作为补充分析。RD 结果总体为阴性，没有提
 | 行为 | `YY` 最终记忆正确率高于 `KJ`，正确 trial 反应更快 |
 | 学习 GLM | `Metaphor > Spatial` 定位左前颞/颞极；`Spatial > Metaphor` 定位后部视觉-顶叶-内侧颞网络 |
 | ROI-level RSA | 三套 ROI 中 `YY/Metaphor` 均表现出稳定 post-pre pair similarity 下降；`KJ` 与 baseline 不呈现同等下降 |
-| Model-RSA | `literature` 左 IFG 的 `M8_reverse_pair` 在 primary-family 内显著；其余机制结果多为边界或趋势 |
+| Model-RSA | 既有机制模型中 `literature` 左 IFG 的 `M8_reverse_pair` 在 primary-family 内显著；新增 relation-vector Model-RSA 出现 11 个 primary-family FDR 显著结果，主要表现为 post-pre relation-vector alignment 下降，支持 relation geometry realignment/decoupling 而非简单 alignment 增强 |
 | Item-level 脑-行为 | memory accuracy 的局部候选主要集中在 `Spatial/KJ`；没有形成强 YY item-level accuracy coupling |
 | S1 机制预测行为 | 无 FDR 校正后显著结果；最佳候选为 `literature_spatial` 左 RSC 的 `M8_reverse_pair` 预测 `YY - KJ` retrieval efficiency |
 | Searchlight | pair-similarity searchlight 中 `YY` 有 FWE 显著下降；`KJ` 无 FWE 显著；RD searchlight 阴性 |
 | Representational connectivity | 六个 planned scope 均不显著 |
 | gPPI | 六个 planned `yy_minus_kj` scope 主检验均不显著 |
 | Robustness / ceiling | Step 5C 主 RSA 效应 bootstrap、LOSO、split-half 支持方向稳定；noise ceiling 处于可解释范围 |
-
