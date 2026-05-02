@@ -28,6 +28,7 @@ import os
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 
@@ -49,6 +50,73 @@ if str(RSA_ROOT) not in sys.path:
 from common.final_utils import ensure_dir, read_table, save_json, write_table
 from common.roi_library import sanitize_roi_tag
 import rsa_config as cfg
+
+
+def _bh_fdr(pvalues: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(pvalues, errors="coerce")
+    result = pd.Series(float("nan"), index=pvalues.index, dtype=float)
+    valid = numeric.notna() & numeric.map(math.isfinite)
+    if not valid.any():
+        return result
+    values = numeric.loc[valid].astype(float)
+    order = values.sort_values().index
+    sorted_values = values.loc[order].to_numpy(dtype=float)
+    n = len(sorted_values)
+    adjusted = sorted_values * n / np.arange(1, n + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    adjusted = np.clip(adjusted, 0.0, 1.0)
+    result.loc[order] = adjusted
+    return result
+
+
+def _is_fixed_effect_term(term: object) -> bool:
+    text = str(term)
+    if text == "Intercept":
+        return False
+    return not text.endswith(" Var")
+
+
+def _is_planned_interaction_term(term: object) -> bool:
+    text = str(term)
+    return _is_fixed_effect_term(text) and "C(condition)" in text and "C(time)" in text
+
+
+def add_fdr_columns(params: pd.DataFrame, *, roi_set: str) -> pd.DataFrame:
+    if params.empty:
+        return params
+    out = params.copy()
+    out.insert(0, "roi_set", roi_set)
+    out["is_fixed_effect"] = out["term"].map(_is_fixed_effect_term)
+    out["is_planned_interaction"] = out["term"].map(_is_planned_interaction_term)
+    out["q_bh_fixed_within_level"] = float("nan")
+    out["q_bh_planned_interaction_within_level"] = float("nan")
+
+    for level in out["analysis_level"].dropna().unique():
+        level_mask = out["analysis_level"].eq(level)
+        fixed_idx = out.index[level_mask & out["is_fixed_effect"]]
+        if len(fixed_idx):
+            out.loc[fixed_idx, "q_bh_fixed_within_level"] = _bh_fdr(out.loc[fixed_idx, "p_value"])
+        planned_idx = out.index[level_mask & out["is_planned_interaction"]]
+        if len(planned_idx):
+            out.loc[planned_idx, "q_bh_planned_interaction_within_level"] = _bh_fdr(
+                out.loc[planned_idx, "p_value"]
+            )
+    return out
+
+
+def write_global_fdr_table(frame: pd.DataFrame, *, roi_set: str) -> None:
+    if frame.empty:
+        return
+    target = Path(cfg.BASE_DIR) / "paper_outputs" / "tables_si" / "table_rsa_lmm_fdr.tsv"
+    ensure_dir(target.parent)
+    if target.exists():
+        existing = read_table(target)
+        if "roi_set" in existing.columns:
+            existing = existing[existing["roi_set"].astype(str) != str(roi_set)]
+        combined = pd.concat([existing, frame], ignore_index=True)
+    else:
+        combined = frame.copy()
+    write_table(combined.sort_values(["roi_set", "analysis_level", "analysis_name", "term"]), target)
 
 
 def prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -350,6 +418,15 @@ def main() -> None:
         write_table(pooled_params, output_dir / "lmm_overall.tsv")
         pooled_note = "included"
 
+    fdr_inputs = [item for item in [by_roi, by_base_contrast] if not item.empty]
+    if should_run_pooled and "pooled_params" in locals() and not pooled_params.empty:
+        fdr_inputs.append(pooled_params)
+    fdr_table = pd.concat(fdr_inputs, ignore_index=True) if fdr_inputs else pd.DataFrame()
+    if not fdr_table.empty:
+        fdr_table = add_fdr_columns(fdr_table, roi_set=getattr(cfg, "ROI_SET", ""))
+        write_table(fdr_table, output_dir / "rsa_lmm_fdr.tsv")
+        write_global_fdr_table(fdr_table, roi_set=getattr(cfg, "ROI_SET", ""))
+
     save_json(
         {
             "input_path": str(input_path),
@@ -363,6 +440,7 @@ def main() -> None:
                 "by_roi": (output_dir / "lmm_by_roi.tsv").exists(),
                 "by_base_contrast": (output_dir / "lmm_by_base_contrast.tsv").exists(),
                 "overall": (output_dir / "lmm_overall.tsv").exists(),
+                "fdr": (output_dir / "rsa_lmm_fdr.tsv").exists(),
             },
         },
         output_dir / "analysis_manifest.json",

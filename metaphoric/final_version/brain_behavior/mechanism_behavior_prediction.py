@@ -67,6 +67,8 @@ CONDITION_NAME_MAP = {
     "metaphor": "Metaphor",
     "kj": "Spatial",
     "spatial": "Spatial",
+    "all": "Overall",
+    "yy_minus_kj": "Metaphor - Spatial",
 }
 MODEL_SIGN_MAP = {
     # Larger aligned score = stronger hypothesized post-learning mechanism.
@@ -80,13 +82,27 @@ BEHAVIOR_LABELS = {
     "run7_correct_retrieval_efficiency": "Run-7 retrieval efficiency",
     "run7_correct_retrieval_speed": "Run-7 correct-trial speed",
 }
+DEFAULT_ROI_SETS = ["main_functional", "literature", "literature_spatial"]
+INFERENCE_FAMILY_LABELS = {
+    "main_functional_metaphor_gt_spatial": "Functional ROI: Metaphor > Spatial",
+    "main_functional_spatial_gt_metaphor": "Functional ROI: Spatial > Metaphor",
+    "main_functional_other": "Functional ROI: other",
+    "main_functional": "Functional ROI: pooled",
+    "literature": "Literature ROI: metaphor/semantic",
+    "literature_spatial": "Literature ROI: spatial",
+}
 
 
 def _default_base_dir() -> Path:
     override = os.environ.get("PYTHON_METAPHOR_ROOT", "").strip()
     if override:
         return Path(override)
-    return FINAL_ROOT.parent
+    try:
+        from rsa_analysis.rsa_config import BASE_DIR as RSA_BASE_DIR  # noqa: E402
+
+        return Path(RSA_BASE_DIR)
+    except Exception:
+        return Path("E:/python_metaphor")
 
 
 BASE_DIR = _default_base_dir()
@@ -108,6 +124,13 @@ def _canonical_condition(value: object) -> str | None:
     return None
 
 
+def _canonical_condition_or_all(value: object) -> str | None:
+    text = str(value).strip().lower()
+    if text in {"all", "yy_minus_kj"}:
+        return text
+    return _canonical_condition(value)
+
+
 def _condition_display(value: str) -> str:
     return CONDITION_NAME_MAP.get(str(value).strip().lower(), str(value))
 
@@ -118,6 +141,51 @@ def _infer_roi_set(path: Path) -> str:
     if parent.startswith(prefix) and len(parent) > len(prefix):
         return parent[len(prefix):]
     return "unknown"
+
+
+def _infer_inference_family(roi_set: str, roi: str, *, split_main_functional: bool) -> str:
+    roi_set = str(roi_set)
+    roi = str(roi)
+    if roi_set != "main_functional" or not split_main_functional:
+        return roi_set
+    if roi.startswith("func_Metaphor_gt_Spatial"):
+        return "main_functional_metaphor_gt_spatial"
+    if roi.startswith("func_Spatial_gt_Metaphor"):
+        return "main_functional_spatial_gt_metaphor"
+    return "main_functional_other"
+
+
+def _benjamini_hochberg(p_values: pd.Series) -> pd.Series:
+    values = pd.to_numeric(p_values, errors="coerce").to_numpy(dtype=float)
+    q_values = np.full(values.shape, np.nan, dtype=float)
+    valid = np.isfinite(values)
+    if not np.any(valid):
+        return pd.Series(q_values, index=p_values.index)
+    valid_indices = np.flatnonzero(valid)
+    order = np.argsort(values[valid])
+    ranked = values[valid][order]
+    m = float(len(ranked))
+    adjusted = ranked * m / np.arange(1, len(ranked) + 1, dtype=float)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    q_values[valid_indices[order]] = np.clip(adjusted, 0.0, 1.0)
+    return pd.Series(q_values, index=p_values.index)
+
+
+def _add_family_q_values(summary: pd.DataFrame) -> pd.DataFrame:
+    if summary.empty:
+        return summary
+    out = summary.copy()
+    out["q_within_roi_set"] = np.nan
+    out["q_within_inference_family"] = np.nan
+    out["q_within_primary_family"] = np.nan
+    for _, idx in out.groupby(["analysis_type", "roi_set"], dropna=False).groups.items():
+        out.loc[idx, "q_within_roi_set"] = _benjamini_hochberg(out.loc[idx, "permutation_p"])
+    for _, idx in out.groupby(["analysis_type", "inference_family"], dropna=False).groups.items():
+        out.loc[idx, "q_within_inference_family"] = _benjamini_hochberg(out.loc[idx, "permutation_p"])
+    primary_mask = out["model"].isin(PRIMARY_MODELS) & out["behavior_metric"].isin(PRIMARY_BEHAVIOR_METRICS)
+    for _, idx in out[primary_mask].groupby(["analysis_type", "inference_family"], dropna=False).groups.items():
+        out.loc[idx, "q_within_primary_family"] = _benjamini_hochberg(out.loc[idx, "permutation_p"])
+    return out
 
 
 def _resolve_default_model_metric_paths(base_dir: Path) -> list[Path]:
@@ -424,6 +492,7 @@ def _prepare_mechanism_scores(
     metrics_path: Path,
     *,
     enabled_models: list[str],
+    split_main_functional: bool,
 ) -> pd.DataFrame:
     frame = _read_table(metrics_path).copy()
     required = {"subject", "roi", "time", "model", "rho"}
@@ -435,14 +504,14 @@ def _prepare_mechanism_scores(
 
     frame["subject"] = frame["subject"].map(normalize_subject_id)
     frame["model"] = frame["model"].astype(str).str.strip()
-    frame["condition_group"] = frame["condition_group"].map(_canonical_condition)
+    frame["condition_group"] = frame["condition_group"].map(_canonical_condition_or_all)
     frame["time"] = frame["time"].astype(str).str.strip().str.lower()
     frame["rho"] = pd.to_numeric(frame["rho"], errors="coerce")
     if "skip_reason" in frame.columns:
         frame = frame[frame["skip_reason"].fillna("").eq("")].copy()
     frame = frame[
         frame["model"].isin(enabled_models)
-        & frame["condition_group"].isin(CONDITION_ORDER)
+        & frame["condition_group"].isin([*CONDITION_ORDER, "all"])
         & frame["time"].isin(["pre", "post"])
     ].copy()
 
@@ -462,6 +531,17 @@ def _prepare_mechanism_scores(
     pivot["delta_rho"] = pivot["post"] - pivot["pre"]
     pivot["mechanism_sign"] = pivot["model"].map(MODEL_SIGN_MAP).fillna(1.0)
     pivot["mechanism_score"] = pivot["delta_rho"] * pivot["mechanism_sign"]
+    pivot["source_condition_group"] = pivot["condition_group"]
+    pivot["mechanism_input_scope"] = np.where(
+        pivot["condition_group"].eq("all"),
+        "pooled_all_predicts_overall",
+        "condition_specific",
+    )
+    if pivot["condition_group"].eq("all").any():
+        diff_rows = pivot[pivot["condition_group"].eq("all")].copy()
+        diff_rows["condition_group"] = "yy_minus_kj"
+        diff_rows["mechanism_input_scope"] = "pooled_all_predicts_condition_difference"
+        pivot = pd.concat([pivot, diff_rows], ignore_index=True)
     pivot["mechanism_direction_note"] = pivot["model"].map(
         {
             "M8_reverse_pair": "larger score = stronger pair differentiation because positive delta_rho is retained",
@@ -470,12 +550,20 @@ def _prepare_mechanism_scores(
         }
     ).fillna("larger score indexes stronger aligned post-learning change")
     pivot["roi_set"] = roi_set
+    pivot["inference_family"] = pivot["roi"].map(
+        lambda roi: _infer_inference_family(roi_set, str(roi), split_main_functional=split_main_functional)
+    )
+    pivot["inference_family_label"] = pivot["inference_family"].map(INFERENCE_FAMILY_LABELS).fillna(pivot["inference_family"])
     return pivot[
         [
             "subject",
             "roi_set",
+            "inference_family",
+            "inference_family_label",
             "roi",
             "condition_group",
+            "source_condition_group",
+            "mechanism_input_scope",
             "model",
             "pre",
             "post",
@@ -519,6 +607,48 @@ def _append_behavior_rows(
             )
 
 
+def _append_behavior_contrast_rows(
+    rows: list[dict[str, object]],
+    frame: pd.DataFrame,
+    *,
+    metric: str,
+    wide_prefix: str,
+    value_transform,
+    source_name: str,
+) -> None:
+    yy_col = f"{wide_prefix}_YY"
+    kj_col = f"{wide_prefix}_KJ"
+    if yy_col not in frame.columns or kj_col not in frame.columns:
+        return
+    yy_values = pd.to_numeric(frame[yy_col], errors="coerce")
+    kj_values = pd.to_numeric(frame[kj_col], errors="coerce")
+    for subject, yy_raw, kj_raw in zip(frame["subject"], yy_values, kj_values):
+        if not (np.isfinite(yy_raw) and np.isfinite(kj_raw)):
+            continue
+        yy_value = float(value_transform(float(yy_raw)))
+        kj_value = float(value_transform(float(kj_raw)))
+        rows.append(
+            {
+                "subject": str(subject),
+                "condition_group": "all",
+                "behavior_metric": metric,
+                "behavior_value_raw": float(np.mean([yy_raw, kj_raw])),
+                "behavior_value": float(np.mean([yy_value, kj_value])),
+                "behavior_source": source_name,
+            }
+        )
+        rows.append(
+            {
+                "subject": str(subject),
+                "condition_group": "yy_minus_kj",
+                "behavior_metric": metric,
+                "behavior_value_raw": float(yy_raw - kj_raw),
+                "behavior_value": float(yy_value - kj_value),
+                "behavior_source": source_name,
+            }
+        )
+
+
 def _prepare_behavior_summary(path: Path) -> pd.DataFrame:
     frame = _read_table(path).copy()
     if "subject" not in frame.columns:
@@ -534,6 +664,14 @@ def _prepare_behavior_summary(path: Path) -> pd.DataFrame:
         value_transform=lambda value: value,
         source_name=path.name,
     )
+    _append_behavior_contrast_rows(
+        rows,
+        frame,
+        metric="run7_memory_accuracy",
+        wide_prefix="accuracy",
+        value_transform=lambda value: value,
+        source_name=path.name,
+    )
     _append_behavior_rows(
         rows,
         frame,
@@ -542,7 +680,23 @@ def _prepare_behavior_summary(path: Path) -> pd.DataFrame:
         value_transform=lambda value: -value,
         source_name=path.name,
     )
+    _append_behavior_contrast_rows(
+        rows,
+        frame,
+        metric="run7_correct_retrieval_efficiency",
+        wide_prefix="inverse_efficiency",
+        value_transform=lambda value: -value,
+        source_name=path.name,
+    )
     _append_behavior_rows(
+        rows,
+        frame,
+        metric="run7_correct_retrieval_speed",
+        wide_prefix="mean_rt_correct",
+        value_transform=lambda value: -value,
+        source_name=path.name,
+    )
+    _append_behavior_contrast_rows(
         rows,
         frame,
         metric="run7_correct_retrieval_speed",
@@ -563,9 +717,9 @@ def _fit_condition_specific_rows(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     summary_rows: list[dict[str, object]] = []
     perm_rows: list[dict[str, object]] = []
-    group_cols = ["roi_set", "roi", "model", "behavior_metric", "condition_group"]
+    group_cols = ["roi_set", "inference_family", "inference_family_label", "roi", "model", "behavior_metric", "condition_group"]
     for keys, subset in merged.groupby(group_cols, sort=False):
-        roi_set, roi, model, behavior_metric, condition_group = keys
+        roi_set, inference_family, inference_family_label, roi, model, behavior_metric, condition_group = keys
         pair = subset[["subject", "mechanism_score", "behavior_value", "delta_rho"]].dropna().copy()
         pair = pair.drop_duplicates(subset=["subject"], keep="first")
         effect = _spearman_effect(
@@ -582,6 +736,8 @@ def _fit_condition_specific_rows(
             {
                 "analysis_type": "condition_specific",
                 "roi_set": roi_set,
+                "inference_family": inference_family,
+                "inference_family_label": inference_family_label,
                 "roi": roi,
                 "model": model,
                 "behavior_metric": behavior_metric,
@@ -606,6 +762,7 @@ def _fit_condition_specific_rows(
             {
                 "analysis_type": "condition_specific",
                 "roi_set": roi_set,
+                "inference_family": inference_family,
                 "roi": roi,
                 "model": model,
                 "behavior_metric": behavior_metric,
@@ -631,9 +788,9 @@ def _fit_interaction_rows(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     summary_rows: list[dict[str, object]] = []
     perm_rows: list[dict[str, object]] = []
-    group_cols = ["roi_set", "roi", "model", "behavior_metric"]
+    group_cols = ["roi_set", "inference_family", "inference_family_label", "roi", "model", "behavior_metric"]
     for keys, subset in merged.groupby(group_cols, sort=False):
-        roi_set, roi, model, behavior_metric = keys
+        roi_set, inference_family, inference_family_label, roi, model, behavior_metric = keys
         subset = subset[subset["condition_group"].isin(CONDITION_ORDER)].copy()
         effect = _interaction_effect(
             subset,
@@ -647,6 +804,8 @@ def _fit_interaction_rows(
             {
                 "analysis_type": "condition_interaction",
                 "roi_set": roi_set,
+                "inference_family": inference_family,
+                "inference_family_label": inference_family_label,
                 "roi": roi,
                 "model": model,
                 "behavior_metric": behavior_metric,
@@ -673,6 +832,7 @@ def _fit_interaction_rows(
             {
                 "analysis_type": "condition_interaction",
                 "roi_set": roi_set,
+                "inference_family": inference_family,
                 "roi": roi,
                 "model": model,
                 "behavior_metric": behavior_metric,
@@ -703,7 +863,7 @@ def _plot_top_associations(
     if plot_rows.empty:
         return
     plot_rows = plot_rows.sort_values(
-        ["permutation_p", "behavior_metric", "model_priority", "roi_set", "roi"],
+        ["permutation_p", "behavior_metric", "model_priority", "inference_family", "roi_set", "roi"],
         na_position="last",
     ).head(6)
     n_panels = len(plot_rows)
@@ -719,7 +879,8 @@ def _plot_top_associations(
         ax = flat_axes[index]
         ax.set_visible(True)
         mask = (
-            merged["roi_set"].eq(row.roi_set)
+            merged["inference_family"].eq(row.inference_family)
+            & merged["roi_set"].eq(row.roi_set)
             & merged["roi"].eq(row.roi)
             & merged["model"].eq(row.model)
             & merged["behavior_metric"].eq(row.behavior_metric)
@@ -781,6 +942,17 @@ def main() -> None:
         action="store_true",
         help="Include M7_continuous_confidence as a secondary model. Default is off.",
     )
+    parser.add_argument(
+        "--roi-sets",
+        nargs="+",
+        default=DEFAULT_ROI_SETS,
+        help="ROI sets to include as separate analysis layers (default: main_functional literature literature_spatial).",
+    )
+    parser.add_argument(
+        "--no-split-main-functional-family",
+        action="store_true",
+        help="Keep main_functional pooled instead of splitting func_Metaphor_gt_Spatial and func_Spatial_gt_Metaphor ROI families.",
+    )
     parser.add_argument("--n-bootstrap", type=int, default=2000, help="Bootstrap iterations for CIs.")
     parser.add_argument("--n-permutations", type=int, default=5000, help="Permutation iterations.")
     parser.add_argument("--min-subjects", type=int, default=8, help="Minimum n required to report a result.")
@@ -810,11 +982,34 @@ def main() -> None:
     if args.include_m7:
         enabled_models.append("M7_continuous_confidence")
 
+    requested_roi_sets = [str(value).strip() for value in args.roi_sets if str(value).strip()]
+    split_main_functional = not bool(args.no_split_main_functional_family)
+
     mechanism_frames = [
-        _prepare_mechanism_scores(path, enabled_models=enabled_models)
+        _prepare_mechanism_scores(path, enabled_models=enabled_models, split_main_functional=split_main_functional)
         for path in metric_paths
     ]
     mechanism = pd.concat(mechanism_frames, ignore_index=True)
+    mechanism = mechanism[mechanism["roi_set"].isin(requested_roi_sets)].copy()
+    if mechanism.empty:
+        raise RuntimeError(f"No mechanism rows remained after filtering ROI sets: {requested_roi_sets}")
+    scope_rows = []
+    for (roi_set, source_condition_group, mechanism_input_scope), frame in mechanism.groupby(
+        ["roi_set", "source_condition_group", "mechanism_input_scope"], dropna=False
+    ):
+        scope_rows.append(
+            {
+                "roi_set": roi_set,
+                "source_condition_group": source_condition_group,
+                "mechanism_input_scope": mechanism_input_scope,
+                "analysis_condition_group": ",".join(sorted(frame["condition_group"].dropna().astype(str).unique())),
+                "n_rows": int(len(frame)),
+                "n_subjects": int(frame["subject"].nunique()),
+                "n_rois": int(frame["roi"].nunique()),
+                "n_models": int(frame["model"].nunique()),
+            }
+        )
+    write_table(pd.DataFrame(scope_rows), qc_dir / "mechanism_behavior_input_scope.tsv")
     behavior = _prepare_behavior_summary(args.behavior_summary)
     if behavior.empty:
         raise RuntimeError("No usable behavior rows were extracted from the provided tables.")
@@ -827,7 +1022,9 @@ def main() -> None:
     if merged.empty:
         raise RuntimeError("Mechanism scores and behavior metrics could not be merged on subject + condition.")
     merged["condition_label"] = merged["condition_group"].map(_condition_display)
-    merged = merged.sort_values(["roi_set", "roi", "model", "behavior_metric", "condition_group", "subject"]).reset_index(drop=True)
+    merged = merged.sort_values(
+        ["inference_family", "roi_set", "roi", "model", "behavior_metric", "condition_group", "subject"]
+    ).reset_index(drop=True)
     write_table(merged, qc_dir / "mechanism_behavior_prediction_long.tsv")
 
     summary_specific, perm_specific = _fit_condition_specific_rows(
@@ -851,19 +1048,36 @@ def main() -> None:
         raise RuntimeError("No eligible S1 results met the minimum-subject requirement.")
 
     summary["behavior_metric_label"] = summary["behavior_metric"].map(BEHAVIOR_LABELS).fillna(summary["behavior_metric"])
-    summary["condition_sort"] = summary["condition_group"].map({"yy": 0, "kj": 1, "yy_vs_kj": 2}).fillna(9)
+    summary = _add_family_q_values(summary)
+    summary["condition_sort"] = summary["condition_group"].map({"all": -1, "yy": 0, "kj": 1, "yy_minus_kj": 2, "yy_vs_kj": 3}).fillna(9)
     summary = summary.sort_values(
-        ["analysis_type", "behavior_metric", "model_priority", "permutation_p", "roi_set", "condition_sort", "roi"],
+        [
+            "analysis_type",
+            "inference_family",
+            "behavior_metric",
+            "model_priority",
+            "permutation_p",
+            "roi_set",
+            "condition_sort",
+            "roi",
+        ],
         na_position="last",
     ).reset_index(drop=True)
     summary = summary.drop(columns=["condition_sort"])
     perm_table = perm_table.sort_values(
-        ["analysis_type", "behavior_metric", "model", "roi_set", "roi", "condition_group"],
+        ["analysis_type", "inference_family", "behavior_metric", "model", "roi_set", "roi", "condition_group"],
         na_position="last",
     ).reset_index(drop=True)
 
     write_table(summary, tables_main / "table_mechanism_behavior_prediction.tsv")
     write_table(perm_table, tables_si / "table_mechanism_behavior_prediction_perm.tsv")
+    for family, family_summary in summary.groupby("inference_family", sort=True):
+        safe_family = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(family)).strip("_")
+        if safe_family:
+            write_table(
+                family_summary.reset_index(drop=True),
+                tables_si / f"table_mechanism_behavior_prediction_{safe_family}.tsv",
+            )
 
     figure_path = figures_main / "fig_mechanism_behavior_prediction.png"
     _plot_top_associations(merged, summary, figure_path)
@@ -875,6 +1089,9 @@ def main() -> None:
             "paper_output_root": str(args.paper_output_root),
             "models": enabled_models,
             "include_m7": bool(args.include_m7),
+            "roi_sets": requested_roi_sets,
+            "split_main_functional_family": split_main_functional,
+            "inference_families": sorted(mechanism["inference_family"].dropna().astype(str).unique().tolist()),
             "n_bootstrap": int(args.n_bootstrap),
             "n_permutations": int(args.n_permutations),
             "min_subjects": int(args.min_subjects),
@@ -883,6 +1100,7 @@ def main() -> None:
             "n_subjects_merged": int(merged["subject"].nunique()),
             "n_rois": int(merged["roi"].nunique()),
             "n_roi_sets": int(merged["roi_set"].nunique()),
+            "n_inference_families": int(merged["inference_family"].nunique()),
             "main_table": str(tables_main / "table_mechanism_behavior_prediction.tsv"),
             "perm_table": str(tables_si / "table_mechanism_behavior_prediction_perm.tsv"),
             "figure": str(figure_path),

@@ -80,6 +80,59 @@ ROI_SET_SHORT_LABELS = {
 }
 
 
+def _bh_fdr(pvalues: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(pvalues, errors="coerce")
+    result = pd.Series(float("nan"), index=pvalues.index, dtype=float)
+    valid = numeric.notna() & numeric.map(math.isfinite)
+    if not valid.any():
+        return result
+    values = numeric.loc[valid].astype(float)
+    order = values.sort_values().index
+    sorted_values = values.loc[order].to_numpy(dtype=float)
+    n = len(sorted_values)
+    adjusted = sorted_values * n / np.arange(1, n + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    adjusted = np.clip(adjusted, 0.0, 1.0)
+    result.loc[order] = adjusted
+    return result
+
+
+def _inference_family(roi_set: object, roi: object) -> str:
+    roi_set_text = str(roi_set)
+    roi_text = str(roi)
+    if roi_set_text != "main_functional":
+        return roi_set_text
+    if roi_text.startswith("func_Metaphor_gt_Spatial"):
+        return "main_functional_metaphor_gt_spatial"
+    if roi_text.startswith("func_Spatial_gt_Metaphor"):
+        return "main_functional_spatial_gt_metaphor"
+    return "main_functional_other"
+
+
+def add_fdr_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    out["inference_family"] = [
+        _inference_family(roi_set, roi) for roi_set, roi in zip(out["roi_set"], out["roi"])
+    ]
+    out["q_bh_within_roi_set_response"] = float("nan")
+    out["q_bh_within_inference_family_response"] = float("nan")
+    out["q_bh_within_condition_response"] = float("nan")
+
+    for _, idx in out.groupby(["roi_set", "response"], dropna=False).groups.items():
+        idx = list(idx)
+        out.loc[idx, "q_bh_within_roi_set_response"] = _bh_fdr(out.loc[idx, "p_value"])
+    for _, idx in out.groupby(["inference_family", "response"], dropna=False).groups.items():
+        idx = list(idx)
+        out.loc[idx, "q_bh_within_inference_family_response"] = _bh_fdr(out.loc[idx, "p_value"])
+    group_cols = ["roi_set", "response", "condition"]
+    for _, idx in out.groupby(group_cols, dropna=False).groups.items():
+        idx = list(idx)
+        out.loc[idx, "q_bh_within_condition_response"] = _bh_fdr(out.loc[idx, "p_value"])
+    return out
+
+
 def _read_table(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix in {".tsv", ".txt"}:
@@ -536,14 +589,21 @@ def main() -> None:
     if not interaction.empty:
         interaction = interaction.sort_values(["roi_set", "roi", "term"]).reset_index(drop=True)
 
+    primary_fdr = add_fdr_columns(primary)
+    full_fdr = add_fdr_columns(full)
+    interaction_fdr = add_fdr_columns(interaction) if not interaction.empty else interaction
+
     write_table(primary, tables_main / "table_itemlevel_coupling.tsv")
     write_table(full, tables_si / "table_itemlevel_coupling_full.tsv")
     write_table(interaction, tables_si / "table_itemlevel_coupling_interaction.tsv")
+    write_table(primary_fdr, tables_si / "table_itemlevel_coupling_fdr.tsv")
+    write_table(full_fdr, tables_si / "table_itemlevel_coupling_full_fdr.tsv")
+    write_table(interaction_fdr, tables_si / "table_itemlevel_coupling_interaction_fdr.tsv")
 
-    rt_primary = full[
-        (full["response"] == "log_rt_correct")
-        & (full["term"] == "delta_similarity_within_z")
-    ].copy() if not full.empty else pd.DataFrame()
+    rt_primary = full_fdr[
+        (full_fdr["response"] == "log_rt_correct")
+        & (full_fdr["term"] == "delta_similarity_within_z")
+    ].copy() if not full_fdr.empty else pd.DataFrame()
     write_table(rt_primary, tables_si / "table_itemlevel_coupling_rt.tsv")
 
     memory_plot = primary[
@@ -587,6 +647,7 @@ def main() -> None:
             "n_literature_rois": int(long_frame.loc[long_frame["roi_set"] == "literature", "roi"].nunique()) if "literature" in long_frame["roi_set"].unique() else 0,
             "n_literature_spatial_rois": int(long_frame.loc[long_frame["roi_set"] == "literature_spatial", "roi"].nunique()) if "literature_spatial" in long_frame["roi_set"].unique() else 0,
             "primary_table": str(tables_main / "table_itemlevel_coupling.tsv"),
+            "fdr_table": str(tables_si / "table_itemlevel_coupling_fdr.tsv"),
             "figure_memory": str(figure_path),
             "figure_rt": str(rt_figure_path),
         },

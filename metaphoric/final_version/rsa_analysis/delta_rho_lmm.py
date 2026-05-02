@@ -55,7 +55,7 @@ RSA_ROOT = Path(__file__).resolve().parent
 if str(RSA_ROOT) not in sys.path:
     sys.path.append(str(RSA_ROOT))
 
-from common.final_utils import ensure_dir, save_json, write_table  # noqa: E402
+from common.final_utils import ensure_dir, read_table, save_json, write_table  # noqa: E402
 from common.roi_library import sanitize_roi_tag  # noqa: E402
 import rsa_config as cfg  # noqa: E402
 
@@ -133,14 +133,58 @@ def _derive_base_contrast(roi_name: object) -> str | None:
     return None
 
 
+def _attach_roi_metadata(frame: pd.DataFrame) -> pd.DataFrame:
+    if "roi" not in frame.columns:
+        return frame
+    manifest_path = getattr(cfg, "ROI_MANIFEST", None)
+    if not manifest_path or not Path(manifest_path).exists():
+        return frame
+
+    manifest = read_table(manifest_path).copy()
+    if "roi_name" not in manifest.columns:
+        return frame
+
+    merge_cols = ["roi_name", "roi_set", "base_contrast", "hemisphere", "source_type", "theory_role"]
+    available = [column for column in merge_cols if column in manifest.columns]
+    meta = manifest[available].drop_duplicates("roi_name")
+    merged = frame.merge(meta, how="left", left_on="roi", right_on="roi_name", suffixes=("", "_manifest"))
+    if "roi_name" in merged.columns:
+        merged = merged.drop(columns=["roi_name"])
+
+    for column in ["roi_set", "base_contrast", "hemisphere", "source_type", "theory_role"]:
+        manifest_column = f"{column}_manifest"
+        if manifest_column not in merged.columns:
+            continue
+        if column in merged.columns:
+            current = merged[column].astype("string")
+            manifest_values = merged[manifest_column].astype("string")
+            merged[column] = current.mask(current.isna() | current.str.strip().eq(""), manifest_values)
+            merged = merged.drop(columns=[manifest_column])
+        else:
+            merged = merged.rename(columns={manifest_column: column})
+    return merged
+
+
 def _ensure_family_column(frame: pd.DataFrame, family_col: str) -> tuple[pd.DataFrame, str | None]:
-    if family_col in frame.columns:
+    if family_col in frame.columns and frame[family_col].notna().any():
         return frame, family_col
     if family_col == "base_contrast":
         out = frame.copy()
-        out["base_contrast"] = out["roi"].map(_derive_base_contrast)
-        if out["base_contrast"].notna().any():
+        derived = out["roi"].map(_derive_base_contrast)
+        if "base_contrast" in out.columns:
+            base = out["base_contrast"].astype("string")
+            out["base_contrast"] = base.mask(base.isna() | base.str.strip().eq(""), derived)
+        else:
+            out["base_contrast"] = derived
+        has_base = out["base_contrast"].notna() & out["base_contrast"].astype(str).str.strip().ne("")
+        if has_base.any():
             return out, "base_contrast"
+        if "roi_set" in out.columns:
+            roi_set = out["roi_set"].astype("string")
+            has_roi_set = roi_set.notna() & roi_set.str.strip().ne("")
+            if has_roi_set.any():
+                out["roi_family"] = roi_set
+                return out, "roi_family"
     return frame, None
 
 
@@ -307,6 +351,7 @@ def main() -> None:
     condition_col = args.condition_col
 
     delta_frame = compute_delta(frame, value_col=value_col, condition_col=condition_col)
+    delta_frame = _attach_roi_metadata(delta_frame)
     write_table(delta_frame, output_dir / "delta_rho_long.tsv")
 
     fit, formula, random_effects_note, fallback_mode = fit_lmm(delta_frame, condition_col)

@@ -18,6 +18,7 @@ Design choice
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -45,6 +46,7 @@ from common.pattern_metrics import (  # noqa: E402
     save_scalar_map,
 )
 from representation_analysis.rd_searchlight import (  # noqa: E402
+    _align_pre_post_subject_maps,
     _compute_group_stats,
     _extract_peak_table,
     _resolve_subject_mask,
@@ -52,9 +54,7 @@ from representation_analysis.rd_searchlight import (  # noqa: E402
 
 
 def _default_base_dir() -> Path:
-    from rsa_analysis.rsa_config import BASE_DIR  # noqa: E402
-
-    return Path(BASE_DIR)
+    return Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 
 
 def _default_pattern_root() -> Path:
@@ -288,6 +288,37 @@ def compute_cell_maps(
     return paths, qc_rows
 
 
+def _reuse_cell_maps_from_qc(qc_path: Path, conditions: list[str]) -> tuple[dict[tuple[str, str], list[Path]], pd.DataFrame]:
+    if not qc_path.exists():
+        raise FileNotFoundError(
+            f"Cannot reuse subject maps because QC table was not found: {qc_path}. "
+            "Run once without --reuse-subject-maps to generate subject-level maps."
+        )
+    map_qc = pd.read_csv(qc_path, sep="\t")
+    required = {"time", "condition", "status", "output_path"}
+    missing = required - set(map_qc.columns)
+    if missing:
+        raise ValueError(f"Cannot reuse subject maps; QC table missing columns {sorted(missing)}: {qc_path}")
+    cell_paths: dict[tuple[str, str], list[Path]] = {}
+    for time in ["pre", "post"]:
+        for condition in conditions:
+            subset = map_qc[
+                map_qc["time"].astype(str).eq(time)
+                & map_qc["condition"].astype(str).eq(condition)
+                & map_qc["status"].astype(str).eq("ok")
+            ].copy()
+            qc_paths = [Path(str(path)) for path in subset["output_path"].dropna().tolist() if str(path).strip()]
+            paths = [path for path in qc_paths if path.exists()]
+            missing_count = int(len(qc_paths) - len(paths))
+            if missing_count:
+                print(
+                    f"[reuse-subject-maps] {time}/{condition}: {missing_count} QC-listed map(s) are missing on disk; "
+                    "they will be excluded."
+                )
+            cell_paths[(time, condition)] = sorted(paths)
+    return cell_paths, map_qc
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Whole-brain pair-similarity searchlight analysis.")
     parser.add_argument("pattern_root", type=Path, nargs="?", default=None)
@@ -308,6 +339,11 @@ def main() -> None:
         default="mask.nii",
         help="Mask filename under each subject folder (default: mask.nii; will also try .nii.gz).",
     )
+    parser.add_argument(
+        "--reuse-subject-maps",
+        action="store_true",
+        help="Skip slow subject-level map computation and reuse existing sub-*/pair_similarity_*.nii.gz from the QC table.",
+    )
     args = parser.parse_args()
 
     pattern_root = args.pattern_root or _default_pattern_root()
@@ -317,38 +353,52 @@ def main() -> None:
     tables_main = ensure_dir(paper_output_root / "tables_main")
     figures_main = ensure_dir(paper_output_root / "figures_main")
 
-    subject_dirs = sorted([path for path in pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
-    cell_paths: dict[tuple[str, str], list[Path]] = {}
-    map_qc_rows: list[dict[str, object]] = []
-    for time in ["pre", "post"]:
-        for condition in args.conditions:
-            paths, qc_rows = compute_cell_maps(
-                subject_dirs,
-                subject_mask_root,
-                qc_root,
-                time=time,
-                condition=condition,
-                filename_template=args.filename_template,
-                metadata_template=args.metadata_template,
-                voxel_count=args.voxel_count,
-                pair_col=args.pair_col,
-                min_pairs=args.min_pairs,
-                mask_filename=args.mask_filename,
-            )
-            cell_paths[(time, condition)] = paths
-            map_qc_rows.extend(qc_rows)
-    map_qc = pd.DataFrame(map_qc_rows)
-    if not map_qc.empty:
-        write_table(map_qc, qc_root / "pair_similarity_searchlight_map_qc.tsv")
+    if args.reuse_subject_maps:
+        cell_paths, map_qc = _reuse_cell_maps_from_qc(
+            qc_root / "pair_similarity_searchlight_map_qc.tsv",
+            list(args.conditions),
+        )
+    else:
+        subject_dirs = sorted([path for path in pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
+        cell_paths = {}
+        map_qc_rows: list[dict[str, object]] = []
+        for time in ["pre", "post"]:
+            for condition in args.conditions:
+                paths, qc_rows = compute_cell_maps(
+                    subject_dirs,
+                    subject_mask_root,
+                    qc_root,
+                    time=time,
+                    condition=condition,
+                    filename_template=args.filename_template,
+                    metadata_template=args.metadata_template,
+                    voxel_count=args.voxel_count,
+                    pair_col=args.pair_col,
+                    min_pairs=args.min_pairs,
+                    mask_filename=args.mask_filename,
+                )
+                cell_paths[(time, condition)] = paths
+                map_qc_rows.extend(qc_rows)
+        map_qc = pd.DataFrame(map_qc_rows)
+        if not map_qc.empty:
+            write_table(map_qc, qc_root / "pair_similarity_searchlight_map_qc.tsv")
 
     summaries: dict[str, dict[str, object]] = {}
     peak_frames: list[pd.DataFrame] = []
     plot_payload: list[dict[str, object]] = []
+    pairing_manifests: list[pd.DataFrame] = []
     for idx, condition in enumerate(args.conditions):
         pre_paths = cell_paths.get(("pre", condition), [])
         post_paths = cell_paths.get(("post", condition), [])
         if not pre_paths or not post_paths:
             continue
+        pre_paths, post_paths, pairing_manifest = _align_pre_post_subject_maps(
+            pre_paths,
+            post_paths,
+            condition=condition,
+            analysis_name="pair_similarity_searchlight",
+        )
+        pairing_manifests.append(pairing_manifest)
         label = f"{condition}_post_vs_pre"
         group_dir = ensure_dir(qc_root / f"group_{label}")
         summary, maps = _compute_group_stats(
@@ -373,6 +423,8 @@ def main() -> None:
         plot_payload.append({"comparison": label, **maps})
 
     summary_df = pd.DataFrame([{"comparison": key, **value} for key, value in summaries.items()])
+    if pairing_manifests:
+        write_table(pd.concat(pairing_manifests, ignore_index=True), qc_root / "searchlight_subject_pairing_manifest.tsv")
     if plot_payload:
         _plot_group_deltas(plot_payload, figures_main / "fig_searchlight_pair_similarity_delta.png")
     peaks_df = pd.concat(peak_frames, ignore_index=True) if peak_frames else pd.DataFrame(
@@ -389,6 +441,7 @@ def main() -> None:
             "min_pairs": int(args.min_pairs),
             "voxel_count": int(args.voxel_count),
             "n_permutations": int(args.n_permutations),
+            "reuse_subject_maps": bool(args.reuse_subject_maps),
             "cell_counts": {f"{time}_{condition}": len(paths) for (time, condition), paths in cell_paths.items()},
             "n_skipped_cells": int((map_qc["status"] == "skipped").sum()) if not map_qc.empty else 0,
             "map_qc": str(qc_root / "pair_similarity_searchlight_map_qc.tsv"),

@@ -1,0 +1,820 @@
+# new_way_todo.md
+
+最后更新：2026-05-02
+
+目标：把 `new_way.md` 中的 Relation-vector Geometry 路线转成具体可执行任务。本文档聚焦三件事：
+
+- 写哪些脚本。
+- 产出哪些结果文件、图和 QC。
+- 如何验收结果，并决定进入主文、SI，还是降级为探索。
+
+本路线不替代 `new_todo.md` 与 `new_rerun_list.md`。`new_todo.md` 解决既有主线可信度；本文档解决 PNAS 冲刺所需的新机制分析。
+
+## 0. 总体执行原则
+
+核心科学问题：
+
+> 隐喻联结学习是否让人脑学习到 cue-to-target 的方向性关系几何，而不是简单让两个词变得更相似？
+
+核心分析包：
+
+| 阶段 | 脚本 | 作用 | 优先级 |
+| --- | --- | --- | --- |
+| A0 | `rsa_analysis/build_relation_vectors.py` | 构建 pair-level 关系向量与模型 RDM | P0 |
+| A1 | `rsa_analysis/relation_vector_rsa.py` | ROI-level relation-vector Model-RSA | P0 |
+| A2 | `figures/plot_relation_vector_rsa.py` | 主机制图与汇总图 | P0 |
+| B1 | `brain_behavior/relation_behavior_prediction.py` | relation geometry 预测行为 | P1 |
+| B2 | `figures/plot_relation_behavior_prediction.py` | 脑-行为图 | P1 |
+| C1 | `temporal_dynamics/relation_learning_dynamics.py` | 学习阶段 relation trajectory | P2 |
+| C2 | `figures/plot_relation_learning_dynamics.py` | 学习轨迹图 | P2 |
+| D1 | `figures/update_relation_summary_tables.py` | 汇总主表、SI 表与 result_new 统计摘录 | P1 |
+
+最小可行版本：
+
+- 必须完成 A0 + A1 + A2。
+- 若 A1 有方向性或校正后结果，再推进 B1/B2。
+- C1/C2 是 PNAS 增强项，不应阻塞 A/B 的判断。
+
+## 1. 通用环境与输入检查
+
+### 1.1 环境设置
+
+从 `E:\PythonAnalysis` 执行：
+
+```powershell
+cd E:\PythonAnalysis
+$py = "C:\Users\dell\anaconda3\envs\PythonAnalysis\python.exe"
+$env:PYTHON_METAPHOR_ROOT = "E:/python_metaphor"
+$embedding = "E:/python_metaphor/stimulus_embeddings/stimulus_embeddings_bert.tsv"
+$patternRoot = "E:/python_metaphor/pattern_root"
+$paperRoot = "E:/python_metaphor/paper_outputs"
+```
+
+### 1.2 必须存在的上游文件
+
+验收命令：
+
+```powershell
+Test-Path $embedding
+Test-Path "$patternRoot/sub-01/pre_yy.nii.gz"
+Test-Path "$patternRoot/sub-01/pre_yy_metadata.tsv"
+Test-Path "$paperRoot/qc/behavior_results/refined/behavior_trials.tsv"
+Test-Path "$paperRoot/qc/behavior_results/refined/subject_summary_wide.tsv"
+```
+
+必须存在：
+
+- `E:/python_metaphor/stimulus_embeddings/stimulus_embeddings_bert.tsv`
+- `E:/python_metaphor/pattern_root/sub-xx/{pre,post}_{yy,kj}.nii.gz`
+- `E:/python_metaphor/pattern_root/sub-xx/{pre,post}_{yy,kj}_metadata.tsv`
+- `E:/python_metaphor/paper_outputs/qc/behavior_results/refined/behavior_trials.tsv`
+- `E:/python_metaphor/paper_outputs/qc/behavior_results/refined/subject_summary_wide.tsv`
+- `E:/python_metaphor/roi_library/manifest.tsv`
+
+### 1.3 输入覆盖 QC
+
+新增 QC 表：
+
+```text
+paper_outputs/qc/relation_vectors/relation_embedding_coverage.tsv
+paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv
+```
+
+验收标准：
+
+- YY/KJ 正式 pair 的 word labels 在 embedding 表中覆盖率必须为 `100%`。
+- 每个 condition 的 pair 数与 `stimuli_template.csv` 一致。
+- 每个 pair 必须有且只有 2 个词。
+- 若有缺失，先修 embedding 或 word label mapping，不进入 A1。
+
+## 2. A0：构建关系向量与模型 RDM
+
+### 2.1 新增脚本
+
+路径：
+
+```text
+rsa_analysis/build_relation_vectors.py
+```
+
+职责：
+
+- 读取 `stimuli_template.csv` 与 embedding 表。
+- 按 `condition × pair_id` 构建 cue-target pair。
+- 对每个 pair 计算关系向量。
+- 生成 pair-level manifest、model RDM `.npz` 和长表。
+
+### 2.2 输入
+
+默认输入：
+
+```text
+E:/python_metaphor/stimuli_template.csv
+E:/python_metaphor/stimulus_embeddings/stimulus_embeddings_bert.tsv
+```
+
+命令参数：
+
+```text
+--stimuli-template
+--embedding-file
+--output-dir
+--conditions yy kj
+--word-col word_label
+--pair-col pair_id
+--cue-role first
+```
+
+说明：
+
+- `--cue-role first` 表示同一 pair 内排序后的第一词为 cue，第二词为 target。
+- 如果 metadata 中已有更明确的 cue/target 列，后续可改成 `--cue-col` / `--target-col`。
+
+### 2.3 模型
+
+必须输出：
+
+- `M9_relation_vector_direct`：`target - cue`
+- `M9_relation_vector_reverse`：`cue - target`
+- `M9_relation_vector_abs`：`abs(target - cue)`
+- `M9_relation_vector_length`：关系向量长度差异
+- `M3_embedding_pair_distance`：pair 内普通语义距离或 pair centroids 距离
+
+可选输出：
+
+- `M9_relation_vector_direction_only`：单位向量方向，去掉长度。
+- `M9_relation_vector_centroid_control`：pair centroid RDM，用于控制 pair 位置。
+
+### 2.4 输出
+
+```text
+paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv
+paper_outputs/qc/relation_vectors/relation_embedding_coverage.tsv
+paper_outputs/qc/relation_vectors/relation_model_rdms.npz
+paper_outputs/qc/relation_vectors/relation_model_rdm_manifest.tsv
+paper_outputs/qc/relation_vectors/relation_model_collinearity.tsv
+paper_outputs/qc/relation_vectors/relation_vectors_manifest.json
+```
+
+### 2.5 验收标准
+
+- `relation_pair_manifest.tsv` 中每个 `condition × pair_id` 只有一行。
+- `relation_model_rdms.npz` 中每个模型都是方阵，维度等于 pair 数。
+- RDM 对角线为 0，矩阵对称，无 NaN。
+- `relation_model_collinearity.tsv` 中标注 `abs_r > .70` 的模型对，后续解释时必须说明。
+- direct 与 reverse 如果数值完全等价，不能声称方向性；需要改用 direction-sensitive neural vector 分析或把 reverse 降级为 sanity check。
+
+### 2.6 运行命令
+
+```powershell
+& $py metaphoric/final_version/rsa_analysis/build_relation_vectors.py `
+  --stimuli-template E:/python_metaphor/stimuli_template.csv `
+  --embedding-file $embedding `
+  --output-dir E:/python_metaphor/paper_outputs/qc/relation_vectors `
+  --conditions yy kj
+```
+
+## 3. A1：Relation-vector ROI-level Model-RSA
+
+### 3.1 新增脚本
+
+路径：
+
+```text
+rsa_analysis/relation_vector_rsa.py
+```
+
+职责：
+
+- 读取 pre/post patterns 与 ROI masks。
+- 对每个 `subject × roi × condition × time` 计算 pair-level neural RDM。
+- 与 A0 的 relation model RDM 做 Spearman 相关。
+- 输出 subject-level rho、post-pre delta、group summary、FDR。
+
+### 3.2 输入
+
+默认输入：
+
+```text
+E:/python_metaphor/pattern_root
+E:/python_metaphor/roi_library/manifest.tsv
+E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_rdms.npz
+E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv
+```
+
+命令参数：
+
+```text
+--pattern-root
+--roi-set
+--roi-manifest
+--relation-rdm-npz
+--relation-pair-manifest
+--output-dir
+--conditions yy kj
+--models M9_relation_vector_direct M9_relation_vector_abs M9_relation_vector_length M3_embedding_pair_distance
+--partial-correlation
+--audit-rdms
+```
+
+### 3.3 核心算法
+
+每个 `subject × roi × condition × time`：
+
+1. 读取 `{time}_{condition}.nii.gz` 和 metadata。
+2. ROI mask 提取 trial × voxel pattern。
+3. 按 metadata 的 `pair_id` 把每个 pair 的两个词整理成 pair-level 表征。
+4. 构建 neural RDM。
+5. 与同 condition 的 model RDM 对齐后计算 Spearman rho。
+6. 输出：
+
+```text
+rho_pre
+rho_post
+delta_rho = rho_post - rho_pre
+```
+
+### 3.4 Pair-level neural RDM 的两个版本
+
+必须实现两个版本，并在主分析中选择一个，另一个作为 sensitivity：
+
+#### 版本 1：Pair centroid RDM
+
+```text
+pair_pattern = mean(pattern_cue, pattern_target)
+neural_RDM = pdist(pair_pattern, correlation)
+```
+
+优点：稳定、易解释。  
+缺点：方向性较弱。
+
+#### 版本 2：Neural relation vector RDM
+
+```text
+neural_relation_vector = pattern_target - pattern_cue
+neural_RDM = pdist(neural_relation_vector, correlation)
+```
+
+优点：最贴合 relation-vector 理论。  
+缺点：对 cue/target 顺序和噪声更敏感。
+
+推荐：
+
+- 主分析先用 `neural_relation_vector`。
+- `pair_centroid` 作为控制，避免审稿人认为结果只是 pair 位置差异。
+
+### 3.5 输出
+
+ROI-set 级输出：
+
+```text
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_subject_metrics.tsv
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_group_summary.tsv
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_group_summary_fdr.tsv
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_cell_qc.tsv
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_model_failures.tsv
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_manifest.json
+```
+
+全局论文输出：
+
+```text
+paper_outputs/tables_main/table_relation_vector_rsa.tsv
+paper_outputs/tables_si/table_relation_vector_rsa_fdr.tsv
+paper_outputs/tables_si/table_relation_vector_subject_metrics.tsv
+```
+
+可选 audit：
+
+```text
+paper_outputs/qc/relation_vector_rsa_<roi_set>/rdm_audit/sub-xx/<roi>_<time>_<condition>_rdm.npz
+```
+
+### 3.6 FDR family
+
+必须写入以下列：
+
+```text
+model_role
+q_bh_model_family
+q_bh_primary_family
+q_bh_model_role_family
+```
+
+模型角色：
+
+- primary：`M9_relation_vector_direct`, `M9_relation_vector_abs`
+- control：`M9_relation_vector_length`, `M3_embedding_pair_distance`
+- secondary：reverse / direction-only / centroid-control 等
+
+FDR family 建议：
+
+- 同一 `roi_set × condition × neural_rdm_type × model_role` 内校正。
+- 主文只使用 primary family。
+
+### 3.7 运行命令
+
+```powershell
+foreach ($roi in @("main_functional", "literature", "literature_spatial")) {
+  & $py metaphoric/final_version/rsa_analysis/relation_vector_rsa.py `
+    --pattern-root $patternRoot `
+    --roi-set $roi `
+    --roi-manifest E:/python_metaphor/roi_library/manifest.tsv `
+    --relation-rdm-npz E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_rdms.npz `
+    --relation-pair-manifest E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv `
+    --output-dir "E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_$roi" `
+    --conditions yy kj `
+    --neural-rdm-types relation_vector pair_centroid
+}
+```
+
+### 3.8 验收标准
+
+数据完整性：
+
+- `relation_vector_cell_qc.tsv` 中 failed cells 为 0，或明确列出失败原因。
+- 每个 ROI set 的 subjects 与 Step 5C RSA 一致。
+- 每个 `subject × roi × condition × time × neural_rdm_type` 都有相同 pair 数。
+
+结果完整性：
+
+- `relation_vector_subject_metrics.tsv` 包含 pre/post/delta。
+- `relation_vector_group_summary_fdr.tsv` 包含所有 primary/control 模型。
+- `table_relation_vector_rsa.tsv` 能直接用于主文表。
+
+科学验收：
+
+- 强结果：`M9_relation_vector_direct` 在至少一套 ROI set 通过 primary-family FDR，且方向为 post alignment 增强。
+- 中结果：多个语义 ROI 未校正显著或 q < .10，可作为机制线索。
+- 弱结果：无方向性或只有 control 模型显著，relation-vector 主机制不成立。
+
+## 4. A2：Relation-vector 图表
+
+### 4.1 新增脚本
+
+路径：
+
+```text
+figures/plot_relation_vector_rsa.py
+```
+
+职责：
+
+- 读取三套 ROI 的 `relation_vector_group_summary_fdr.tsv`。
+- 输出主机制图。
+- 生成主文表和简短结果摘要。
+
+### 4.2 输出
+
+```text
+paper_outputs/figures_main/fig_relation_vector_rsa.png
+paper_outputs/figures_main/table_relation_vector_rsa_top.tsv
+paper_outputs/tables_main/table_relation_vector_rsa.tsv
+paper_outputs/tables_si/table_relation_vector_rsa_full.tsv
+```
+
+### 4.3 图形内容
+
+推荐三栏：
+
+1. 关系向量模型示意：`cue -> target`，以及 direct / abs / length controls。
+2. 三套 ROI set 的 primary model delta rho forest plot。
+3. 关键 ROI 的 pre/post relation alignment 点图或雨云图。
+
+### 4.4 验收标准
+
+- 图中明确区分 `yy` 与 `kj`。
+- 主模型和 control 模型颜色不同。
+- 图注写清楚 neural RDM 类型：`target - cue neural relation vector` 或 `pair centroid`。
+- 表中必须有 q 值列，不能只显示 p 值。
+
+## 5. B1：Relation geometry 预测行为
+
+### 5.1 新增脚本
+
+路径：
+
+```text
+brain_behavior/relation_behavior_prediction.py
+```
+
+职责：
+
+- 把 A1 的 subject-level 或 item/pair-level relation metrics 与 run7 行为连接。
+- 做 subject-level 和 item-level 两套分析。
+- 输出统计表、FDR、QC 和绘图输入。
+
+### 5.2 输入
+
+```text
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_subject_metrics.tsv
+paper_outputs/qc/behavior_results/refined/subject_summary_wide.tsv
+paper_outputs/qc/behavior_results/refined/behavior_trials.tsv
+stimuli_template.csv
+```
+
+可选：
+
+```text
+paper_outputs/qc/relation_vector_rsa_<roi_set>/relation_vector_pair_metrics.tsv
+```
+
+如果 A1 暂不输出 pair-level metrics，B1 第一版只做 subject-level。
+
+### 5.3 Subject-level 分析
+
+构建：
+
+```text
+relation_alignment_pre
+relation_alignment_post
+relation_alignment_delta
+yy_minus_kj_relation_alignment
+```
+
+行为：
+
+```text
+run7_memory_accuracy
+run7_correct_retrieval_efficiency
+run7_correct_retrieval_speed
+yy_minus_kj_<behavior>
+```
+
+模型：
+
+```text
+yy_minus_kj_behavior ~ yy_minus_kj_relation_alignment
+```
+
+统计：
+
+- Spearman r。
+- permutation p。
+- bootstrap CI。
+- FDR within inference family。
+
+### 5.4 Item-level 分析
+
+若 A1 能输出 pair-level relation fit：
+
+```text
+memory ~ relation_fit_pre + relation_fit_post + relation_fit_delta + condition
+```
+
+或 GEE：
+
+```text
+memory ~ relation_fit_post_z * C(condition) + relation_fit_pre_z
+groups = subject
+family = binomial
+```
+
+RT：
+
+```text
+log_rt_correct ~ relation_fit_post_z * C(condition) + relation_fit_pre_z
+groups = subject
+family = Gaussian
+```
+
+### 5.5 输出
+
+```text
+paper_outputs/qc/relation_behavior/relation_behavior_subject_long.tsv
+paper_outputs/qc/relation_behavior/relation_behavior_item_long.tsv
+paper_outputs/qc/relation_behavior/relation_behavior_join_qc.tsv
+paper_outputs/tables_main/table_relation_behavior_prediction.tsv
+paper_outputs/tables_si/table_relation_behavior_prediction_fdr.tsv
+paper_outputs/tables_si/table_relation_behavior_itemlevel.tsv
+paper_outputs/qc/relation_behavior/relation_behavior_manifest.json
+```
+
+### 5.6 运行命令
+
+```powershell
+& $py metaphoric/final_version/brain_behavior/relation_behavior_prediction.py `
+  --relation-dirs `
+    E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_main_functional `
+    E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_literature `
+    E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_literature_spatial `
+  --behavior-summary E:/python_metaphor/paper_outputs/qc/behavior_results/refined/subject_summary_wide.tsv `
+  --behavior-trials E:/python_metaphor/paper_outputs/qc/behavior_results/refined/behavior_trials.tsv `
+  --paper-output-root $paperRoot
+```
+
+### 5.7 验收标准
+
+QC：
+
+- subject-level merge 后 `n_subjects >= 26`。
+- item-level merge 后 subject、condition、pair 数与现有 item-level brain-behavior 接近。
+- `relation_behavior_join_qc.tsv` 没有明显 condition 偏差。
+
+科学验收：
+
+- 强结果：primary relation metric 预测 `YY-KJ` memory 或 efficiency，q < .05。
+- 中结果：语义 ROI 未校正显著且方向一致，可作为机制线索。
+- 阴性：不写“关系几何解释行为”，只写神经机制结果。
+
+## 6. B2：脑-行为图
+
+### 6.1 新增脚本
+
+路径：
+
+```text
+figures/plot_relation_behavior_prediction.py
+```
+
+### 6.2 输出
+
+```text
+paper_outputs/figures_main/fig_relation_behavior_prediction.png
+paper_outputs/tables_main/table_relation_behavior_top.tsv
+```
+
+### 6.3 图形内容
+
+推荐：
+
+- Top 4 或 Top 6 relation-behavior associations。
+- 每个 panel 显示 subject scatter + robust regression line。
+- 颜色区分 ROI set 或 condition。
+- 标注 permutation p 与 q。
+
+### 6.4 验收标准
+
+- 不展示未校正 p 很小但 q 很差的一堆散点作为主文。
+- 若无 FDR 后结果，图降级为 SI 或不生成主文图。
+
+## 7. C1：Learning-stage relation trajectory
+
+### 7.1 新增脚本
+
+路径：
+
+```text
+temporal_dynamics/relation_learning_dynamics.py
+```
+
+职责：
+
+- 读取 learning-stage patterns。
+- 按 exposure / run / early-late window 计算 relation alignment。
+- 检验 trajectory 是否随学习增强，是否预测 post relation alignment 或 run7 behavior。
+
+### 7.2 输入检查
+
+先运行：
+
+```powershell
+Get-ChildItem E:/python_metaphor/pattern_root/sub-01 -Filter "learn_*"
+```
+
+若存在：
+
+```text
+learn_yy.nii.gz
+learn_kj.nii.gz
+learn_yy_metadata.tsv
+learn_kj_metadata.tsv
+```
+
+则进入 C1。
+
+若不存在：
+
+- C1 暂缓。
+- 不影响 A/B。
+
+### 7.3 时间窗定义
+
+优先顺序：
+
+1. metadata 有 `exposure_index`：按 exposure 做 trajectory。
+2. metadata 有 `run`：run3 vs run4。
+3. metadata 有 trial order：early half vs late half。
+4. 都没有：C1 不做。
+
+### 7.4 输出
+
+```text
+paper_outputs/qc/relation_learning_dynamics/relation_learning_dynamics_long.tsv
+paper_outputs/qc/relation_learning_dynamics/relation_learning_window_qc.tsv
+paper_outputs/tables_main/table_relation_learning_dynamics.tsv
+paper_outputs/tables_si/table_relation_learning_dynamics_subject.tsv
+paper_outputs/qc/relation_learning_dynamics/relation_learning_manifest.json
+```
+
+### 7.5 运行命令
+
+```powershell
+& $py metaphoric/final_version/temporal_dynamics/relation_learning_dynamics.py `
+  --pattern-root $patternRoot `
+  --roi-sets main_functional literature `
+  --roi-manifest E:/python_metaphor/roi_library/manifest.tsv `
+  --relation-rdm-npz E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_rdms.npz `
+  --relation-pair-manifest E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv `
+  --paper-output-root $paperRoot
+```
+
+### 7.6 验收标准
+
+- 每个 window 至少有足够 pair 数，建议 `n_pairs >= 10`。
+- 每个 subject 至少两个 window。
+- 主模型优先检验 `YY` relation alignment slope。
+- 若 trajectory 预测行为，必须单独列为 planned exploratory，避免过度因果化。
+
+## 8. C2：学习轨迹图
+
+### 8.1 新增脚本
+
+路径：
+
+```text
+figures/plot_relation_learning_dynamics.py
+```
+
+### 8.2 输出
+
+```text
+paper_outputs/figures_main/fig_relation_learning_dynamics.png
+paper_outputs/tables_main/table_relation_learning_top.tsv
+```
+
+### 8.3 图形内容
+
+- YY/KJ early-late 或 exposure trajectory。
+- 关键 ROI / ROI family 的 relation alignment 曲线。
+- 可选：trajectory slope 与 Run7 memory scatter。
+
+### 8.4 验收标准
+
+- 若学习阶段 metadata 不足，不强行作图。
+- 若只有趋势，作为 SI 过程图。
+
+## 9. D1：汇总与写作更新
+
+### 9.1 新增脚本
+
+路径：
+
+```text
+figures/update_relation_summary_tables.py
+```
+
+职责：
+
+- 从 A/B/C 输出中提取 top results。
+- 生成一页结果概览所需表格。
+- 不自动改 `result_new.md`，只输出可复制的 markdown 摘要，避免误写结论。
+
+### 9.2 输出
+
+```text
+paper_outputs/qc/relation_summary/relation_result_update_stats.txt
+paper_outputs/qc/relation_summary/relation_result_markdown_snippets.md
+paper_outputs/tables_main/table_relation_summary_onepage.tsv
+```
+
+### 9.3 验收标准
+
+- 摘要中必须区分：
+  - confirmed
+  - exploratory
+  - negative
+- 每条结果必须带：
+  - ROI set
+  - model
+  - condition
+  - neural RDM type
+  - subject 数
+  - correction family
+  - q value
+
+## 10. 全链路推荐运行顺序
+
+```powershell
+# 0. 环境
+cd E:\PythonAnalysis
+$py = "C:\Users\dell\anaconda3\envs\PythonAnalysis\python.exe"
+$env:PYTHON_METAPHOR_ROOT = "E:/python_metaphor"
+$embedding = "E:/python_metaphor/stimulus_embeddings/stimulus_embeddings_bert.tsv"
+$patternRoot = "E:/python_metaphor/pattern_root"
+$paperRoot = "E:/python_metaphor/paper_outputs"
+
+# 1. A0: relation vectors
+& $py metaphoric/final_version/rsa_analysis/build_relation_vectors.py `
+  --stimuli-template E:/python_metaphor/stimuli_template.csv `
+  --embedding-file $embedding `
+  --output-dir E:/python_metaphor/paper_outputs/qc/relation_vectors `
+  --conditions yy kj
+
+# 2. A1: relation-vector RSA
+foreach ($roi in @("main_functional", "literature", "literature_spatial")) {
+  & $py metaphoric/final_version/rsa_analysis/relation_vector_rsa.py `
+    --pattern-root $patternRoot `
+    --roi-set $roi `
+    --roi-manifest E:/python_metaphor/roi_library/manifest.tsv `
+    --relation-rdm-npz E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_rdms.npz `
+    --relation-pair-manifest E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv `
+    --output-dir "E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_$roi" `
+    --conditions yy kj `
+    --neural-rdm-types relation_vector pair_centroid
+}
+
+# 3. A2: relation-vector figures
+& $py metaphoric/final_version/figures/plot_relation_vector_rsa.py `
+  --paper-output-root $paperRoot
+
+# 4. B1/B2: behavior bridge
+& $py metaphoric/final_version/brain_behavior/relation_behavior_prediction.py `
+  --relation-dirs `
+    E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_main_functional `
+    E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_literature `
+    E:/python_metaphor/paper_outputs/qc/relation_vector_rsa_literature_spatial `
+  --behavior-summary E:/python_metaphor/paper_outputs/qc/behavior_results/refined/subject_summary_wide.tsv `
+  --behavior-trials E:/python_metaphor/paper_outputs/qc/behavior_results/refined/behavior_trials.tsv `
+  --paper-output-root $paperRoot
+
+& $py metaphoric/final_version/figures/plot_relation_behavior_prediction.py `
+  --paper-output-root $paperRoot
+
+# 5. C1/C2: learning trajectory, only if learning patterns exist
+& $py metaphoric/final_version/temporal_dynamics/relation_learning_dynamics.py `
+  --pattern-root $patternRoot `
+  --roi-sets main_functional literature `
+  --roi-manifest E:/python_metaphor/roi_library/manifest.tsv `
+  --relation-rdm-npz E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_model_rdms.npz `
+  --relation-pair-manifest E:/python_metaphor/paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv `
+  --paper-output-root $paperRoot
+
+& $py metaphoric/final_version/figures/plot_relation_learning_dynamics.py `
+  --paper-output-root $paperRoot
+
+# 6. D1: summary snippets
+& $py metaphoric/final_version/figures/update_relation_summary_tables.py `
+  --paper-output-root $paperRoot
+```
+
+## 11. 分阶段验收门槛
+
+### Gate A：是否值得继续做 B/C？
+
+A1 完成后判断：
+
+- Go：`M9_relation_vector_direct` 或 `M9_relation_vector_abs` 在至少一套 ROI set 中有 q < .05，或多个理论 ROI q < .10 且方向一致。
+- Conditional Go：只有未校正 p < .05，但集中在 IFG/ATL/AG/pMTG，可做 B，但写作保持探索。
+- Stop：primary 模型无方向，control 模型更强，或结果完全随机。转向 schema / SSDD 模型。
+
+### Gate B：是否能写脑-行为桥接？
+
+B1 完成后判断：
+
+- 主文：relation metric 预测 `YY-KJ` memory / efficiency，q < .05。
+- SI：未校正显著或 q < .10。
+- 不写：无方向或由单个离群点驱动。
+
+### Gate C：是否能写学习过程？
+
+C1 完成后判断：
+
+- 主文：YY relation alignment 随学习增强，且与 post relation alignment 或 behavior 有联系。
+- SI：只有趋势或只在单 ROI。
+- 暂缓：learning metadata 不足或 pair 数不足。
+
+## 12. 论文结果解释模板
+
+### A 强 + B 强 + C 中/强
+
+PNAS 冲刺主张：
+
+> 隐喻联结学习通过形成方向性关系几何来重塑语义记忆，该关系几何在学习过程中逐步形成，并解释个体最终记忆表现。
+
+### A 强 + B 弱
+
+保守主张：
+
+> 隐喻学习诱发稳定的表征分化，并伴随方向性关系几何的神经机制证据；行为桥接仍是边界条件。
+
+### A 弱
+
+回退主张：
+
+> 当前主效应仍支持 representational differentiation，但 relation-vector 模型不足以解释该效应。下一步需要 schema 或语义维度模型。
+
+## 13. 写作注意事项
+
+- 不写“pair 学习后更像”。
+- 不把 `relation alignment` 写成因果机制，除非 learning trajectory 和行为预测都支持。
+- 不把未校正的单 ROI 结果写成主机制。
+- 若 direct 与 reverse 模型等价，不写方向性，只写 relation geometry。
+- 若 pair centroid 比 neural relation vector 更强，解释为 pair-level semantic location，而不是 direction coding。
+- 若 KJ 也有强 relation-vector 结果，应改写为“关系学习通用机制”，再讨论 YY 的语义网络特异性。
+
+## 14. 给老师汇报的执行版摘要
+
+可以用下面这段作为汇报开头：
+
+> 当前 Step 5C 已经证明隐喻学习引发稳定表征重组，但如果目标是 PNAS，我们需要把“similarity 下降”升级为可解释的计算机制。下一步我建议新增 relation-vector geometry 分析：用 embedding 中的 target-cue 向量定义每个 pair 的关系方向，检验人脑学习后是否编码这种关系几何。执行上先做 A0/A1/A2 三个脚本，若 relation-vector Model-RSA 成立，再做行为预测和学习阶段轨迹。这样可以把论文从“隐喻学习改变表征相似性”推进到“创造性关系学习重塑语义记忆的神经几何”。

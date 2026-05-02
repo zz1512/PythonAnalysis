@@ -63,7 +63,17 @@ def main() -> None:
         "atlas_robustness": base / "paper_outputs" / "qc" / "rsa_results_optimized_atlas_robustness",
     }
 
-    frames = [_load_itemwise(path, roi_set) for roi_set, path in sources.items()]
+    available_sources = {
+        roi_set: path for roi_set, path in sources.items()
+        if (path / "rsa_itemwise_details.csv").exists()
+    }
+    missing_sources = sorted(set(sources) - set(available_sources))
+    if not available_sources:
+        raise FileNotFoundError("No rsa_itemwise_details.csv files were found for ROI-set robustness plotting.")
+    if missing_sources:
+        print(f"[roi-set-robustness-plot] skipping missing ROI sets: {', '.join(missing_sources)}")
+
+    frames = [_load_itemwise(path, roi_set) for roi_set, path in available_sources.items()]
     combined = pd.concat(frames, ignore_index=True)
     summary = _summarize(combined)
 
@@ -73,7 +83,10 @@ def main() -> None:
 
     sns.set_theme(style="whitegrid", context="paper")
     apply_publication_rcparams()
-    order = ["main_functional", "literature", "literature_spatial", "atlas_robustness"]
+    order = [
+        roi_set for roi_set in ["main_functional", "literature", "literature_spatial", "atlas_robustness"]
+        if roi_set in available_sources
+    ]
     label_map = {
         "main_functional": "Main",
         "literature": "Literature",

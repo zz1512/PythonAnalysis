@@ -23,6 +23,7 @@ rd_searchlight.py
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -56,8 +57,7 @@ from common.pattern_metrics import compute_searchlight_dimension_map, save_scala
 
 
 def _default_base_dir() -> Path:
-    from rsa_analysis.rsa_config import BASE_DIR  # noqa: E402
-    return Path(BASE_DIR)
+    return Path(os.environ.get("PYTHON_METAPHOR_ROOT", "E:/python_metaphor"))
 
 
 def _default_pattern_root() -> Path:
@@ -219,16 +219,46 @@ def _compute_group_stats(
     shape = first_img.shape
     a_stack = np.vstack([np.asarray(nib.load(str(path)).get_fdata()).reshape(-1) for path in map_a_paths])
     b_stack = np.vstack([np.asarray(nib.load(str(path)).get_fdata()).reshape(-1) for path in map_b_paths])
-    diff_stack = a_stack - b_stack
-    t_values, p_values, mean_diff = _paired_t_map(diff_stack)
+    # Subject-level searchlight maps are written as zeros outside the subject mask.
+    # Restrict group inference to voxels with at least one non-zero finite input
+    # across pre/post maps; otherwise outside-mask zeros and NaNs can dominate the
+    # max-T null distribution and make FWE maps/peaks meaningless.
+    analysis_mask = (
+        np.isfinite(a_stack).all(axis=0)
+        & np.isfinite(b_stack).all(axis=0)
+        & (np.any(np.abs(a_stack) > 0, axis=0) | np.any(np.abs(b_stack) > 0, axis=0))
+    )
+    if not np.any(analysis_mask):
+        raise ValueError(f"{prefix}: no valid searchlight voxels survived group masking")
+
+    diff_stack_valid = a_stack[:, analysis_mask] - b_stack[:, analysis_mask]
+    t_valid, p_valid, mean_diff_valid = _paired_t_map(diff_stack_valid)
+    finite_stat_mask = np.isfinite(t_valid)
+    if not np.any(finite_stat_mask):
+        raise ValueError(f"{prefix}: no finite group statistics were produced")
+
+    diff_for_permutation = diff_stack_valid[:, finite_stat_mask]
     max_t, resolved_backend = _sign_flip_permutation_max_t(
-        diff_stack,
+        diff_for_permutation,
         n_permutations=n_permutations,
         rng_seed=rng_seed,
         backend=permutation_backend,
         batch_size=permutation_batch_size,
     )
-    p_fwe = (np.sum(max_t[:, None] >= np.abs(t_values)[None, :], axis=0) + 1.0) / (len(max_t) + 1.0)
+    p_fwe_valid_finite = (
+        np.sum(max_t[:, None] >= np.abs(t_valid[finite_stat_mask])[None, :], axis=0) + 1.0
+    ) / (len(max_t) + 1.0)
+
+    t_values = np.full(a_stack.shape[1], np.nan, dtype=float)
+    p_values = np.full(a_stack.shape[1], np.nan, dtype=float)
+    mean_diff = np.full(a_stack.shape[1], np.nan, dtype=float)
+    p_fwe = np.full(a_stack.shape[1], np.nan, dtype=float)
+
+    valid_indices = np.flatnonzero(analysis_mask)
+    t_values[valid_indices] = t_valid
+    p_values[valid_indices] = p_valid
+    mean_diff[valid_indices] = mean_diff_valid
+    p_fwe[valid_indices[finite_stat_mask]] = p_fwe_valid_finite
     log_p_fwe = -np.log10(np.clip(p_fwe, 1e-12, 1.0))
 
     outputs = {
@@ -246,6 +276,7 @@ def _compute_group_stats(
 
     summary = {
         "n_subjects": int(len(map_a_paths)),
+        "n_voxels_tested": int(np.isfinite(p_fwe).sum()),
         "n_permutations": int(n_permutations),
         "permutation_backend": resolved_backend,
         "t_map": str(output_dir / f"{prefix}_t_map.nii.gz"),
@@ -424,6 +455,91 @@ def compute_cell_maps(
     return paths, qc_rows
 
 
+def _reuse_cell_maps_from_qc(qc_path: Path, conditions: list[str]) -> tuple[dict[tuple[str, str], list[Path]], pd.DataFrame]:
+    if not qc_path.exists():
+        raise FileNotFoundError(
+            f"Cannot reuse subject maps because QC table was not found: {qc_path}. "
+            "Run once without --reuse-subject-maps to generate subject-level maps."
+        )
+    map_qc = pd.read_csv(qc_path, sep="\t")
+    required_columns = {"time", "condition", "status", "output_path"}
+    missing = required_columns.difference(map_qc.columns)
+    if missing:
+        raise ValueError(f"QC table {qc_path} is missing required columns: {sorted(missing)}")
+
+    cell_paths: dict[tuple[str, str], list[Path]] = {}
+    for time in ["pre", "post"]:
+        for condition in conditions:
+            rows = map_qc[
+                (map_qc["time"] == time)
+                & (map_qc["condition"] == condition)
+                & (map_qc["status"] == "ok")
+            ]
+            paths = [Path(path) for path in rows["output_path"].dropna().astype(str) if Path(path).exists()]
+            missing_count = int(len(rows) - len(paths))
+            if missing_count:
+                print(
+                    f"[reuse-subject-maps] {time}/{condition}: {missing_count} QC-listed map(s) are missing on disk; "
+                    "they will be excluded."
+                )
+            cell_paths[(time, condition)] = paths
+    return cell_paths, map_qc
+
+
+def _subject_id_from_map_path(path: Path) -> str:
+    for part in reversed(path.parts):
+        if str(part).startswith("sub-"):
+            return str(part)
+    stem = path.name
+    for token in stem.replace("\\", "/").split("/"):
+        if token.startswith("sub-"):
+            return token
+    raise ValueError(f"Could not infer subject id from map path: {path}")
+
+
+def _align_pre_post_subject_maps(
+    pre_paths: list[Path],
+    post_paths: list[Path],
+    *,
+    condition: str,
+    analysis_name: str,
+) -> tuple[list[Path], list[Path], pd.DataFrame]:
+    pre_by_subject = {_subject_id_from_map_path(path): path for path in pre_paths}
+    post_by_subject = {_subject_id_from_map_path(path): path for path in post_paths}
+    if len(pre_by_subject) != len(pre_paths):
+        raise ValueError(f"{analysis_name}/{condition}: duplicate subject ids in pre maps.")
+    if len(post_by_subject) != len(post_paths):
+        raise ValueError(f"{analysis_name}/{condition}: duplicate subject ids in post maps.")
+    pre_subjects = set(pre_by_subject)
+    post_subjects = set(post_by_subject)
+    paired_subjects = sorted(pre_subjects & post_subjects)
+    missing_pre = sorted(post_subjects - pre_subjects)
+    missing_post = sorted(pre_subjects - post_subjects)
+    rows = []
+    for subject in sorted(pre_subjects | post_subjects):
+        rows.append(
+            {
+                "analysis": analysis_name,
+                "condition": condition,
+                "subject": subject,
+                "has_pre": bool(subject in pre_by_subject),
+                "has_post": bool(subject in post_by_subject),
+                "paired": bool(subject in paired_subjects),
+                "pre_path": str(pre_by_subject.get(subject, "")),
+                "post_path": str(post_by_subject.get(subject, "")),
+            }
+        )
+    manifest = pd.DataFrame(rows)
+    if missing_pre or missing_post:
+        raise ValueError(
+            f"{analysis_name}/{condition}: pre/post subject sets differ. "
+            f"missing_pre={missing_pre}; missing_post={missing_post}"
+        )
+    pre_aligned = [pre_by_subject[subject] for subject in paired_subjects]
+    post_aligned = [post_by_subject[subject] for subject in paired_subjects]
+    return pre_aligned, post_aligned, manifest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Whole-brain RD searchlight analysis.")
     parser.add_argument("pattern_root", type=Path, nargs="?", default=None)
@@ -442,6 +558,11 @@ def main() -> None:
         default="mask.nii",
         help="Mask filename under each subject folder (default: mask.nii; will also try .nii.gz).",
     )
+    parser.add_argument(
+        "--reuse-subject-maps",
+        action="store_true",
+        help="Reuse existing subject-level RD maps from qc/rd_searchlight/rd_searchlight_map_qc.tsv and rerun only group-level statistics.",
+    )
     args = parser.parse_args()
 
     pattern_root = args.pattern_root or _default_pattern_root()
@@ -451,37 +572,50 @@ def main() -> None:
     tables_main = ensure_dir(paper_output_root / "tables_main")
     figures_main = ensure_dir(paper_output_root / "figures_main")
 
-    subject_dirs = sorted([path for path in pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
-
-    cell_paths = {}
-    map_qc_rows = []
-    for time in ["pre", "post"]:
-        for condition in args.conditions:
-            paths, qc_rows = compute_cell_maps(
-                subject_dirs,
-                subject_mask_root,
-                qc_root,
-                time,
-                condition,
-                args.filename_template,
-                args.threshold,
-                args.voxel_count,
-                mask_filename=args.mask_filename,
-            )
-            cell_paths[(time, condition)] = paths
-            map_qc_rows.extend(qc_rows)
-    map_qc = pd.DataFrame(map_qc_rows)
-    if not map_qc.empty:
-        write_table(map_qc, qc_root / "rd_searchlight_map_qc.tsv")
+    if args.reuse_subject_maps:
+        cell_paths, map_qc = _reuse_cell_maps_from_qc(
+            qc_root / "rd_searchlight_map_qc.tsv",
+            list(args.conditions),
+        )
+    else:
+        subject_dirs = sorted([path for path in pattern_root.iterdir() if path.is_dir() and path.name.startswith("sub-")])
+        cell_paths = {}
+        map_qc_rows = []
+        for time in ["pre", "post"]:
+            for condition in args.conditions:
+                paths, qc_rows = compute_cell_maps(
+                    subject_dirs,
+                    subject_mask_root,
+                    qc_root,
+                    time,
+                    condition,
+                    args.filename_template,
+                    args.threshold,
+                    args.voxel_count,
+                    mask_filename=args.mask_filename,
+                )
+                cell_paths[(time, condition)] = paths
+                map_qc_rows.extend(qc_rows)
+        map_qc = pd.DataFrame(map_qc_rows)
+        if not map_qc.empty:
+            write_table(map_qc, qc_root / "rd_searchlight_map_qc.tsv")
 
     summaries: dict[str, dict[str, object]] = {}
     peak_frames: list[pd.DataFrame] = []
     plot_payload: list[dict[str, object]] = []
+    pairing_manifests: list[pd.DataFrame] = []
     for idx, condition in enumerate(args.conditions):
         pre_paths = cell_paths.get(("pre", condition), [])
         post_paths = cell_paths.get(("post", condition), [])
         if not pre_paths or not post_paths:
             continue
+        pre_paths, post_paths, pairing_manifest = _align_pre_post_subject_maps(
+            pre_paths,
+            post_paths,
+            condition=condition,
+            analysis_name="rd_searchlight",
+        )
+        pairing_manifests.append(pairing_manifest)
         label = f"{condition}_post_vs_pre"
         group_dir = ensure_dir(qc_root / f"group_{label}")
         summary, maps = _compute_group_stats(
@@ -511,6 +645,8 @@ def main() -> None:
             for key, value in summaries.items()
         ]
     )
+    if pairing_manifests:
+        write_table(pd.concat(pairing_manifests, ignore_index=True), qc_root / "searchlight_subject_pairing_manifest.tsv")
     if plot_payload:
         _plot_group_deltas(plot_payload, figures_main / "fig_searchlight_delta.png")
     peaks_df = pd.concat(peak_frames, ignore_index=True) if peak_frames else pd.DataFrame(
@@ -524,6 +660,7 @@ def main() -> None:
             "subject_mask_root": str(subject_mask_root),
             "conditions": list(args.conditions),
             "n_permutations": int(args.n_permutations),
+            "reuse_subject_maps": bool(args.reuse_subject_maps),
             "cell_counts": {f"{time}_{condition}": len(paths) for (time, condition), paths in cell_paths.items()},
             "n_skipped_cells": int((map_qc["status"] == "skipped").sum()) if not map_qc.empty else 0,
             "map_qc": str(qc_root / "rd_searchlight_map_qc.tsv"),

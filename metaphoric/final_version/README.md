@@ -21,6 +21,7 @@
 可选环境变量：
 - `METAPHOR_DATA_EVENTS`：行为/事件文件根目录（默认 `${PYTHON_METAPHOR_ROOT}/data_events`）
 - `METAPHOR_BEHAVIOR_RESULTS`：行为输出目录（默认 `${PYTHON_METAPHOR_ROOT}/behavior_results`）
+- `METAPHOR_ROI_SET`：ROI 层级选择。现在依赖 `rsa_config.py` 的 RSA/ROI-level 脚本必须显式设置该变量，否则会直接报错，避免误用默认 ROI set。主分析通常依次跑 `main_functional`、`literature`、`literature_spatial`；`atlas_robustness` 只作为稳健性层。
 
 ## 输入与输出（相对于 `${PYTHON_METAPHOR_ROOT}`）
 
@@ -283,6 +284,7 @@ python stack_patterns.py ${PYTHON_METAPHOR_ROOT}/lss_betas_final/lss_metadata_in
 ```bash
 cd ../rsa_analysis
 python check_data_integrity.py
+$env:METAPHOR_ROI_SET = "main_functional"
 python run_rsa_optimized.py
 python rsa_lmm.py
 
@@ -295,11 +297,13 @@ python delta_rho_lmm.py --metrics-file OUT_DIR/model_rdm_subject_metrics.tsv --o
 
 可选：切换不同 ROI 层级
 ```bash
-set METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python run_rsa_optimized.py
-set METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python run_rsa_optimized.py
-set METAPHOR_ROI_SET=atlas_robustness
+$env:METAPHOR_ROI_SET = "literature_spatial"
+python run_rsa_optimized.py
+$env:METAPHOR_ROI_SET = "atlas_robustness"
 python run_rsa_optimized.py
 ```
 

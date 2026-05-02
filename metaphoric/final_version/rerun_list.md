@@ -1,4 +1,4 @@
-# 最短重跑顺序（rerun_list）
+﻿# 最短重跑顺序（rerun_list）
 
 最后更新：2026-04-28
 
@@ -6,6 +6,7 @@
 
 约定：
 - `BASE_DIR` = `rsa_config.BASE_DIR` = `${PYTHON_METAPHOR_ROOT}`
+- 现在所有依赖 `rsa_config.py` 的 RSA/ROI-level 脚本都必须显式设置 `METAPHOR_ROI_SET`；若未设置会直接报错，避免误用默认 ROI set。下面命令按 PowerShell 写法记录。
 - 默认目标：所有产物都落到 `paper_outputs/`
 - 若旧目录仍有历史结果，不建议混用；优先重跑到新默认路径
 
@@ -75,17 +76,17 @@ python metaphoric/final_version/figures/plot_behavior_results.py
 运行：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/rsa_analysis/run_rsa_optimized.py
 ```
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/rsa_analysis/run_rsa_optimized.py
 ```
 
 ```bash
-export METAPHOR_ROI_SET=literature_spatial
+$env:METAPHOR_ROI_SET = "literature_spatial"
 python metaphoric/final_version/rsa_analysis/run_rsa_optimized.py
 ```
 
@@ -97,7 +98,7 @@ python metaphoric/final_version/rsa_analysis/run_rsa_optimized.py
 Step 5C 主图：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/figures/plot_step5c_rsa_main.py
 ```
 
@@ -111,14 +112,14 @@ python metaphoric/final_version/figures/plot_roi_set_robustness.py
 - 如果你要同步主文里的 RSA LMM 参数表，再跑：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/rsa_analysis/rsa_lmm.py
 ```
 
 - 如果你要同步 trial/voxel 平衡性与漂移 QC，再跑：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/rsa_analysis/trial_voxel_robustness.py
 ```
 
@@ -150,12 +151,12 @@ python metaphoric/final_version/rsa_analysis/build_memory_strength_table.py --sc
 运行：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/rsa_analysis/model_rdm_comparison.py --embedding-file <你的stimulus_embeddings_bert.tsv路径> --memory-strength-dir ${BASE_DIR}/paper_outputs/qc/memory_strength
 ```
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/rsa_analysis/model_rdm_comparison.py --embedding-file <你的stimulus_embeddings_bert.tsv路径> --memory-strength-dir ${BASE_DIR}/paper_outputs/qc/memory_strength
 ```
 
@@ -182,21 +183,21 @@ python metaphoric/final_version/figures/plot_model_rsa_mechanism.py \
 运行：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/rsa_analysis/delta_rho_lmm.py --family-split
 ```
 
 如果你也报告 `literature`：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/rsa_analysis/delta_rho_lmm.py --family-split
 ```
 
 可选稳健性版：
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/rsa_analysis/delta_rho_lmm.py --family-split --condition-col condition_group
 ```
 
@@ -232,6 +233,11 @@ python metaphoric/final_version/brain_behavior/itemlevel_brain_behavior.py
 原因：
 - S1 主分析现已固定为**被试级机制分数预测 run-7 最终学习收益**
 - 默认主模型只保留：`M3_embedding + M8_reverse_pair`
+- 默认 ROI 层级不再把所有 ROI 放进一个解释池：
+  - `literature`：隐喻 / 语义文献 ROI 层
+  - `literature_spatial`：空间文献 ROI 对照层
+  - `main_functional_metaphor_gt_spatial`：功能定位中 `Metaphor > Spatial` ROI family
+  - `main_functional_spatial_gt_metaphor`：功能定位中 `Spatial > Metaphor` ROI family
 - `M7_continuous_confidence` 仅在你需要补充局部记忆强度结果时，才通过 `--include-m7` 加入
 - 已明确移除：
   - `M2_pair`（避免与 `M8_reverse_pair` 的镜像编码重复记账）
@@ -241,6 +247,20 @@ python metaphoric/final_version/brain_behavior/itemlevel_brain_behavior.py
 
 ```bash
 python metaphoric/final_version/brain_behavior/mechanism_behavior_prediction.py
+```
+
+如果只想跑某一层或某两层，可用：
+
+```bash
+python metaphoric/final_version/brain_behavior/mechanism_behavior_prediction.py \
+  --roi-sets literature main_functional
+```
+
+如果需要复现旧版 pooled `main_functional` 口径，可用：
+
+```bash
+python metaphoric/final_version/brain_behavior/mechanism_behavior_prediction.py \
+  --no-split-main-functional-family
 ```
 
 如需把 `M7_continuous_confidence` 作为补充项一起跑：
@@ -253,6 +273,7 @@ python metaphoric/final_version/brain_behavior/mechanism_behavior_prediction.py 
 默认关键产物：
 - `${BASE_DIR}/paper_outputs/tables_main/table_mechanism_behavior_prediction.tsv`
 - `${BASE_DIR}/paper_outputs/tables_si/table_mechanism_behavior_prediction_perm.tsv`
+- `${BASE_DIR}/paper_outputs/tables_si/table_mechanism_behavior_prediction_<inference_family>.tsv`
 - `${BASE_DIR}/paper_outputs/figures_main/fig_mechanism_behavior_prediction.png`
 - `${BASE_DIR}/paper_outputs/qc/mechanism_behavior_prediction_long.tsv`
 
@@ -315,12 +336,12 @@ python metaphoric/final_version/temporal_dynamics/learning_dynamics.py \
 统一重画主图：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/figures/plot_learning_dynamics_final.py
 ```
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/figures/plot_learning_dynamics_final.py
 ```
 
@@ -365,6 +386,9 @@ python metaphoric/final_version/figures/plot_repr_connectivity_final.py
 原因：
 - `gPPI_analysis.py` 已负责重计算与 seed 级 SI 表输出
 - 这个脚本只做**不影响现有运行**的轻量收口，把现有 seed 级表整合成论文正式总表
+- 为避免 scope mean 把局部 target 效应平均稀释，导出层同时会从 `gppi_subject_metrics_all_seeds.tsv` 重建 per-target post-pre 检验，并输出：
+  - `p_permutation`：每条 target 边的被试内 sign-flip permutation p
+  - `q_within_seed_scope_condition`：同一 seed × target_scope × condition 内基于 permutation p 的 BH-FDR，作为 ROI/target 层正式校正口径
 
 运行：
 
@@ -374,7 +398,11 @@ python metaphoric/final_version/connectivity_analysis/export_gppi_summary.py
 
 默认产物：
 - `${BASE_DIR}/paper_outputs/tables_main/table_gppi_summary_main.tsv`
+- `${BASE_DIR}/paper_outputs/tables_main/table_gppi_target_peaks.tsv`
 - `${BASE_DIR}/paper_outputs/tables_si/table_gppi_summary_full.tsv`
+- `${BASE_DIR}/paper_outputs/tables_si/table_gppi_target_level.tsv`
+- `${BASE_DIR}/paper_outputs/tables_si/table_gppi_target_peaks_full.tsv`
+- `${BASE_DIR}/paper_outputs/tables_si/table_gppi_scope_permutation.tsv`
 - `${BASE_DIR}/paper_outputs/qc/gppi_summary_export_manifest.json`
 
 ---
@@ -521,13 +549,13 @@ RD（每个 ROI、每个 subject 的表征维度）：
 - `covariance` 与旧 `rdm` 仅建议作为敏感性分析，不再作为主口径
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/representation_analysis/rd_analysis.py \
   --rd-mode participation_ratio
 ```
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/representation_analysis/rd_analysis.py \
   --rd-mode participation_ratio
 ```
@@ -535,7 +563,7 @@ python metaphoric/final_version/representation_analysis/rd_analysis.py \
 敏感性分析示例：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/representation_analysis/rd_analysis.py \
   --rd-mode covariance
 ```
@@ -548,12 +576,12 @@ python metaphoric/final_version/representation_analysis/rd_analysis.py \
 GPS（同条件 trials 的全局紧凑度）：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/representation_analysis/gps_analysis.py
 ```
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/representation_analysis/gps_analysis.py
 ```
 
@@ -565,12 +593,12 @@ python metaphoric/final_version/representation_analysis/gps_analysis.py
 统一重画 RD / GPS 图（建议在同一 `roi_set` 的 RD 与 GPS 都跑完后执行）：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/figures/plot_rd_gps_summary.py
 ```
 
 ```bash
-export METAPHOR_ROI_SET=main_functional
+$env:METAPHOR_ROI_SET = "main_functional"
 python metaphoric/final_version/figures/plot_rd_gps_summary.py
 ```
 
@@ -585,7 +613,7 @@ python metaphoric/final_version/figures/plot_rd_gps_summary.py
 运行示例（推荐：自动从 `roi_library/manifest.tsv` 取 mask；脚本默认 `--stage prepost`，自动用 runs 1/2/5/6）：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/connectivity_analysis/gPPI_analysis.py \
   --seed-roi-names \
     func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort \
@@ -614,7 +642,7 @@ python metaphoric/final_version/connectivity_analysis/gPPI_analysis.py \
 推荐写法（更接近标准 gPPI / SPM 路线）：
 
 ```bash
-export METAPHOR_ROI_SET=literature
+$env:METAPHOR_ROI_SET = "literature"
 python metaphoric/final_version/connectivity_analysis/gPPI_analysis.py \
   <seed_mask.nii.gz> \
   <target_roi_dir> \
@@ -622,3 +650,4 @@ python metaphoric/final_version/connectivity_analysis/gPPI_analysis.py \
   --stage prepost \
   --deconvolution ridge
 ```
+

@@ -222,9 +222,12 @@ def _loso_table(interaction_frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for (roi_scope, contrast), frame in interaction_frame.groupby(["roi_scope", "contrast"]):
         subjects = sorted(frame["subject"].astype(str).unique().tolist())
+        full_summary = one_sample_t_summary(frame["interaction_delta"].to_numpy(dtype=float), popmean=0.0)
+        full_sign = np.sign(full_summary["mean"]) if np.isfinite(full_summary["mean"]) else np.nan
         for held_out in subjects:
             subset = frame[frame["subject"] != held_out]
             summary = one_sample_t_summary(subset["interaction_delta"].to_numpy(dtype=float), popmean=0.0)
+            subset_sign = np.sign(summary["mean"]) if np.isfinite(summary["mean"]) else np.nan
             rows.append(
                 {
                     "roi_scope": roi_scope,
@@ -235,7 +238,8 @@ def _loso_table(interaction_frame: pd.DataFrame) -> pd.DataFrame:
                     "mean_interaction_delta": summary["mean"],
                     "t": summary["t"],
                     "p": summary["p"],
-                    "same_direction_as_full": bool(np.isfinite(summary["mean"]) and summary["mean"] > 0),
+                    "full_sample_mean": full_summary["mean"],
+                    "same_direction_as_full": bool(np.isfinite(full_sign) and np.isfinite(subset_sign) and subset_sign == full_sign),
                 }
             )
     return pd.DataFrame(rows)
@@ -288,7 +292,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Robustness suite for Step 5C primary endpoint (BF, bootstrap, LOSO, split-half).")
     parser.add_argument("--rsa-details", nargs="*", type=Path, default=None)
     parser.add_argument("--paper-output-root", type=Path, default=None)
-    parser.add_argument("--alternative", choices=["two-sided", "greater", "less"], default="greater")
+    parser.add_argument("--alternative", choices=["two-sided", "greater", "less"], default="two-sided")
     parser.add_argument("--r-scale", type=float, default=0.707)
     parser.add_argument("--confidence", type=float, default=0.95)
     parser.add_argument("--n-boot", type=int, default=5000)

@@ -33,6 +33,8 @@ from joblib import Parallel, delayed
 import rsa_config as cfg
 import logging
 import time
+import argparse
+import traceback
 
 # 配置日志
 cfg.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -201,7 +203,7 @@ def extract_itemwise_data(sim_mat, template_df, condition_name):
     return item_data
 
 
-def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
+def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df, *, allow_partial=False):
     """
     处理单个被试、单个 ROI (集成 Top-K 逻辑)
     """
@@ -332,14 +334,83 @@ def process_subject_roi(sub, roi_name, roi_mask_path, lss_df, template_df):
 
     except Exception as e:
         logger.error(f"Error processing {sub} {roi_name}: {e}")
-        import traceback
-        traceback.print_exc()
-        return [], [], [], []
+        failure = {
+            "roi_set": cfg.ROI_SET,
+            "subject": sub,
+            "roi": roi_name,
+            "roi_mask_path": str(roi_mask_path),
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+            "traceback": traceback.format_exc(),
+        }
+        return [], [], [], [], failure
 
-    return results_summary, results_itemwise, baseline_summary, baseline_itemwise
+    return results_summary, results_itemwise, baseline_summary, baseline_itemwise, None
+
+
+def _expected_pair_counts(template_df):
+    counts = {}
+    for condition in get_available_conditions(template_df):
+        if condition == BASELINE_CONDITION:
+            counts[condition] = len(build_condition_pairs(template_df, BASELINE_CONDITION))
+        else:
+            counts[condition] = len(build_condition_pairs(template_df, condition))
+    return counts
+
+
+def _build_completeness_manifest(itemwise_rows, subjects, roi_names, template_df):
+    expected_counts = _expected_pair_counts(template_df)
+    observed = pd.DataFrame(itemwise_rows)
+    rows = []
+    for sub in subjects:
+        for roi in roi_names:
+            for stage in ["Pre", "Post"]:
+                for condition, expected_pairs in expected_counts.items():
+                    if observed.empty:
+                        subset = observed
+                    else:
+                        subset = observed[
+                            observed["subject"].astype(str).eq(str(sub))
+                            & observed["roi"].astype(str).eq(str(roi))
+                            & observed["stage"].astype(str).eq(stage)
+                            & observed["condition"].astype(str).eq(condition)
+                        ]
+                    observed_pairs = int(subset["pair_id"].nunique()) if not subset.empty and "pair_id" in subset.columns else 0
+                    rows.append(
+                        {
+                            "roi_set": cfg.ROI_SET,
+                            "subject": sub,
+                            "roi": roi,
+                            "stage": stage,
+                            "condition": condition,
+                            "expected_pairs": int(expected_pairs),
+                            "observed_pairs": observed_pairs,
+                            "complete": bool(observed_pairs == int(expected_pairs)),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def _write_qc_table(frame, filename):
+    out_local = cfg.OUTPUT_DIR / filename
+    frame.to_csv(out_local, sep="\t", index=False)
+    root_qc = cfg.OUTPUT_DIR.parent
+    out_root = root_qc / filename
+    frame.to_csv(out_root, sep="\t", index=False)
+    tagged = root_qc / f"{Path(filename).stem}_{cfg.ROI_SET}{Path(filename).suffix}"
+    frame.to_csv(tagged, sep="\t", index=False)
+    logger.info(f"QC saved: {out_local}")
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Run ROI-level RSA with explicit completeness QC.")
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Continue when a subject x ROI cell fails; failed cells are written to rsa_failed_cells.tsv. Default is fail-fast.",
+    )
+    args = parser.parse_args()
+
     logger.info(">>> 开始 RSA 优化版分析 (Top-K & Item-wise) <<<")
     t0 = time.time()
 
@@ -355,7 +426,7 @@ def main():
 
     # 并行执行
     results = Parallel(n_jobs=cfg.N_JOBS)(
-        delayed(process_subject_roi)(sub, name, path, lss_df, template_df)
+        delayed(process_subject_roi)(sub, name, path, lss_df, template_df, allow_partial=args.allow_partial)
         for sub, name, path in tasks
     )
 
@@ -364,12 +435,35 @@ def main():
     final_itemwise = []
     final_baseline_summary = []
     final_baseline_itemwise = []
+    failed_cells = []
 
-    for res_sum, res_item, res_base_sum, res_base_item in results:
+    for res_sum, res_item, res_base_sum, res_base_item, failure in results:
         final_summary.extend(res_sum)
         final_itemwise.extend(res_item)
         final_baseline_summary.extend(res_base_sum)
         final_baseline_itemwise.extend(res_base_item)
+        if failure:
+            failed_cells.append(failure)
+
+    failed_df = pd.DataFrame(
+        failed_cells,
+        columns=["roi_set", "subject", "roi", "roi_mask_path", "error_type", "error_message", "traceback"],
+    )
+    _write_qc_table(failed_df, "rsa_failed_cells.tsv")
+    completeness_df = _build_completeness_manifest(
+        final_itemwise,
+        cfg.SUBJECTS,
+        list(cfg.ROI_MASKS.keys()),
+        template_df,
+    )
+    _write_qc_table(completeness_df, "rsa_completeness_manifest.tsv")
+    incomplete = completeness_df[~completeness_df["complete"]]
+    if not incomplete.empty:
+        logger.warning(f"RSA completeness has {len(incomplete)} incomplete subject x ROI x stage x condition cells.")
+        if not args.allow_partial:
+            raise RuntimeError(
+                "RSA completeness check failed. Re-run with --allow-partial only if you intend to keep partial outputs."
+            )
 
     # 保存 Summary (用于 ANOVA/t-test)
     if final_summary:

@@ -53,6 +53,92 @@ M7_MODEL_FILE_VARIANTS: dict[str, str] = {
     "M7_irt": "irt",
 }
 
+PRIMARY_MODELS_DEFAULT = ("M3_embedding", "M8_reverse_pair")
+CONTROL_MODELS_DEFAULT = ("M1_condition", "M2_pair")
+
+
+def _bh_fdr(pvalues: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(pvalues, errors="coerce")
+    result = pd.Series(float("nan"), index=pvalues.index, dtype=float)
+    valid = numeric.notna() & np.isfinite(numeric.astype(float))
+    if not valid.any():
+        return result
+    values = numeric.loc[valid].astype(float)
+    order = values.sort_values().index
+    sorted_values = values.loc[order].to_numpy(dtype=float)
+    n = len(sorted_values)
+    adjusted = sorted_values * n / np.arange(1, n + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    adjusted = np.clip(adjusted, 0.0, 1.0)
+    result.loc[order] = adjusted
+    return result
+
+
+def _model_role(model: object, primary_models: set[str]) -> str:
+    text = str(model)
+    if text in primary_models:
+        return "primary"
+    if text in CONTROL_MODELS_DEFAULT:
+        return "control"
+    if text.startswith("M7"):
+        return "secondary"
+    return "exploratory"
+
+
+def _current_roi_set() -> str:
+    try:
+        from rsa_analysis.rsa_config import ROI_SET  # type: ignore
+    except Exception:
+        return ""
+    return str(ROI_SET)
+
+
+def add_model_rdm_fdr(summary: pd.DataFrame, *, primary_models: set[str], roi_set: str) -> pd.DataFrame:
+    if summary.empty:
+        return summary
+    out = summary.copy()
+    out.insert(0, "roi_set", roi_set)
+    out["model_role"] = out["model"].map(lambda value: _model_role(value, primary_models))
+    out["is_primary_model"] = out["model_role"].eq("primary")
+    out["q_bh_model_family"] = float("nan")
+    out["q_bh_primary_family"] = float("nan")
+    out["q_bh_model_role_family"] = float("nan")
+
+    family_cols = ["condition_group"] if "condition_group" in out.columns else []
+    family_iter = out.groupby(family_cols, dropna=False).groups.items() if family_cols else [(None, out.index)]
+    for _, idx in family_iter:
+        idx = list(idx)
+        out.loc[idx, "q_bh_model_family"] = _bh_fdr(out.loc[idx, "p"])
+        primary_idx = out.index[out.index.isin(idx) & out["is_primary_model"]]
+        if len(primary_idx):
+            out.loc[primary_idx, "q_bh_primary_family"] = _bh_fdr(out.loc[primary_idx, "p"])
+
+    role_group_cols = [*family_cols, "model_role"]
+    for _, idx in out.groupby(role_group_cols, dropna=False).groups.items():
+        idx = list(idx)
+        out.loc[idx, "q_bh_model_role_family"] = _bh_fdr(out.loc[idx, "p"])
+    return out
+
+
+def write_global_model_rdm_fdr(frame: pd.DataFrame, *, roi_set: str) -> None:
+    if frame.empty:
+        return
+    try:
+        from rsa_analysis.rsa_config import BASE_DIR  # type: ignore
+    except Exception:
+        return
+    target = Path(BASE_DIR) / "paper_outputs" / "tables_si" / "table_model_rsa_fdr.tsv"
+    ensure_dir(target.parent)
+    if target.exists():
+        existing = read_table(target)
+        if "roi_set" in existing.columns:
+            existing = existing[existing["roi_set"].astype(str) != str(roi_set)]
+        combined = pd.concat([existing, frame], ignore_index=True)
+    else:
+        combined = frame.copy()
+    sort_cols = [col for col in ["roi_set", "condition_group", "model_role", "roi", "model"] if col in combined.columns]
+    write_table(combined.sort_values(sort_cols), target)
+
 
 def _final_root() -> Path:
     current = Path(__file__).resolve()
@@ -526,6 +612,13 @@ def main() -> None:
     # Alias: some docs may refer to `--models`
     parser.add_argument("--models", dest="enabled_models", nargs="*",
                         help="Alias of --enabled-models.")
+    parser.add_argument(
+        "--primary-models",
+        nargs="*",
+        default=list(PRIMARY_MODELS_DEFAULT),
+        help="Models treated as the formal primary Model-RSA family for FDR reporting. "
+             "Default: M3_embedding M8_reverse_pair.",
+    )
     parser.add_argument("--partial-correlation", action="store_true",
                         help="Compute partial Spearman correlations between each model and neural RDM.")
     parser.add_argument("--collinearity-threshold", type=float, default=0.7)
@@ -539,6 +632,7 @@ def main() -> None:
                         help="Optional directory for model-RDM audit exports. Default: <output_dir>/model_rdm_audit")
     args = parser.parse_args()
     args.enabled_models = _normalize_enabled_models(args.enabled_models)
+    primary_models = set(_normalize_enabled_models(args.primary_models))
 
     args.pattern_root = args.pattern_root or _default_pattern_root()
     output_dir = ensure_dir(
@@ -831,13 +925,23 @@ def main() -> None:
         save_json(summary, output_dir / summary_name)
 
     if summaries:
-        write_table(pd.DataFrame(summaries), output_dir / "model_rdm_group_summary.tsv")
+        summary_frame = pd.DataFrame(summaries)
+        write_table(summary_frame, output_dir / "model_rdm_group_summary.tsv")
+        fdr_summary = add_model_rdm_fdr(
+            summary_frame,
+            primary_models=primary_models,
+            roi_set=_current_roi_set(),
+        )
+        write_table(fdr_summary, output_dir / "model_rdm_group_summary_fdr.tsv")
+        write_global_model_rdm_fdr(fdr_summary, roi_set=_current_roi_set())
 
     if audit_root is not None:
         save_json(
             {
                 "audit_root": str(audit_root),
                 "note": "Each subject/roi/time/condition cell stores trial-order metadata and compressed RDM vectors.",
+                "primary_models": sorted(primary_models),
+                "fdr_summary": str(output_dir / "model_rdm_group_summary_fdr.tsv"),
             },
             output_dir / "model_rdm_audit_manifest.json",
         )

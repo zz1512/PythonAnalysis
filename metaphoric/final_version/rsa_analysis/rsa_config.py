@@ -53,8 +53,15 @@ LSS_META_FILE = BASE_DIR / "lss_betas_final/lss_metadata_index_final.csv"
 STIMULI_TEMPLATE = BASE_DIR / "stimuli_template.csv"
 ROI_LIBRARY_DIR = BASE_DIR / "roi_library"
 ROI_MANIFEST = ROI_LIBRARY_DIR / "manifest.tsv"
-# ROI_SET可以手动指定：main_functional（主结果）、literature（隐喻文献）、literature_spatial（空间文献）、atlas_robustness（稳健补充）
-ROI_SET = os.environ.get("METAPHOR_ROI_SET", "literature")
+# ROI_SET 必须显式指定，避免误用默认 ROI set 重跑主分析。
+# 可选值：main_functional（主结果）、literature（隐喻文献）、
+# literature_spatial（空间文献）、atlas_robustness（稳健补充）。
+ROI_SET = os.environ.get("METAPHOR_ROI_SET", "").strip()
+if not ROI_SET:
+    raise RuntimeError(
+        "METAPHOR_ROI_SET must be explicitly set before importing rsa_config "
+        "(e.g., main_functional, literature, literature_spatial, atlas_robustness)."
+    )
 
 if ROI_MANIFEST.exists():
     ROI_MASKS = select_roi_masks(ROI_MANIFEST, roi_set=ROI_SET, include_flag="include_in_rsa")
