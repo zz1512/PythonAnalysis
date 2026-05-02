@@ -123,15 +123,22 @@ def _safe_spearman(a: np.ndarray, b: np.ndarray) -> tuple[float, float, int]:
     )
 
 
-def _load_masked_samples(image_path: Path, mask_path: Path) -> tuple[np.ndarray, int]:
+def _load_image_data(image_path: Path) -> np.ndarray:
     img = nib.load(str(image_path))
     data = np.asarray(img.get_fdata(), dtype=float)
     if data.ndim == 3:
         data = data[..., np.newaxis]
     if data.ndim != 4:
         raise ValueError(f"Expected 4D image: {image_path}")
+    return data
+
+
+def _load_mask(mask_path: Path) -> np.ndarray:
     mask_img = nib.load(str(mask_path))
-    mask = np.asarray(mask_img.get_fdata()) > 0
+    return np.asarray(mask_img.get_fdata()) > 0
+
+
+def _masked_samples_from_data(data: np.ndarray, mask: np.ndarray, *, image_path: Path, mask_path: Path) -> tuple[np.ndarray, int]:
     if data.shape[:3] != mask.shape:
         raise ValueError(f"Image/mask shape mismatch: {image_path} vs {mask_path}")
     samples = data[mask, :].T.astype(np.float64, copy=False)
@@ -298,6 +305,7 @@ def _write_global_table(frame: pd.DataFrame, target: Path, *, roi_set: str) -> N
 
 def run_analysis(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     roi_masks = _resolve_roi_masks(args.roi_manifest, args.roi_set)
+    mask_cache = {roi_name: _load_mask(roi_path) for roi_name, roi_path in roi_masks.items()}
     relation_pairs = read_table(args.relation_pair_manifest)
     relation_pairs["condition"] = relation_pairs["condition"].astype(str).str.strip().str.lower()
     relation_npz = np.load(args.relation_rdm_npz)
@@ -311,34 +319,73 @@ def run_analysis(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame, 
 
     for subject_dir in _subject_dirs(args.pattern_root):
         subject = subject_dir.name
-        for roi_name, roi_path in roi_masks.items():
-            for condition in args.conditions:
-                condition = str(condition).strip().lower()
-                condition_pairs = relation_pairs[relation_pairs["condition"].eq(condition)].copy()
-                if condition_pairs.empty:
+        for condition in args.conditions:
+            condition = str(condition).strip().lower()
+            condition_pairs = relation_pairs[relation_pairs["condition"].eq(condition)].copy()
+            if condition_pairs.empty:
+                continue
+            for time in ["pre", "post"]:
+                image_path = subject_dir / args.filename_template.format(time=time, condition=condition)
+                metadata_path = subject_dir / args.metadata_template.format(time=time, condition=condition)
+                shared_base = {
+                    "roi_set": args.roi_set,
+                    "subject": subject,
+                    "condition": condition,
+                    "time": time,
+                    "image_path": str(image_path),
+                    "metadata_path": str(metadata_path),
+                }
+                try:
+                    if not image_path.exists():
+                        raise FileNotFoundError(f"Missing pattern: {image_path}")
+                    if not metadata_path.exists():
+                        raise FileNotFoundError(f"Missing metadata: {metadata_path}")
+                    data = _load_image_data(image_path)
+                    metadata = _normalize_metadata(_read_any_table(metadata_path))
+                    if len(metadata) != data.shape[3]:
+                        raise ValueError(f"metadata rows={len(metadata)} but samples={data.shape[3]}")
+                except Exception as exc:
+                    for roi_name, roi_path in roi_masks.items():
+                        cell_base = {
+                            **shared_base,
+                            "roi": roi_name,
+                            "roi_mask_path": str(roi_path),
+                        }
+                        cell_qc_rows.append(
+                            {
+                                **cell_base,
+                                "status": "failed",
+                                "skip_reason": repr(exc),
+                                "n_voxels": 0,
+                                "n_trials": 0,
+                                "n_pairs": 0,
+                            }
+                        )
+                        failure_rows.append(
+                            {
+                                **cell_base,
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                                "traceback": traceback.format_exc(),
+                            }
+                        )
+                    if not args.allow_partial:
+                        raise
                     continue
-                for time in ["pre", "post"]:
-                    image_path = subject_dir / args.filename_template.format(time=time, condition=condition)
-                    metadata_path = subject_dir / args.metadata_template.format(time=time, condition=condition)
+
+                for roi_name, roi_path in roi_masks.items():
                     cell_base = {
-                        "roi_set": args.roi_set,
-                        "subject": subject,
+                        **shared_base,
                         "roi": roi_name,
-                        "condition": condition,
-                        "time": time,
-                        "image_path": str(image_path),
-                        "metadata_path": str(metadata_path),
                         "roi_mask_path": str(roi_path),
                     }
                     try:
-                        if not image_path.exists():
-                            raise FileNotFoundError(f"Missing pattern: {image_path}")
-                        if not metadata_path.exists():
-                            raise FileNotFoundError(f"Missing metadata: {metadata_path}")
-                        samples, n_voxels = _load_masked_samples(image_path, roi_path)
-                        metadata = _normalize_metadata(_read_any_table(metadata_path))
-                        if len(metadata) != samples.shape[0]:
-                            raise ValueError(f"metadata rows={len(metadata)} but samples={samples.shape[0]}")
+                        samples, n_voxels = _masked_samples_from_data(
+                            data,
+                            mask_cache[roi_name],
+                            image_path=image_path,
+                            mask_path=roi_path,
+                        )
                         pair_data, pair_qc = _pair_samples(samples, metadata, condition_pairs)
                         for row in pair_qc:
                             pair_qc_rows.append({**cell_base, **row})

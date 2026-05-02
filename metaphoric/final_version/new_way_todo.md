@@ -818,3 +818,52 @@ PNAS 冲刺主张：
 可以用下面这段作为汇报开头：
 
 > 当前 Step 5C 已经证明隐喻学习引发稳定表征重组，但如果目标是 PNAS，我们需要把“similarity 下降”升级为可解释的计算机制。下一步我建议新增 relation-vector geometry 分析：用 embedding 中的 target-cue 向量定义每个 pair 的关系方向，检验人脑学习后是否编码这种关系几何。执行上先做 A0/A1/A2 三个脚本，若 relation-vector Model-RSA 成立，再做行为预测和学习阶段轨迹。这样可以把论文从“隐喻学习改变表征相似性”推进到“创造性关系学习重塑语义记忆的神经几何”。
+
+## 15. 2026-05-02 执行记录：A/B 阶段
+
+### 15.1 已新增或修订脚本
+
+- `rsa_analysis/build_relation_vectors.py`：已完成 A0，生成 condition-specific relation-vector model RDM。
+- `rsa_analysis/relation_vector_rsa.py`：已完成 A1，并做性能修补；现在每个 subject/condition/time 的 4D pattern 只读取一次，再套不同 ROI mask。
+- `figures/plot_relation_vector_rsa.py`：已完成 A2，生成 relation-vector 主机制图、top 表与 full SI 表。
+- `brain_behavior/relation_behavior_prediction.py`：已完成 B1 subject-level 版本；同时检验 `relation_pre`、`relation_post`、`relation_delta`、`relation_decoupling`，避免只围绕 post-pre 下降解释。
+- `figures/plot_relation_behavior_prediction.py`：已完成 B2 候选脑-行为展示图。
+
+### 15.2 已生成核心输出
+
+- `paper_outputs/qc/relation_vectors/relation_model_rdms.npz`
+- `paper_outputs/qc/relation_vectors/relation_pair_manifest.tsv`
+- `paper_outputs/qc/relation_vectors/relation_model_collinearity.tsv`
+- `paper_outputs/qc/relation_vector_rsa_main_functional/relation_vector_group_summary_fdr.tsv`
+- `paper_outputs/qc/relation_vector_rsa_literature/relation_vector_group_summary_fdr.tsv`
+- `paper_outputs/qc/relation_vector_rsa_literature_spatial/relation_vector_group_summary_fdr.tsv`
+- `paper_outputs/tables_main/table_relation_vector_rsa.tsv`
+- `paper_outputs/tables_si/table_relation_vector_rsa_full.tsv`
+- `paper_outputs/figures_main/fig_relation_vector_rsa.png`
+- `paper_outputs/qc/relation_behavior/relation_behavior_subject_long.tsv`
+- `paper_outputs/tables_main/table_relation_behavior_prediction.tsv`
+- `paper_outputs/tables_si/table_relation_behavior_prediction_fdr.tsv`
+- `paper_outputs/figures_main/fig_relation_behavior_prediction.png`
+
+### 15.3 A1/A2 科学验收结论
+
+- QC 通过：三套 ROI set 均无 failed cell；`main_functional` 784/784 ok，`literature` 1344/1344 ok，`literature_spatial` 1344/1344 ok。
+- relation-vector primary 模型出现多处 primary-family FDR 显著结果：
+  - `literature/lit_L_pMTG/KJ/M9_relation_vector_direct`：post-pre = -0.0504，p = 2.58e-05，q = 0.00040。
+  - `literature/lit_R_temporal_pole/KJ/M9_relation_vector_abs`：post-pre = -0.0432，p = 3.30e-05，q = 0.00040。
+  - `literature_spatial/litspat_R_OPA/YY/M9_relation_vector_direct`：post-pre = -0.0544，p = 0.00019，q = 0.00458。
+  - `literature/lit_L_temporal_pole/YY/M9_relation_vector_direct`：post-pre = -0.0395，p = 0.00038，q = 0.00669。
+- 方向解释需要调整：最强效应多数是负向 post-pre，不应写成“学习后更贴近通用 embedding relation-vector”。更稳妥的机制表述是：学习后相关 ROI 的 neural relation geometry 从通用语义 embedding 的关系结构中脱耦，可能形成更任务化、经验化的关系表征。
+
+### 15.4 B1/B2 脑-行为验收结论
+
+- subject-level merge 通过但行为表只有 27 名可用被试；relation 指标为 28 名，被试合并后为 27 名。
+- primary brain-behavior 没有严格通过 q < .10；最接近结果为：
+  - `literature_spatial/litspat_R_OPA/YY/M9_relation_vector_direct/relation_post -> run7_memory_accuracy`：Spearman rho = 0.622，p = 0.000529，primary-family q = 0.102。
+- 因此 B 阶段目前定位为候选行为桥接线索，不应作为主结论；主结论仍应放在 relation-vector Model-RSA 的 neural mechanism。
+
+### 15.5 下一轮建议
+
+- 优先推进 C1/C2：检查 relation-vector effect 是否沿学习阶段或 run-level 呈现轨迹，这比继续扩展 subject-level 脑-行为更可能增强 PNAS 叙事。
+- 若要加强 B 阶段，应新增 pair-level relation fit 输出，再做 item-level memory/RT 的 mixed model 或 GEE；仅 subject-level n=27 的相关分析很难承载强主张。
+- 写作上把机制命名为 `relation-vector realignment/decoupling`，并明确它不是简单的 similarity decrease，而是从 item-pair similarity 下降推进到 relation geometry 的重组。
