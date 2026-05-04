@@ -1,0 +1,3 @@
+roi_set	roi_name	domain	meta_source	term_or_query	map_type	hemisphere	x	y	z	radius_mm	theory_role	source_url	download_date	notes
+meta_metaphor	meta_L_IFG	metaphor	Neurosynth	metaphor	association	L	-48	24	18	6	semantic_control		2026-05-03	Replace example coordinates with externally exported peak coordinates.
+meta_spatial	meta_L_hippocampus	spatial	Neurosynth	spatial memory	association	L	-24	-18	-18	6	hippocampal_binding		2026-05-03	Replace example coordinates with externally exported peak coordinates.

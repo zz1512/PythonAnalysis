@@ -901,3 +901,344 @@ PNAS 冲刺主张：
 - 不建议把 C 阶段放入主文核心链条；可放 SI，说明 learning-stage pattern 的 run3/run4 trajectory 未提供额外支持。
 - PNAS 冲刺主线应继续围绕 A 阶段的 relation-vector realignment/decoupling，以及 Step 5C 原有稳健 RSA 效应。
 - 若必须增强时间过程证据，下一步不是继续在当前 run3/run4 pair-pattern 上挖，而是检查是否能从 trial-level 或 exposure-order 构造更细粒度的 item-level relation fit；否则容易变成弱结果堆叠。
+
+## 17. 2026-05-04 执行记录：meta ROI run7 retrieval 阶段
+
+### 17.1 数据状态
+
+- run7 LSS 已生成独立索引：`E:/python_metaphor/lss_betas_final/lss_metadata_index_run7.csv`。
+- 已用 `representation_analysis/stack_patterns.py` 生成 `pattern_root/sub-xx/retrieval_yy.nii.gz` 与 `retrieval_kj.nii.gz`。
+- run7 神经 pattern 可用被试为 26 名：`sub-01` 至 `sub-28` 中缺 `sub-12`、`sub-23`；其中 `sub-12` 本身不在行为主汇总中，真正行为有而神经缺的是 `sub-23`。
+- 后续 run7 neural-behavior 分析均使用 neural × behavior 交集，即 26 名被试。
+
+### 17.2 新增脚本
+
+- `rsa_analysis/retrieval_pair_similarity.py`：在 `meta_metaphor` / `meta_spatial` 中计算 run7 retrieval pair similarity、pre/post/retrieval trajectory，以及 post-to-retrieval same-vs-different pair/word reinstatement。
+- `brain_behavior/retrieval_success_prediction.py`：把 retrieval geometry item/pair 指标与 run7 memory / correct-trial RT 做 item-level GEE，显式拆分 within-subject 与 between-subject 成分。
+
+### 17.3 核心输出
+
+- `paper_outputs/qc/retrieval_geometry/retrieval_item_metrics.tsv`
+- `paper_outputs/qc/retrieval_geometry/retrieval_pair_metrics.tsv`
+- `paper_outputs/qc/retrieval_geometry/retrieval_subject_metrics.tsv`
+- `paper_outputs/qc/retrieval_geometry/retrieval_geometry_group_fdr.tsv`
+- `paper_outputs/tables_si/table_retrieval_geometry.tsv`
+- `paper_outputs/qc/retrieval_success_prediction/retrieval_success_item_long.tsv`
+- `paper_outputs/qc/retrieval_success_prediction/retrieval_success_group_fdr.tsv`
+- `paper_outputs/tables_main/table_retrieval_success_prediction.tsv`
+- `paper_outputs/tables_si/table_retrieval_success_prediction_fdr.tsv`
+
+### 17.4 QC
+
+- retrieval geometry：26 名被试，0 failure；item rows = 65,520，pair rows = 32,760，subject metric rows = 9,360。
+- retrieval success prediction：long rows = 720,720，model rows = 792。
+- intersection QC：behavior summary 有 27 名被试；run7 neural metrics 有 26 名；缺失 neural 的行为被试为 `sub-23`。
+
+### 17.5 科学验收结论
+
+run7 retrieval geometry 提供了新的 P1 补充证据：YY 相对 KJ 的 `retrieval - post pair similarity` 在若干 meta ROI 中显著为正，提示 post 阶段分化后的 pair structure 在最终 retrieval 阶段有相对更强的 rebound/reinstatement。
+
+最强 planned 结果：
+
+| ROI set | ROI | Metric | YY-KJ effect | p | q |
+| --- | --- | --- | ---: | ---: | ---: |
+| `meta_spatial` | `meta_R_PPA_PHG` | retrieval - post pair similarity | 0.083 | 4.76e-07 | 1.91e-05 |
+| `meta_spatial` | `meta_R_PPC_SPL` | retrieval - post pair similarity | 0.085 | 4.21e-05 | 0.000842 |
+| `meta_metaphor` | `meta_R_temporal_pole` | retrieval - post pair similarity | 0.104 | 0.000291 | 0.00466 |
+| `meta_metaphor` | `meta_R_IFG` | retrieval - post pair similarity | 0.084 | 0.000185 | 0.00466 |
+| `meta_spatial` | `meta_R_hippocampus` | retrieval - post pair similarity | 0.048 | 0.00310 | 0.0413 |
+
+post-to-retrieval same-vs-different pair reinstatement 的校正后证据较弱：`meta_R_hippocampus` YY p = 0.0207, primary q = 0.061；`meta_L_hippocampus` YY p = 0.0431, primary q = 0.119。可作为 hippocampal retrieval reinstatement 趋势，不作为主结论。
+
+run7 retrieval success prediction 有局部桥接，但方向不够单一：
+
+- `meta_L_pMTG_pSTS`, KJ, retrieval pair similarity -> memory: beta = 0.110, p = 0.000755, q_primary = 0.0362。
+- `meta_R_AG`, YY, retrieval pair similarity -> memory: beta = 0.159, p = 0.00217, q_primary = 0.0521。
+- `meta_L_PPA_PHG`, YY, retrieval pair similarity -> log RT correct: beta = 0.0164, p = 7.52e-05, q_primary = 0.00451。
+
+RT 模型中 beta 为正表示反应更慢，因此不能写成“retrieval geometry 提高提取效率”。run7 行为桥接应定位为探索性。
+
+### 17.6 写作建议
+
+run7 结果适合放在主机制后的补充段落：
+
+> learned-edge differentiation 在 post 阶段表现为 trained-pair similarity 下降；到最终 retrieval 阶段，YY 相对 KJ 在右 PPA/PHG、右 PPC/SPL、右颞极、右 IFG 和右海马出现 pair-structure rebound。这说明学习后的关系边并非简单消失，而是在最终提取阶段以任务相关方式重新出现。
+
+但不建议写成强行为机制：
+
+> retrieval geometry 与 memory/RT 有局部关联，但尚不足以支持“更强 reinstatement 直接导致更好或更快记忆”的主结论。
+
+## 18. 2026-05-04 执行记录：run7 MVPA 分类检验
+
+### 18.1 新增脚本
+
+- `fmri_mvpa/fmri_mvpa_roi/run7_meta_roi_decoding.py`
+
+脚本使用 `meta_metaphor` / `meta_spatial` 中 5 个 run7 rebound ROI：
+
+- `meta_R_PPA_PHG`
+- `meta_R_PPC_SPL`
+- `meta_R_temporal_pole`
+- `meta_R_IFG`
+- `meta_R_hippocampus`
+
+### 18.2 分析方案
+
+1. 主方案：pair-held-out YY/KJ decoding。每个 fold 留出同序号的一个 YY pair 和一个 KJ pair，训练其余 pair，检验 balanced accuracy 是否高于 0.5。
+2. 用户设想方案：cross-role generalization，分别检验 `w -> ew` 与 `ew -> w`。
+3. 诊断方案：`w-only` 与 `ew-only` 内部 pair-held-out decoding，用于判断 cross-role 失败是否因为分类信息依赖词角色。
+4. 行为桥接：pair-held-out classifier evidence 预测 run7 memory 与 correct-trial log RT。
+
+代码 review 中发现原始 `pair_id` 不能直接用于 YY/KJ 成对留出，因为 YY 的 `pair_id` 为 1-35，KJ 为 36-70；如果按单个 `pair_id` 留出，test fold 只有一个类别，主分析会被跳过。因此脚本已新增 `condition_pair_index`，按条件内排序后的 pair 序号成对留出。
+
+### 18.3 输出与 QC
+
+- `paper_outputs/qc/run7_mvpa_decoding/run7_mvpa_manifest.json`
+- `paper_outputs/qc/run7_mvpa_decoding/run7_mvpa_subject_metrics.tsv`
+- `paper_outputs/qc/run7_mvpa_decoding/run7_mvpa_fold_metrics.tsv`
+- `paper_outputs/qc/run7_mvpa_decoding/run7_mvpa_trial_evidence.tsv`
+- `paper_outputs/qc/run7_mvpa_decoding/run7_mvpa_group_fdr.tsv`
+- `paper_outputs/qc/run7_mvpa_decoding/run7_mvpa_evidence_behavior_fdr.tsv`
+- `paper_outputs/tables_main/table_run7_mvpa_decoding.tsv`
+- `paper_outputs/tables_main/table_run7_mvpa_evidence_behavior.tsv`
+
+QC：
+
+- 被试：26 名。
+- failures：0。
+- subject metric rows：650。
+- trial evidence rows：18,200。
+- 每个 subject x ROI：140 trials；YY/KJ 各 70 trials；`yyw`, `yyew`, `kjw`, `kjew` 各 35 trials。
+
+### 18.4 验收结论
+
+主 pair-held-out decoding 支持 run7 中存在 YY/KJ 可解码信息：
+
+| ROI | balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_hippocampus` | 0.565 | 2.98e-06 | 3.04e-05 |
+| `meta_R_temporal_pole` | 0.553 | 4.05e-06 | 3.04e-05 |
+| `meta_R_PPA_PHG` | 0.564 | 1.72e-05 | 8.58e-05 |
+| `meta_R_PPC_SPL` | 0.547 | 0.000190 | 0.000711 |
+| `meta_R_IFG` | 0.513 | 0.187 | 0.357 |
+
+cross-role generalization 不成立，所有 ROI 均未通过 FDR。最接近的是 `meta_R_PPA_PHG`：
+
+- `w -> ew`: balanced accuracy = 0.518, p = 0.0671, q_primary = 0.201。
+- `ew -> w`: balanced accuracy = 0.520, p = 0.126, q_primary = 0.314。
+
+诊断性 role-specific decoding 显示分类信息在 `w` 和 `ew` 内部均存在，尤其右 PPA/PHG、右海马、右颞极、右 PPC/SPL 均显著。这说明 MVPA 结果支持的是 role-dependent YY/KJ discriminative geometry，而不是角色不变的抽象 YY/KJ code。
+
+classifier evidence 的行为桥接未通过 FDR：
+
+- memory 最小 q = 0.437。
+- correct-trial log RT 最小 q = 0.750。
+
+因此当前应停止继续扩展“classifier evidence 预测记忆/RT”的链条；MVPA 可作为 run7 retrieval-stage 补充证据，但不作为行为机制主证据。
+
+## 19. 2026-05-04 执行记录：learning-stage MVPA 分类检验
+
+### 19.1 新增脚本
+
+- `fmri_mvpa/fmri_mvpa_roi/learning_meta_roi_decoding.py`
+
+使用与 run7 MVPA 相同的 5 个计划 ROI：
+
+- `meta_R_PPA_PHG`
+- `meta_R_PPC_SPL`
+- `meta_R_temporal_pole`
+- `meta_R_IFG`
+- `meta_R_hippocampus`
+
+### 19.2 分析方案
+
+学习阶段 pattern 是 pair/item-level pattern，不包含 run7 的 `w/ew` 单词角色结构。因此本轮不做 cross-role decoding，而做：
+
+1. `run3_pair_heldout`：run3 内部 YY/KJ pair-held-out decoding。
+2. `run4_pair_heldout`：run4 内部 YY/KJ pair-held-out decoding。
+3. `cross_run_3_to_4` 与 `cross_run_4_to_3`：检验分类边界是否跨学习 run 泛化。
+4. `run4_minus_run3_pair_heldout`：检验分类准确率是否从 run3 到 run4 增强。
+
+### 19.3 输出与 QC
+
+- `paper_outputs/qc/learning_mvpa_decoding/learning_mvpa_manifest.json`
+- `paper_outputs/qc/learning_mvpa_decoding/learning_mvpa_subject_metrics.tsv`
+- `paper_outputs/qc/learning_mvpa_decoding/learning_mvpa_fold_metrics.tsv`
+- `paper_outputs/qc/learning_mvpa_decoding/learning_mvpa_group_fdr.tsv`
+- `paper_outputs/qc/learning_mvpa_decoding/learning_mvpa_run4_minus_run3_fdr.tsv`
+- `paper_outputs/tables_main/table_learning_mvpa_decoding.tsv`
+- `paper_outputs/tables_main/table_learning_mvpa_run4_minus_run3.tsv`
+
+QC：
+
+- 被试：28 名。
+- failures：0。
+- subject metric rows：560。
+- fold rows：8,400。
+- 每个 subject x ROI：140 learning trials；run3/run4 各 70 trials；YY/KJ 各 70 trials。
+- run3/run4 中可成对留出的 YY/KJ common `pair_id` 均为 30 个。
+
+### 19.4 验收结论
+
+within-run pair-held-out decoding 很强，run3 和 run4 中 5 个 ROI 均显著高于 chance。
+
+run3：
+
+| ROI | balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_PPA_PHG` | 0.591 | 1.81e-06 | 3.63e-05 |
+| `meta_R_hippocampus` | 0.567 | 1.72e-05 | 0.000172 |
+| `meta_R_temporal_pole` | 0.563 | 0.000170 | 0.000679 |
+| `meta_R_PPC_SPL` | 0.545 | 0.00403 | 0.00896 |
+| `meta_R_IFG` | 0.532 | 0.00770 | 0.0154 |
+
+run4：
+
+| ROI | balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_temporal_pole` | 0.571 | 5.74e-05 | 0.000382 |
+| `meta_R_PPA_PHG` | 0.575 | 8.89e-05 | 0.000444 |
+| `meta_R_PPC_SPL` | 0.573 | 0.000600 | 0.00165 |
+| `meta_R_IFG` | 0.568 | 0.000591 | 0.00165 |
+| `meta_R_hippocampus` | 0.570 | 0.000661 | 0.00165 |
+
+但两个增强型结论不成立：
+
+- `run4 - run3` 没有任何 ROI 通过 FDR；最接近 `meta_R_IFG`，delta = 0.036, p = 0.088, q = 0.441。
+- cross-run generalization 没有任何 ROI 通过 FDR；最接近 `meta_R_PPA_PHG` 的 `run3 -> run4`，accuracy = 0.515, p = 0.0404, q_primary = 0.0735。
+
+写作建议：learning-stage MVPA 可以作为 run7 MVPA 的前置补充，说明这几个 ROI 在学习阶段已经有 YY/KJ 条件区分信息；但不能写成“分类边界随学习稳定增强”或“跨 run 稳定泛化”。主故事仍应放在 post 的 edge-specific RSA 和 run7 的 retrieval-stage rebound。
+
+## 20. 2026-05-04 执行记录：pre/post YY-KJ-JX 三分类 MVPA
+
+### 20.1 新增脚本
+
+- `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_threeway_decoding.py`
+
+### 20.2 数据与分析方案
+
+当前文件中 JX 条件存储为 `baseline`，因此脚本将：
+
+```text
+baseline -> jx
+kj -> kj
+yy -> yy
+```
+
+metadata 显示真实 run 编码为：
+
+- pre：run1/2。
+- post：run5/6。
+- run3/4 是 learning 阶段，不是 post。
+
+分析采用 phase 内 run-held-out 三分类：
+
+- pre: `run1 -> run2` 和 `run2 -> run1`。
+- post: `run5 -> run6` 和 `run6 -> run5`。
+- chance = 1/3。
+- 使用 balanced accuracy 处理 JX=40、KJ=70、YY=70 的 trial 数不均衡。
+
+### 20.3 输出与 QC
+
+- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_manifest.json`
+- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_subject_metrics.tsv`
+- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_direction_metrics.tsv`
+- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_group_fdr.tsv`
+- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_post_minus_pre_fdr.tsv`
+- `paper_outputs/tables_main/table_prepost_threeway_mvpa_decoding.tsv`
+- `paper_outputs/tables_main/table_prepost_threeway_mvpa_post_minus_pre.tsv`
+
+QC：
+
+- 被试：28 名。
+- failures：0。
+- subject metric rows：560。
+- direction metric rows：560。
+- 每个 subject x ROI：360 trials；pre = 180，post = 180；每个阶段 JX = 40，KJ = 70，YY = 70。
+
+### 20.4 验收结论
+
+pre 阶段三分类没有任何 ROI 通过 FDR，所有 balanced accuracy 都接近 chance：
+
+| ROI | pre balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_IFG` | 0.338 | 0.462 | 0.898 |
+| `meta_R_temporal_pole` | 0.332 | 0.808 | 0.898 |
+| `meta_R_hippocampus` | 0.330 | 0.585 | 0.898 |
+| `meta_R_PPA_PHG` | 0.327 | 0.238 | 0.898 |
+| `meta_R_PPC_SPL` | 0.327 | 0.374 | 0.898 |
+
+post 阶段同样没有任何 ROI 通过 FDR。最接近的是右颞极，但校正后不显著：
+
+| ROI | post balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_temporal_pole` | 0.342 | 0.0517 | 0.517 |
+| `meta_R_IFG` | 0.337 | 0.524 | 0.898 |
+| `meta_R_PPC_SPL` | 0.336 | 0.720 | 0.898 |
+| `meta_R_hippocampus` | 0.335 | 0.732 | 0.898 |
+| `meta_R_PPA_PHG` | 0.333 | 0.952 | 0.952 |
+
+post-pre 增强也不显著；最大 delta 是右颞极 0.010，p = 0.202，q = 0.740。
+
+cross-phase generalization (`pre -> post`, `post -> pre`) 也没有任何 ROI 通过 FDR。
+
+写作建议：这是一个重要的 negative control。learning-stage MVPA 和 run7 MVPA 的显著结果不能简单解释为这些 ROI 对 YY/KJ/JX 三种材料类别有稳定分类码；pre/post isolated-word 阶段三分类并不稳定。因此主故事仍应集中在学习阶段任务/关系信息、post edge-specific differentiation，以及 run7 retrieval-stage rebound。
+
+## 21. 2026-05-05 执行记录：pre/post YY-KJ 二分类 MVPA
+
+### 21.1 新增脚本
+
+- `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_binary_decoding.py`
+
+### 21.2 分析方案
+
+为了排除三分类中 JX/baseline 的干扰，只保留 YY 和 KJ：
+
+- pre: `run1 -> run2` 和 `run2 -> run1`。
+- post: `run5 -> run6` 和 `run6 -> run5`。
+- excluded condition: `jx/baseline`。
+- chance = 0.5。
+
+### 21.3 输出与 QC
+
+- `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_manifest.json`
+- `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_subject_metrics.tsv`
+- `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_direction_metrics.tsv`
+- `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_group_fdr.tsv`
+- `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_post_minus_pre_fdr.tsv`
+- `paper_outputs/tables_main/table_prepost_binary_mvpa_decoding.tsv`
+- `paper_outputs/tables_main/table_prepost_binary_mvpa_post_minus_pre.tsv`
+
+QC：
+
+- 被试：28 名。
+- failures：0。
+- subject metric rows：560。
+- direction metric rows：560。
+- 每个 subject x ROI：280 trials；pre = 140，post = 140；每个阶段 YY = 70，KJ = 70。
+
+### 21.4 验收结论
+
+排除 JX 后，pre 阶段仍没有任何 ROI 正向高于 chance：
+
+| ROI | pre balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_IFG` | 0.511 | 0.213 | 0.494 |
+| `meta_R_temporal_pole` | 0.499 | 0.934 | 0.934 |
+| `meta_R_PPA_PHG` | 0.492 | 0.338 | 0.494 |
+| `meta_R_hippocampus` | 0.485 | 0.0252 | 0.118 |
+| `meta_R_PPC_SPL` | 0.482 | 0.0354 | 0.118 |
+
+post 阶段也没有任何 ROI 正向高于 chance。右海马显著低于 chance：
+
+| ROI | post balanced accuracy | p | q_primary |
+| --- | ---: | ---: | ---: |
+| `meta_R_temporal_pole` | 0.504 | 0.662 | 0.735 |
+| `meta_R_IFG` | 0.493 | 0.396 | 0.494 |
+| `meta_R_PPA_PHG` | 0.494 | 0.321 | 0.494 |
+| `meta_R_PPC_SPL` | 0.493 | 0.363 | 0.494 |
+| `meta_R_hippocampus` | 0.478 | 0.00354 | 0.0354 |
+
+post-pre 增强没有任何 ROI 通过 FDR；cross-phase generalization 也没有任何 ROI 通过 FDR。
+
+写作建议：二分类控制强化了三分类 negative control。pre/post isolated-word 阶段没有稳定的 YY/KJ 分类；右海马 post 低于 chance 更可能表示跨 run 分类边界反向或不稳定，而不是成功分类。learning-stage 和 run7 MVPA 的显著性更应解释为学习/提取任务阶段特异的 condition-discriminative geometry。

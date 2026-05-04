@@ -85,7 +85,50 @@ def _write_summary(long_frame: pd.DataFrame, out_path: Path) -> None:
     summary.to_csv(out_path, sep="\t", index=False)
 
 
-def _plot(long_frame: pd.DataFrame, out_path: Path) -> None:
+def _p_to_star(p_value: float) -> str:
+    if not np.isfinite(p_value):
+        return ""
+    if p_value < 0.001:
+        return "***"
+    if p_value < 0.01:
+        return "**"
+    if p_value < 0.05:
+        return "*"
+    if p_value < 0.10:
+        return "+"
+    return "n.s."
+
+
+def _load_model_p_values(behavior_dir: Path) -> dict[str, float]:
+    out: dict[str, float] = {}
+    paths = {
+        "Memory Accuracy": behavior_dir / "lmm" / "run7_memory" / "behavior_lmm_params.tsv",
+        "Correct-Trial RT (ms)": behavior_dir / "lmm" / "run7_log_rt_correct" / "behavior_lmm_params.tsv",
+    }
+    for metric, path in paths.items():
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path, sep="\t")
+        match = frame[frame["term"].astype(str).eq("C(condition)[T.YY]")]
+        if not match.empty:
+            out[metric] = float(pd.to_numeric(match.iloc[0]["p_value"], errors="coerce"))
+    return out
+
+
+def _add_sig_bracket(ax: plt.Axes, p_value: float) -> None:
+    label = _p_to_star(p_value)
+    if not label:
+        return
+    y_min, y_max = ax.get_ylim()
+    span = y_max - y_min
+    y = y_max - span * 0.08
+    h = span * 0.035
+    ax.plot([0, 0, 1, 1], [y, y + h, y + h, y], color="black", lw=1.0, clip_on=False)
+    ax.text(0.5, y + h + span * 0.015, label, ha="center", va="bottom", fontsize=10, fontweight="bold")
+    ax.set_ylim(y_min, y_max + span * 0.08)
+
+
+def _plot(long_frame: pd.DataFrame, out_path: Path, model_p_values: dict[str, float]) -> None:
     sns.set_theme(style="whitegrid", context="paper")
     apply_publication_rcparams()
 
@@ -166,6 +209,8 @@ def _plot(long_frame: pd.DataFrame, out_path: Path) -> None:
         ax.set_title(metric, fontweight="bold")
         ax.set_xlabel("")
         ax.set_ylabel(ylabels[metric])
+        if metric in model_p_values:
+            _add_sig_bracket(ax, model_p_values[metric])
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         add_panel_label(ax, "a" if metric == "Memory Accuracy" else "b")
@@ -197,7 +242,8 @@ def main() -> None:
     frame = _load_subject_condition(behavior_dir / "subject_condition_summary.tsv")
     long_frame = _build_long_plot_frame(frame)
     _write_summary(long_frame, out_dir / "table_behavior_plot_summary.tsv")
-    _plot(long_frame, out_dir / "fig_behavior_accuracy_rt.png")
+    model_p_values = _load_model_p_values(behavior_dir)
+    _plot(long_frame, out_dir / "fig_behavior_accuracy_rt.png", model_p_values)
     print(f"[behavior-plot] wrote {out_dir}")
 
 

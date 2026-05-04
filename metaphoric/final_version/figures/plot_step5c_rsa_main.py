@@ -76,6 +76,20 @@ def _load_itemwise(path: Path) -> pd.DataFrame:
     return frame.dropna(subset=["similarity"]).reset_index(drop=True)
 
 
+def _infer_roi_set(results_dir: Path) -> str:
+    name = results_dir.name
+    prefix = "rsa_results_optimized_"
+    if name.startswith(prefix):
+        return name[len(prefix) :]
+    return os.environ.get("METAPHOR_ROI_SET", "")
+
+
+def _load_lmm_fdr(path: Path) -> pd.DataFrame | None:
+    if not path.exists():
+        return None
+    return pd.read_csv(path, sep="\t")
+
+
 def _to_long(frame: pd.DataFrame) -> pd.DataFrame:
     long = frame.melt(
         id_vars=["subject", "roi", "stage"],
@@ -91,9 +105,9 @@ def _to_long(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _condition_summary(long: pd.DataFrame) -> pd.DataFrame:
     return (
-        long.groupby(["subject", "condition", "stage"], as_index=False)["similarity"]
+        long.groupby(["subject", "roi", "condition", "stage"], as_index=False)["similarity"]
         .mean()
-        .sort_values(["subject", "condition", "stage"])
+        .sort_values(["subject", "roi", "condition", "stage"])
         .reset_index(drop=True)
     )
 
@@ -113,51 +127,122 @@ def _roi_delta_summary(long: pd.DataFrame) -> pd.DataFrame:
     return pivot
 
 
-def _plot(condition_summary: pd.DataFrame, roi_delta: pd.DataFrame, out_path: Path) -> None:
+def _roi_condition_group_summary(roi_delta: pd.DataFrame, lmm_fdr: pd.DataFrame | None = None, roi_set: str | None = None) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for (roi, condition), subset in roi_delta.groupby(["roi", "condition"], sort=False):
+        work = subset[["subject", "Pre", "Post", "delta_post_minus_pre", "roi_label"]].dropna().copy()
+        if work.empty:
+            continue
+        sem_delta = float(work["delta_post_minus_pre"].std(ddof=1) / np.sqrt(len(work))) if len(work) > 1 else np.nan
+        rows.append(
+            {
+                "roi_set": roi_set or "",
+                "roi": roi,
+                "roi_label": work["roi_label"].iloc[0],
+                "condition": condition,
+                "n_subjects": int(len(work)),
+                "mean_pre": float(work["Pre"].mean()),
+                "mean_post": float(work["Post"].mean()),
+                "mean_delta_post_minus_pre": float(work["delta_post_minus_pre"].mean()),
+                "sem_delta_post_minus_pre": sem_delta,
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["planned_interaction_q"] = np.nan
+    if lmm_fdr is not None and not lmm_fdr.empty:
+        term_map = {
+            "Metaphor": "C(condition)[T.Metaphor]:C(time)[T.Pre]",
+            "Spatial": "C(condition)[T.Spatial]:C(time)[T.Pre]",
+        }
+        lmm = lmm_fdr.copy()
+        if roi_set:
+            lmm = lmm[lmm["roi_set"].astype(str).eq(str(roi_set))]
+        lmm = lmm[lmm["analysis_level"].astype(str).eq("roi")].copy()
+        for idx, row in out.iterrows():
+            term = term_map.get(str(row["condition"]))
+            if term is None:
+                continue
+            match = lmm[
+                lmm["analysis_name"].astype(str).eq(str(row["roi"]))
+                & lmm["term"].astype(str).eq(term)
+            ]
+            if not match.empty:
+                out.loc[idx, "planned_interaction_q"] = pd.to_numeric(
+                    match.iloc[0]["q_bh_planned_interaction_within_level"],
+                    errors="coerce",
+                )
+    return out.sort_values(["roi", "condition"]).reset_index(drop=True)
+
+
+def _q_star(q_value: float) -> str:
+    if not np.isfinite(q_value):
+        return ""
+    if q_value < 0.001:
+        return "***"
+    if q_value < 0.01:
+        return "**"
+    if q_value < 0.05:
+        return "*"
+    if q_value < 0.10:
+        return "+"
+    return ""
+
+
+def _plot_roi_heatmap(ax: plt.Axes, roi_group: pd.DataFrame, cond_order: list[str]) -> None:
+    if roi_group.empty:
+        ax.text(0.5, 0.5, "No ROI summary", ha="center", va="center")
+        ax.axis("off")
+        return
+    roi_order = (
+        roi_group.groupby("roi_label")["mean_delta_post_minus_pre"]
+        .mean()
+        .sort_values()
+        .index.tolist()
+    )
+    matrix = roi_group.pivot(index="roi_label", columns="condition", values="mean_delta_post_minus_pre").reindex(roi_order)
+    matrix = matrix[[condition for condition in cond_order if condition in matrix.columns]]
+    vmax = np.nanmax(np.abs(matrix.to_numpy(dtype=float))) if not matrix.empty else 0.1
+    vmax = max(float(vmax), 0.02)
+    sns.heatmap(
+        matrix,
+        cmap="vlag",
+        center=0,
+        vmin=-vmax,
+        vmax=vmax,
+        linewidths=0.5,
+        linecolor="white",
+        cbar_kws={"label": "Post - Pre"},
+        ax=ax,
+    )
+    q_lookup = {
+        (row.roi_label, row.condition): _q_star(float(row.planned_interaction_q))
+        for row in roi_group.itertuples(index=False)
+        if "planned_interaction_q" in roi_group.columns
+    }
+    for y_idx, roi_label in enumerate(matrix.index):
+        for x_idx, condition in enumerate(matrix.columns):
+            value = matrix.loc[roi_label, condition]
+            if pd.isna(value):
+                continue
+            star = q_lookup.get((roi_label, condition), "")
+            text = f"{value:+.3f}{star}"
+            ax.text(x_idx + 0.5, y_idx + 0.5, text, ha="center", va="center", fontsize=7.2, color="black")
+    ax.set_title("ROI-wise Step 5C change", fontweight="bold")
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+
+
+def _plot(condition_summary: pd.DataFrame, roi_delta: pd.DataFrame, roi_group: pd.DataFrame, out_path: Path) -> None:
     sns.set_theme(style="whitegrid", context="paper")
     apply_publication_rcparams()
 
-    fig, axes = plt.subplots(1, 2, figsize=(14.0, 7.2), gridspec_kw={"width_ratios": [1.0, 1.6]})
+    fig, axes = plt.subplots(1, 2, figsize=(14.5, 7.2), gridspec_kw={"width_ratios": [1.05, 1.65]})
     cond_order = _condition_order(condition_summary)
 
     ax0 = axes[0]
-    sns.violinplot(
-        data=condition_summary,
-        x="condition",
-        y="similarity",
-        hue="stage",
-        order=cond_order,
-        hue_order=["Pre", "Post"],
-        palette={"Pre": "#9ca3af", "Post": "#111827"},
-        split=True,
-        inner=None,
-        cut=0,
-        ax=ax0,
-    )
-    sns.stripplot(
-        data=condition_summary,
-        x="condition",
-        y="similarity",
-        hue="stage",
-        order=cond_order,
-        hue_order=["Pre", "Post"],
-        dodge=True,
-        palette={"Pre": "#9ca3af", "Post": "#111827"},
-        alpha=0.25,
-        size=2.8,
-        ax=ax0,
-    )
-    handles, labels = ax0.get_legend_handles_labels()
-    ax0.legend(handles[:2], labels[:2], title="Stage", frameon=False, loc="upper right")
-    ax0.set_title("Pooled Step 5C Similarity", fontweight="bold")
-    ax0.set_xlabel("")
-    ax0.set_ylabel("Mean Pair Similarity")
-    ax0.spines["top"].set_visible(False)
-    ax0.spines["right"].set_visible(False)
-    y_min = float(condition_summary["similarity"].min())
-    y_max = float(condition_summary["similarity"].max())
-    y_pad = max(0.015, (y_max - y_min) * 0.10)
-    ax0.set_ylim(y_min - y_pad, y_max + y_pad)
+    _plot_roi_heatmap(ax0, roi_group, cond_order)
     add_panel_label(ax0, "a")
 
     roi_order = (
@@ -185,12 +270,12 @@ def _plot(condition_summary: pd.DataFrame, roi_delta: pd.DataFrame, out_path: Pa
     ax1.set_title("ROI-Level Delta Similarity (Post - Pre)", fontweight="bold")
     ax1.set_xlabel("Delta Similarity")
     ax1.set_ylabel("")
-    ax1.legend(title="Condition", frameon=False, loc="lower right")
+    ax1.legend(title="Condition", frameon=False, loc="upper center", bbox_to_anchor=(0.50, -0.16), ncol=len(cond_order))
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
     add_panel_label(ax1, "b")
 
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.09, right=0.98, bottom=0.20, top=0.90, wspace=0.32)
     save_png_pdf(fig, out_path)
     plt.close(fig)
 
@@ -209,10 +294,17 @@ def main() -> None:
         default=None,
         help="Optional figure output directory. Defaults to <results-dir>/figures",
     )
+    parser.add_argument(
+        "--lmm-fdr",
+        type=Path,
+        default=default_base_dir() / "paper_outputs" / "tables_si" / "table_rsa_lmm_fdr.tsv",
+        help="Optional Step 5C LMM/FDR table used for ROI-wise significance labels.",
+    )
     args = parser.parse_args()
 
     results_dir = args.results_dir
     out_dir = args.out_dir if args.out_dir is not None else _default_out_dir(results_dir)
+    roi_set = _infer_roi_set(results_dir)
 
     itemwise_file = results_dir / "rsa_itemwise_details.csv"
     if itemwise_file.exists():
@@ -222,11 +314,14 @@ def main() -> None:
         long = _to_long(summary)
     condition_summary = _condition_summary(long)
     roi_delta = _roi_delta_summary(long)
+    lmm_fdr = _load_lmm_fdr(args.lmm_fdr)
+    roi_group = _roi_condition_group_summary(roi_delta, lmm_fdr=lmm_fdr, roi_set=roi_set)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     condition_summary.to_csv(out_dir / "table_step5c_condition_summary.tsv", sep="\t", index=False)
     roi_delta.to_csv(out_dir / "table_step5c_roi_delta.tsv", sep="\t", index=False)
-    _plot(condition_summary, roi_delta, out_dir / "fig_step5c_main.png")
+    roi_group.to_csv(out_dir / "table_step5c_roi_condition_group.tsv", sep="\t", index=False)
+    _plot(condition_summary, roi_delta, roi_group, out_dir / "fig_step5c_main.png")
     print(f"[step5c-plot] wrote {out_dir}")
 
 

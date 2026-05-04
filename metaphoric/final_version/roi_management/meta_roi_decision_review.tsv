@@ -1,0 +1,23 @@
+region	domain	external_neurosynth_support	current_result_support	decision	reason
+L_IFG	metaphor	semantic/language/abstract proxy map peak	Step5C and edge specificity; word support	planned_meta_metaphor	Region-level intersection passed. Neurosynth has no direct metaphor term, so these are constrained semantic-language proxies.
+R_IFG	metaphor	language comprehension proxy map peak	Step5C and edge specificity; word support	planned_meta_metaphor	Region-level intersection passed; kept as bilateral semantic-control node.
+L_temporal_pole/ATL	metaphor	abstract/semantic-memory proxy map peak	Step5C, edge specificity, and relation-vector support	planned_meta_metaphor	Important semantic hub for metaphor integration; current results are strong.
+R_temporal_pole/ATL	metaphor	semantic-memory proxy map peak	Step5C, edge specificity, and relation-vector support	planned_meta_metaphor	Important semantic hub; current results support keeping bilateral ATL.
+L_AG/IPL	metaphor	semantic-memory proxy map peak	Step5C and edge specificity support	planned_meta_metaphor	Combinatorial semantic node; current learned-edge evidence is strong.
+R_AG/IPL	metaphor	semantic-memory proxy map peak	Step5C and edge specificity support	planned_meta_metaphor	Bilateral AG retained because current edge evidence is strong.
+L_pMTG/pSTS	metaphor	semantic/language proxy map peak	Step5C, edge specificity, and relation-vector support	planned_meta_metaphor	Lexical-semantic/discourse interface; avoids missing posterior temporal semantic regions.
+R_pMTG/pSTS	metaphor	language comprehension proxy map peak	Step5C, edge specificity, and relation-vector support	planned_meta_metaphor	Right posterior temporal node retained because current relation-vector support exists.
+L_hippocampus	spatial	hippocampus association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	High-priority hippocampal-binding subfamily.
+R_hippocampus	spatial	hippocampus association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	High-priority hippocampal-binding subfamily.
+L_PPA/PHG	spatial	parahippocampal association map peak	Step5C and edge specificity support	planned_meta_spatial	Scene/context binding node.
+R_PPA/PHG	spatial	parahippocampal association map peak	Step5C and edge specificity support	planned_meta_spatial	Scene/context binding node.
+L_RSC/PCC	spatial	navigation association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	Reference-frame/context node; also aligns with师兄 left-HPC -> PCC/precuneus clue.
+R_RSC/PCC	spatial	navigation association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	Reference-frame/context node.
+L_PPC/SPL	spatial	spatial attention association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	Spatial attention/relation layout node.
+R_PPC/SPL	spatial	spatial association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	Spatial attention/relation layout node.
+L_precuneus	spatial	spatial/navigation association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	Important spatial-context/default-memory node; retained to avoid missing teacher-relevant spatial memory signal.
+R_precuneus	spatial	spatial/navigation association map peak	Step5C, edge specificity, and word-stability support	planned_meta_spatial	Important spatial-context/default-memory node.
+L_OPA	spatial	visual-spatial support possible but less central to relation-binding story	Step5C/edge/relation support exists	backup_SI	Kept out of primary masks to avoid visual-spatial ROI inflation; add only if a visual-spatial control family is needed.
+R_OPA	spatial	visual-spatial support possible but less central to relation-binding story	Step5C/edge/relation support exists	backup_SI	Useful backup because relation-vector result appeared here, but not core relation-binding story.
+dmPFC/MFG	metaphor	possible abstract/semantic map support	not a stable current ROI in main results	defer	Important in some metaphor/social abstraction literature, but no strong current intersection; avoid expanding main family.
+LOC/occipital	spatial	visuospatial/visual peaks	current support not specific to relation mechanism	defer_or_visual_control	Do not include in main unless using as visual-spatial control.

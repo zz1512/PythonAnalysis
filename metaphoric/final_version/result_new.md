@@ -1,12 +1,12 @@
 # 当前结果整理：隐喻联结学习的行为与神经表征结果
 
-最后更新：2026-05-02
+最后更新：2026-05-03
 
-本文档用于客观汇总当前 `final_version` 的主要分析结果、对应图片和源文件。内容按研究链路排列：数据与执行状态、行为结果、材料控制、学习阶段 GLM、ROI-level RSA、Model-RSA、脑-行为分析、searchlight、连接分析、稳健性与补充分析。
+本文档用于客观汇总当前 `final_version` 的主要分析结果、对应图片和源文件。当前结果按“行为优势 -> ROI 来源 -> 单 ROI 表征变化 -> learned edge 机制 -> RDM 机制解释 -> 行为/全脑/网络补充”的链路排列。所有 ROI 推断以单 ROI 为基本单位；跨 ROI 或 network 汇总只作为描述性稳健性/补充证据，不作为替代单 ROI 统计的主结果。
 
 ## 1. 数据与执行状态
 
-当前正式 ROI 范围为三套：`main_functional`、`literature`、`literature_spatial`。本轮已基于最新代码重跑 Step 5C RSA、RSA LMM、Model-RSA、Delta-rho LMM、item-level brain-behavior、S1 机制到行为预测、representational connectivity、robustness suite 和 noise ceiling。新增 A 阶段 relation-vector Model-RSA 已完成 A0/A1/A2：构建 pair-level semantic relation-vector model RDM，并在三套 ROI 中检验 pre/post neural geometry 与该模型的关系。两个 searchlight 使用 `--reuse-subject-maps`，复用既有 subject-level `.nii.gz`，刷新 group-level permutation/FWE、peak table、QC 和图。gPPI 本轮执行 `export_gppi_summary.py`，基于既有 raw gPPI 结果刷新 summary 表。
+当前正式 ROI 范围为三套：`main_functional`、`literature`、`literature_spatial`。本轮已基于最新代码重跑 Step 5C RSA、RSA LMM、Model-RSA、Delta-rho LMM、item-level brain-behavior、S1 机制到行为预测、representational connectivity、robustness suite 和 noise ceiling。新增 A 阶段 relation-vector Model-RSA 已完成 A0/A1/A2：构建 pair-level semantic relation-vector model RDM，并在三套 ROI 中检验 pre/post neural geometry 与该模型的关系。2026-05-03 继续完成 A++ learned-edge specificity、single-word stability、A3 YY-KJ relation decoupling contrast、A4 Step5C/A++ × relation-vector conjunction、A5 network-level dissociation。两个 searchlight 使用 `--reuse-subject-maps`，复用既有 subject-level `.nii.gz`，刷新 group-level permutation/FWE、peak table、QC 和图。gPPI 本轮执行 `export_gppi_summary.py`，基于既有 raw gPPI 结果刷新 summary 表。
 
 `Step 5C RSA` 三套 ROI set 均完成，failed cell 与 incomplete cell 均为 0。
 
@@ -28,6 +28,8 @@
 `YY` 条件最终记忆正确率高于 `KJ`：`YY = 0.680`，`KJ = 0.588`，差值 `+0.092`。GEE 模型中，`YY` 相对 `KJ` 的 log-odds 更高，`b = 0.398`, `SE = 0.084`, `z = 4.72`, `p = 2.37e-06`，odds ratio 约 `1.49`。
 
 正确 trial 反应时也显示 `YY` 更快：`YY = 1070.43 ms`，`KJ = 1100.29 ms`，差值约 `-29.86 ms`。`log_rt_correct ~ C(condition)` 模型中，`YY` 的反应时更短，`b = -0.026`, `SE = 0.010`, `z = -2.61`, `p = .009`。
+
+行为图已直接读取模型结果并标注显著性：memory 为 `***`，correct-trial RT 为 `**`。
 
 ![行为正确率和反应时](E:/python_metaphor/paper_outputs/figures_main/fig_behavior_accuracy_rt.png)
 
@@ -63,23 +65,21 @@
 
 Step 5C 使用 pre/post 阶段 LSS beta，在 ROI 内计算 item-wise pattern similarity。对 `YY/KJ`，核心指标是学习 pair 内两个词的 similarity；对 baseline，使用模板中预定义的 `jx` 伪配对作为控制。统计模型为 LMM：`similarity ~ condition * time + (1|subject) + (1|item)`。
 
-三套 ROI 的描述性均值如下。
+旧版文档曾给出同一 ROI set 下跨 ROI 的描述性均值；这只能作为粗略方向检查，不应作为主统计解释。当前主图和派生表已改为单 ROI 展示：每个 ROI 分别给出 `Metaphor`、`Spatial`、`Baseline` 的 `post - pre`，并在 heatmap 中标注该 ROI 的 planned-interaction q。
 
-| ROI set | Condition | Pre | Post | Post - Pre |
-| --- | --- | ---: | ---: | ---: |
-| `main_functional` | Baseline | 0.0885 | 0.1039 | +0.0154 |
-| `main_functional` | Metaphor | 0.1725 | 0.1013 | -0.0712 |
-| `main_functional` | Spatial | 0.1538 | 0.1455 | -0.0083 |
-| `literature` | Baseline | 0.0726 | 0.1025 | +0.0299 |
-| `literature` | Metaphor | 0.1731 | 0.1074 | -0.0657 |
-| `literature` | Spatial | 0.1576 | 0.1694 | +0.0118 |
-| `literature_spatial` | Baseline | 0.0802 | 0.0963 | +0.0161 |
-| `literature_spatial` | Metaphor | 0.1623 | 0.1018 | -0.0605 |
-| `literature_spatial` | Spatial | 0.1480 | 0.1532 | +0.0052 |
+`main_functional` 单 ROI 过程如下。负值表示 post 相似性低于 pre。
 
-`main_functional` 中，`Metaphor × Pre` 在两个 base-contrast family 上均显著：`Spatial_gt_Metaphor` family `b = 0.0768`, `p = 2.15e-13`, planned-interaction q = `8.61e-13`；`Metaphor_gt_Spatial` family `b = 0.1109`, `p = 1.17e-10`, q = `2.34e-10`。单 ROI 层面，7/7 个主功能 ROI 的 `Metaphor × Pre` 通过 planned-interaction FDR。
+| ROI | Metaphor post-pre | Spatial post-pre | Baseline post-pre | Metaphor q |
+| --- | ---: | ---: | ---: | ---: |
+| `Prec-L1` | -0.1102 | -0.0671 | -0.0175 | 0.00158 |
+| `Prec-L2` | -0.0874 | -0.0384 | -0.0208 | 0.0593 |
+| `PHG-R` | -0.0630 | +0.0062 | +0.0263 | 0.000737 |
+| `Fus-L` | -0.0618 | +0.0127 | +0.0130 | 0.000737 |
+| `TP-L2` | -0.0612 | +0.0198 | +0.0526 | 0.000129 |
+| `LOC-L` | -0.0603 | -0.0131 | +0.0001 | 0.0529 |
+| `TP-L1` | -0.0543 | +0.0219 | +0.0537 | 0.000129 |
 
-`literature` 中，12/12 个 ROI 的 `Metaphor × Pre` 通过 FDR，最小 q = `6.36e-06`。`literature_spatial` 中，12/12 个 ROI 的 `Metaphor × Pre` 通过 FDR，最小 q = `1.90e-05`。`Spatial × Pre` 没有形成同等级别的跨 ROI 稳定结果。
+因此 Step 5C 的准确表述是：`main_functional` 中 5/7 个 ROI 的 `Metaphor × Pre` planned interaction 通过 `q < .05`，7/7 个 ROI 达到 `q < .10`；方向均为 `Metaphor` pair similarity 的 pre-to-post 下降。`literature` 与 `literature_spatial` 仍提供独立 ROI set 的稳健性检查，但写作时不应把它们压成“同类 ROI 平均效应”。
 
 ![Step 5C RSA 主图](E:/python_metaphor/paper_outputs/figures_main/fig_step5c_main.png)
 
@@ -92,14 +92,82 @@ Step 5C 使用 pre/post 阶段 LSS beta，在 ROI 内计算 item-wise pattern si
 - [table_rsa_lmm_fdr.tsv](E:/python_metaphor/paper_outputs/tables_si/table_rsa_lmm_fdr.tsv)
 - [table_step5c_condition_summary.tsv](E:/python_metaphor/paper_outputs/figures_main/table_step5c_condition_summary.tsv)
 - [table_step5c_roi_delta.tsv](E:/python_metaphor/paper_outputs/figures_main/table_step5c_roi_delta.tsv)
+- [table_step5c_roi_condition_group.tsv](E:/python_metaphor/paper_outputs/figures_main/table_step5c_roi_condition_group.tsv)
 - [fig_step5c_main.png](E:/python_metaphor/paper_outputs/figures_main/fig_step5c_main.png)
 - [fig_roi_set_robustness.png](E:/python_metaphor/paper_outputs/figures_main/fig_roi_set_robustness.png)
 
-## 6. Model-RSA 机制结果
+### 5.1 Learned relation-edge specificity：训练过的关系边是否特异性分化
+
+A++ 分析直接回到 pre/post 4D pattern 与 ROI mask，比较三类 pair/edge：`YY/KJ` 中真实训练过的 cue-target edge、同一条件内未连接过的 untrained non-edge、以及 baseline 中由模板固定构造的 pseudo-edge。核心指标为 `drop_pre_minus_post = pre - post`；因此正值表示学习后 pair similarity 下降更强。该分析用于回答 Step 5C 的关键解释漏洞：相似性下降是否是 learned relation edge 特异的，而不是所有词之间都同步变散。
+
+QC 通过：`edge_similarity_long.tsv` 共 10416 行，`edge_delta_subject.tsv` 共 5208 行，失败 cell 为 0；edge 计数为 `YY/KJ trained edge = 35`、`YY/KJ untrained non-edge = 2380`、`baseline pseudo-edge = 20`、`baseline untrained non-edge = 760`。主表包含 124 个 primary contrast，其中 `q_bh_primary_family < .05` 的结果为 119 个，`q < .10` 的结果为 124 个。新版脚本额外输出 `edge_process_group.tsv` 和 `edge_contrast_process_components.tsv`，用于显示每个显著比较背后的 pre、post 和 drop 过程值。
+
+最强结果如下：
+
+| ROI set | ROI | Contrast | Mean effect | t | p | q |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `literature_spatial` | `litspat_L_PPC` | `yy_specificity_minus_kj_specificity` | 0.0829 | 6.62 | 4.15e-07 | 1.99e-05 |
+| `literature` | `lit_L_temporal_pole` | `yy_specificity_minus_kj_specificity` | 0.1220 | 6.21 | 1.23e-06 | 3.27e-05 |
+| `literature` | `lit_R_IFG` | `yy_trained_drop_minus_kj_trained_drop` | 0.0967 | 6.04 | 1.89e-06 | 3.27e-05 |
+| `literature` | `lit_L_AG` | `yy_trained_drop_minus_baseline_pseudo_drop` | 0.1042 | 6.01 | 2.04e-06 | 3.27e-05 |
+| `literature` | `lit_L_temporal_pole` | `yy_trained_drop_minus_kj_trained_drop` | 0.1217 | 5.66 | 5.21e-06 | 5.43e-05 |
+| `literature` | `lit_R_temporal_pole` | `yy_specificity_minus_kj_specificity` | 0.1251 | 5.35 | 1.18e-05 | 9.35e-05 |
+
+这些比较背后的过程值显示，核心结果并不是“比较显著但不知道谁在变”。例如在 `litspat_L_PPC` 中，`YY trained edge` 从 `0.1915` 降到 `0.1109`，drop = `0.0806`；`YY untrained non-edge` drop = `0.0293`；`KJ trained edge` 反而略升，drop = `-0.0096`；`KJ untrained non-edge` drop = `0.0221`。在 `lit_L_temporal_pole` 中，`YY trained edge` 从 `0.2191` 降到 `0.1266`，drop = `0.0925`；`YY untrained non-edge` drop = `0.0233`；`KJ trained edge` drop = `-0.0292`。因此这里支持的是训练过的 `YY` 关系边出现更强分化，而不是全部词对同步变散。
+
+海马也已经在这一机制中出现靠前结果：`litspat_L_hippocampus` 的 `YY trained edge` drop = `0.0612`，而 `YY untrained non-edge` drop = `0.0169`、`KJ trained edge` drop = `-0.0105`；`litspat_R_hippocampus` 的 `YY trained edge` drop = `0.0646`，而 `YY untrained non-edge` drop = `0.0163`、`KJ trained edge` drop = `-0.0101`。这支持后续把 hippocampal-binding ROI family 提到更高优先级。
+
+解释上，这一结果比原 Step 5C 更强：`YY` 的 trained edge drop 不仅存在，而且系统性强于 untrained non-edge、`KJ` trained edge 和 baseline pseudo-edge。因此当前主神经结果应从“pair similarity decrease”升级为 **learned-edge differentiation / relation-edge reorganization**。
+
+![Learned-edge specificity](E:/python_metaphor/paper_outputs/figures_main/fig_edge_specificity.png)
+
+源文件：
+- [table_edge_specificity.tsv](E:/python_metaphor/paper_outputs/tables_main/table_edge_specificity.tsv)
+- [table_edge_specificity_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_edge_specificity_full.tsv)
+- [table_edge_process_group.tsv](E:/python_metaphor/paper_outputs/tables_si/table_edge_process_group.tsv)
+- [table_edge_contrast_process_components.tsv](E:/python_metaphor/paper_outputs/tables_si/table_edge_contrast_process_components.tsv)
+- [edge_delta_subject.tsv](E:/python_metaphor/paper_outputs/qc/edge_specificity/edge_delta_subject.tsv)
+- [edge_process_group.tsv](E:/python_metaphor/paper_outputs/qc/edge_specificity/edge_process_group.tsv)
+- [edge_contrast_process_components.tsv](E:/python_metaphor/paper_outputs/qc/edge_specificity/edge_contrast_process_components.tsv)
+- [edge_specificity_group_fdr.tsv](E:/python_metaphor/paper_outputs/qc/edge_specificity/edge_specificity_group_fdr.tsv)
+- [table_edge_specificity_top.tsv](E:/python_metaphor/paper_outputs/figures_main/table_edge_specificity_top.tsv)
+- [fig_edge_specificity.png](E:/python_metaphor/paper_outputs/figures_main/fig_edge_specificity.png)
+
+### 5.2 Word-identity stability control：关系边分化是否只是词身份崩解
+
+single-word stability 分析检验同一词的 pre pattern 与 post pattern 是否仍保持可识别的相似性，并同时计算每个词相对其他词的 neighborhood similarity change。该分析的作用是排除一个弱解释：如果 pair similarity 下降只是因为整体信号变差、词身份崩解或噪声上升，那么 same-word pre-post stability 不应保持。
+
+QC 通过：`word_stability_long.tsv` 共 156240 行，subject-level 汇总 2604 行，失败 cell 为 0。主表 93 行中，`mean_same_word_stability` 有 47/93 个 ROI × condition cell 通过 `q_bh_primary_family < .05`；neighborhood change 只有少数 cell 通过 FDR，且不呈现稳定的 YY 特异模式。
+
+最强 same-word stability 结果如下：
+
+| ROI set | ROI | Condition | Metric | Mean effect | p | q |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `literature_spatial` | `litspat_L_PPC` | YY | `mean_same_word_stability` | 0.0401 | 3.7e-05 | 0.00072 |
+| `literature_spatial` | `litspat_L_precuneus` | YY | `mean_same_word_stability` | 0.0494 | 4.0e-05 | 0.00072 |
+| `literature_spatial` | `litspat_R_PPC` | YY | `mean_same_word_stability` | 0.0276 | 9.3e-05 | 0.00112 |
+| `literature_spatial` | `litspat_R_precuneus` | YY | `mean_same_word_stability` | 0.0445 | 1.48e-04 | 0.00133 |
+| `literature` | `lit_L_precuneus` | YY | `mean_same_word_stability` | 0.0494 | 4.0e-05 | 0.00144 |
+
+解释上，single-word identity 与 learned-edge differentiation 可以共存：词本身在 pre/post 之间仍有可检测稳定性，但训练过的 `YY` relation edge 出现更强分化。因此当前结果不宜解释为“整体表征质量下降”，而更适合解释为学习诱发的关系边重组。
+
+![Single-word stability](E:/python_metaphor/paper_outputs/figures_main/fig_word_stability.png)
+
+源文件：
+- [table_word_stability.tsv](E:/python_metaphor/paper_outputs/tables_main/table_word_stability.tsv)
+- [table_word_stability_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_word_stability_full.tsv)
+- [word_stability_long.tsv](E:/python_metaphor/paper_outputs/qc/word_stability/word_stability_long.tsv)
+- [word_stability_group_fdr.tsv](E:/python_metaphor/paper_outputs/qc/word_stability/word_stability_group_fdr.tsv)
+- [table_word_stability_top.tsv](E:/python_metaphor/paper_outputs/figures_main/table_word_stability_top.tsv)
+- [fig_word_stability.png](E:/python_metaphor/paper_outputs/figures_main/fig_word_stability.png)
+
+## 6. Model-RSA 机制结果：神经 RDM 对应哪类理论结构
 
 ### 6.1 既有机制 Model-RSA
 
-Model-RSA 用于检验神经 RDM 的变化与不同机制模型的对应关系。当前 primary models 为 `M3_embedding` 与 `M8_reverse_pair`，control/secondary 模型包括 `M1_condition`、`M2_pair`、`M7_binary`、`M7_continuous_confidence`。
+Model-RSA 用于检验神经 RDM 的变化与不同机制模型的对应关系。这里的 RDM 不是单纯“跑模型”，而是把不同理论解释转成 item/pair 间距离矩阵，再检验 neural geometry 是否向这些结构靠近或远离。
+
+当前模型的理论含义如下：`M1_condition` 是条件身份模型，检验神经结构是否主要按 `YY/KJ/baseline` 分类；`M2_pair` 是词对身份模型，检验是否只是记住具体 pair；`M3_embedding` 是通用语义 embedding 模型，代表刺激在一般语义空间中的距离；`M7_binary` 与 `M7_continuous_confidence` 是记忆/信心相关模型，检验表征变化是否可由后续记忆强度解释；`M8_reverse_pair` 是反向/重组关系模型，检验学习后是否形成与原始 pair 方向不同的关系结构。当前 primary models 为 `M3_embedding` 与 `M8_reverse_pair`，其余模型作为 control/secondary。
 
 `literature` 中，左 IFG 的 `M8_reverse_pair` 是最强 primary 结果：`t = 3.47`, `p = .00179`, `q_bh_primary_family = .0429`；在更宽的全 model family 中，`q_bh_model_family = .0643`。`main_functional` 中，`Spatial_gt_Metaphor_c02_Precuneus` 的 `M8_reverse_pair` 为 `t = 3.06`, `p = .00494`, `q_bh_primary_family = .0691`；左颞极 c01 的 `M3_embedding` 为 `t = -2.74`, `p = .0107`, `q_bh_primary_family = .0751`。`literature_spatial` 中没有 primary model 通过 FDR，最小 `q_bh_primary_family = .596`。
 
@@ -117,7 +185,7 @@ Delta-rho LMM 中，`main_functional` 总模型的 `M3_embedding` 相对 `M1_con
 - [delta_rho_lmm_params.tsv: literature_spatial](E:/python_metaphor/paper_outputs/tables_si/delta_rho_lmm/literature_spatial/delta_rho_lmm_params.tsv)
 - [fig_model_rsa_mechanism.png](E:/python_metaphor/paper_outputs/figures_main/fig_model_rsa_mechanism.png)
 
-### 6.2 新增 relation-vector Model-RSA（A 阶段）
+### 6.2 Semantic relation-vector Model-RSA：关系向量几何是否被学习重排
 
 A 阶段进一步把机制问题从“哪个已有模型更好”推进到 pair-level relation geometry。A0 使用 embedding 中的 `target - cue` 向量为每个学习 pair 构建 relation-vector model RDM；A1 在 ROI 内计算 pre/post neural RDM 与这些模型 RDM 的 Spearman 相关；A2 汇总主机制图与 top 表。由于 pre/post pattern 是 cue 与 target 分离的 word-level pattern，A 阶段的 neural relation-vector 使用 `target pattern - cue pattern`，并同时检查 pair centroid 作为补充 neural RDM。
 
@@ -147,6 +215,87 @@ QC 完整通过：`main_functional` 为 `784/784` cells ok，`literature` 为 `1
 - [table_relation_vector_rsa_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_relation_vector_rsa_full.tsv)
 - [table_relation_vector_rsa_top.tsv](E:/python_metaphor/paper_outputs/figures_main/table_relation_vector_rsa_top.tsv)
 - [fig_relation_vector_rsa.png](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_rsa.png)
+
+### 6.3 A3：YY-KJ relation decoupling contrast
+
+A3 进一步检验 relation-vector realignment 是否是 `YY` 相对 `KJ` 更强。指标定义为：
+
+```text
+yy_minus_kj_decoupling = (pre - post relation fit in YY) - (pre - post relation fit in KJ)
+```
+
+因此正值表示 `YY` 的 relation-vector decoupling 强于 `KJ`；负值表示 `KJ` 更强。结果没有支持原先的 `YY > KJ` 假设。primary relation-vector 结果中有 3/62 个通过 `q_bh_primary_family < .05`，但方向全部为负，即 `KJ > YY decoupling`。
+
+| ROI set | ROI | Model | YY - KJ decoupling | t | p | q |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `literature` | `lit_R_temporal_pole` | `M9_relation_vector_abs` | -0.0746 | -3.87 | 0.00063 | 0.0151 |
+| `main_functional` | `func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort` | `M9_relation_vector_abs` | -0.0479 | -3.53 | 0.00152 | 0.0213 |
+| `literature_spatial` | `litspat_L_OPA` | `M9_relation_vector_abs` | -0.0513 | -3.72 | 0.00094 | 0.0224 |
+
+解释上，A3 说明 relation-vector decoupling 不是强 YY 特异机制；它更像一般关系学习或空间/情境关系学习也会发生的 realignment。这个结果不推翻 A++ 的 learned-edge specificity，但要求写作时把“YY 的 pair-level differentiation”和“relation-vector realignment 的条件方向”分开。
+
+![Relation-vector condition contrast](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_condition_contrast.png)
+
+源文件：
+- [table_relation_vector_condition_contrast.tsv](E:/python_metaphor/paper_outputs/tables_main/table_relation_vector_condition_contrast.tsv)
+- [table_relation_vector_condition_contrast_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_relation_vector_condition_contrast_full.tsv)
+- [relation_vector_condition_contrast_subject.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_contrast/relation_vector_condition_contrast_subject.tsv)
+- [relation_vector_condition_contrast_group_fdr.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_contrast/relation_vector_condition_contrast_group_fdr.tsv)
+- [fig_relation_vector_condition_contrast.png](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_condition_contrast.png)
+
+### 6.4 A4：Step5C/A++ 与 relation-vector conjunction
+
+A4 将 pair differentiation evidence 与 A3 的 relation-vector condition contrast 按 ROI 对齐。pair evidence 同时纳入两类来源：A++ edge specificity，以及原 Step5C 的 `Metaphor` drop 相对 `Spatial/Baseline` 的条件差。conjunction 分类显式保留方向：
+
+- `yy_pair_and_yy_relation`：pair evidence 为正且显著，同时 relation decoupling 也为 `YY > KJ`。
+- `yy_pair_kj_relation_dissociation`：pair evidence 为正且显著，但 relation decoupling 为 `KJ > YY`。
+- `yy_pair_only`：pair evidence 显著，但 relation contrast 不显著。
+
+主表包含 278 行，其中 `yy_pair_only = 263`，`yy_pair_kj_relation_dissociation = 15`；没有出现稳定的 `yy_pair_and_yy_relation`。最靠前的解离结果如下：
+
+| Class | Pair source | ROI set | ROI | Pair contrast | Relation model | Pair effect | Pair q | Relation effect | Relation q |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| `yy_pair_kj_relation_dissociation` | Step5C | `main_functional` | `func_Metaphor_gt_Spatial_c01_Temporal_Pole_HO_cort` | `step5c_metaphor_drop_minus_baseline_drop` | `M9_relation_vector_abs` | 0.1080 | 0.000086 | -0.0479 | 0.0213 |
+| `yy_pair_kj_relation_dissociation` | edge specificity | `literature` | `lit_R_temporal_pole` | `yy_specificity_minus_kj_specificity` | `M9_relation_vector_abs` | 0.1251 | 0.000093 | -0.0746 | 0.0151 |
+| `yy_pair_kj_relation_dissociation` | edge specificity | `literature` | `lit_R_temporal_pole` | `yy_trained_drop_minus_baseline_pseudo_drop` | `M9_relation_vector_abs` | 0.1169 | 0.000162 | -0.0746 | 0.0151 |
+| `yy_pair_kj_relation_dissociation` | edge specificity | `literature` | `lit_R_temporal_pole` | `yy_trained_drop_minus_untrained_nonedge_drop` | `M9_relation_vector_abs` | 0.0650 | 0.000217 | -0.0746 | 0.0151 |
+
+解释上，A4 的主结论不是“同一 ROI 同时支持 YY pair 与 YY relation-vector decoupling”，而是更有边界感的解离：YY 的 learned-edge differentiation 很强，但 relation-vector condition contrast 在若干重叠 ROI 中偏向 `KJ > YY`。因此 relation-vector 结果适合作为 relation realignment 的补充与边界，而不应写成 YY 特异的核心机制。
+
+![Relation Step5C conjunction](E:/python_metaphor/paper_outputs/figures_main/fig_relation_step5c_conjunction.png)
+
+源文件：
+- [table_relation_step5c_conjunction.tsv](E:/python_metaphor/paper_outputs/tables_main/table_relation_step5c_conjunction.tsv)
+- [table_relation_step5c_conjunction_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_relation_step5c_conjunction_full.tsv)
+- [relation_step5c_conjunction.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_conjunction/relation_step5c_conjunction.tsv)
+- [pair_evidence_for_conjunction.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_conjunction/pair_evidence_for_conjunction.tsv)
+- [table_relation_step5c_conjunction_top.tsv](E:/python_metaphor/paper_outputs/figures_main/table_relation_step5c_conjunction_top.tsv)
+- [fig_relation_step5c_conjunction.png](E:/python_metaphor/paper_outputs/figures_main/fig_relation_step5c_conjunction.png)
+
+### 6.5 A5：network-level dissociation
+
+A5 将 relation-vector subject metrics 聚合到理论 network 层面，检验 `condition × network` 分工。网络包括 `semantic_metaphor`、`spatial_context`、`hippocampus_core`、`main_metaphor_functional` 和 `main_spatial_functional`。主指标仍为 `YY - KJ decoupling`，正值表示 `YY > KJ`，负值表示 `KJ > YY`。LMM 输出中，`M9_relation_vector_direct` 使用 subject + ROI variance component；`M9_relation_vector_abs` 因 ROI variance component singular，降级为 subject random-intercept model，并在参数表中记录 `fit_method`。
+
+network-level condition contrast 中，`M9_relation_vector_abs` 有多个网络呈显著负向，即 `KJ > YY`：
+
+| Analysis | Network / contrast | Model | Mean effect | p | q |
+| --- | --- | --- | ---: | ---: | ---: |
+| network condition contrast | `main_metaphor_functional` | `M9_relation_vector_abs` | -0.0328 | 0.00877 | 0.0248 |
+| network condition contrast | `semantic_metaphor` | `M9_relation_vector_abs` | -0.0240 | 0.00991 | 0.0248 |
+| network condition contrast | `spatial_context` | `M9_relation_vector_abs` | -0.0252 | 0.0179 | 0.0298 |
+| network condition contrast | `hippocampus_core` | `M9_relation_vector_abs` | -0.0230 | 0.0686 | 0.0857 |
+
+但 planned network-difference contrasts 没有显著结果；例如 `semantic_minus_spatial` 在 `M9_relation_vector_abs` 中 mean = 0.00120, q = 0.943；`main_metaphor_minus_main_spatial` mean = -0.0184, q = 0.731。因此 A5 不支持稳定的 semantic/metaphor vs spatial/context `condition × network` 分工。它进一步支持 A3/A4 的修订结论：relation-vector realignment 是任务相关/关系学习相关的补充线索，但不是当前数据中最强的 YY 特异机制。
+
+![Relation-vector network dissociation](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_network_dissociation.png)
+
+源文件：
+- [table_relation_vector_network_dissociation.tsv](E:/python_metaphor/paper_outputs/tables_main/table_relation_vector_network_dissociation.tsv)
+- [table_relation_vector_network_dissociation_full.tsv](E:/python_metaphor/paper_outputs/tables_si/table_relation_vector_network_dissociation_full.tsv)
+- [relation_vector_network_long.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_network/relation_vector_network_long.tsv)
+- [relation_vector_network_lmm_params.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_network/relation_vector_network_lmm_params.tsv)
+- [relation_vector_network_planned_contrast_group.tsv](E:/python_metaphor/paper_outputs/qc/relation_vector_network/relation_vector_network_planned_contrast_group.tsv)
+- [fig_relation_vector_network_dissociation.png](E:/python_metaphor/paper_outputs/figures_main/fig_relation_vector_network_dissociation.png)
 
 ## 7. 脑-行为分析
 
@@ -280,6 +429,10 @@ ROI-level RD/GPS 当前作为补充分析。RD 结果总体为阴性，没有提
 
 学习动态结果当前作为学习阶段过程补充。已有图包括 `main_functional` 与 `literature` 两套 ROI 的 repeated-exposure 表征动态。
 
+新增 relation-vector learning trajectory（C 阶段）检验 run3 到 run4 的 pair-pattern RDM 是否逐步贴近 relation-vector model RDM。QC 通过：3472/3472 window cells 均为 ok，failure 文件为空。primary relation-vector learning trajectory 没有通过 primary-family FDR；最接近的候选为 `literature_spatial/litspat_L_RSC/YY/M9_relation_vector_direct`，run4 - run3 = 0.0296, p = 0.0567, q = 0.537；以及 `literature_spatial/litspat_L_hippocampus/YY/M9_relation_vector_abs`，run4 - run3 = -0.0267, p = 0.0682, q = 0.537。因此 C 阶段不能支持“relation geometry 在学习过程中逐步形成”的强主张，更适合作为边界结果：pre/post 表征重组明确，但 run3/run4 pair-pattern trajectory 没有稳定捕捉同一机制。
+
+run7 retrieval geometry 当前尚未进入结果，因为数据检查显示 `pattern_root` 只包含 pre/post/learn patterns，`lss_betas_final/lss_metadata_index_final.csv` 只包含 run 1/2/5/6 与 Pre/Post；虽然 run7 行为表存在，但暂未发现可直接用于 retrieval-stage RSA 的 run7 神经 pattern。后续若定位或生成 run7 LSS/pattern 后，再补 `retrieval_pair_similarity.py` 与 retrieval success prediction。
+
 ![Learning dynamics main_functional](E:/python_metaphor/paper_outputs/figures_main/fig_learning_dynamics_main_functional.png)
 
 ![Learning dynamics literature](E:/python_metaphor/paper_outputs/figures_main/fig_learning_dynamics_literature.png)
@@ -293,8 +446,12 @@ ROI-level RD/GPS 当前作为补充分析。RD 结果总体为阴性，没有提
 - [fig_rd_gps_literature.png](E:/python_metaphor/paper_outputs/figures_si/fig_rd_gps_literature.png)
 - [table_learning_repeated_exposure_main_functional.tsv](E:/python_metaphor/paper_outputs/tables_main/table_learning_repeated_exposure_main_functional.tsv)
 - [table_learning_repeated_exposure_literature.tsv](E:/python_metaphor/paper_outputs/tables_main/table_learning_repeated_exposure_literature.tsv)
+- [table_relation_learning_dynamics.tsv](E:/python_metaphor/paper_outputs/tables_main/table_relation_learning_dynamics.tsv)
+- [relation_learning_group_summary_fdr.tsv](E:/python_metaphor/paper_outputs/qc/relation_learning_dynamics/relation_learning_group_summary_fdr.tsv)
+- [relation_learning_dynamics_long.tsv](E:/python_metaphor/paper_outputs/qc/relation_learning_dynamics/relation_learning_dynamics_long.tsv)
 - [fig_learning_dynamics_main_functional.png](E:/python_metaphor/paper_outputs/figures_main/fig_learning_dynamics_main_functional.png)
 - [fig_learning_dynamics_literature.png](E:/python_metaphor/paper_outputs/figures_main/fig_learning_dynamics_literature.png)
+- [fig_relation_learning_dynamics.png](E:/python_metaphor/paper_outputs/figures_main/fig_relation_learning_dynamics.png)
 
 ## 13. 当前结果一页概览
 
@@ -302,11 +459,17 @@ ROI-level RD/GPS 当前作为补充分析。RD 结果总体为阴性，没有提
 | --- | --- |
 | 行为 | `YY` 最终记忆正确率高于 `KJ`，正确 trial 反应更快 |
 | 学习 GLM | `Metaphor > Spatial` 定位左前颞/颞极；`Spatial > Metaphor` 定位后部视觉-顶叶-内侧颞网络 |
-| ROI-level RSA | 三套 ROI 中 `YY/Metaphor` 均表现出稳定 post-pre pair similarity 下降；`KJ` 与 baseline 不呈现同等下降 |
-| Model-RSA | 既有机制模型中 `literature` 左 IFG 的 `M8_reverse_pair` 在 primary-family 内显著；新增 relation-vector Model-RSA 出现 11 个 primary-family FDR 显著结果，主要表现为 post-pre relation-vector alignment 下降，支持 relation geometry realignment/decoupling 而非简单 alignment 增强 |
+| ROI-level RSA | 已改为单 ROI 展示；`main_functional` 中 5/7 个 ROI 的 `Metaphor × Pre` 过 `q < .05`，7/7 个到 `q < .10`，方向均为 `Metaphor` pair similarity 下降 |
+| Learned relation-edge specificity | `YY` trained edge 的 pre-post similarity drop 显著强于 untrained non-edge、`KJ` trained edge 与 baseline pseudo-edge；过程表显示主要来自 `YY trained edge` 明确下降，而不是所有 non-edge 同步下降 |
+| Word-identity stability control | same-word pre-post stability 在 47/93 个 ROI × condition cell 中通过 FDR；说明 pair/edge 分化并非简单整体噪声或词身份崩解 |
+| Model-RSA | 已补充各 RDM 模型理论含义；既有机制模型中 `literature` 左 IFG 的 `M8_reverse_pair` 在 primary-family 内显著；relation-vector Model-RSA 支持 relation geometry realignment/decoupling 而非简单 alignment 增强 |
+| YY-KJ relation-vector contrast | 不支持 `YY > KJ` relation decoupling；3 个 primary relation-vector 结果通过 FDR，但均为负向，即 `KJ > YY` |
+| Pair evidence × relation-vector conjunction | 没有稳定的 `YY pair + YY relation` 同向 conjunction；主要为 `YY pair only` 和少量 `YY pair + KJ relation` 解离 |
+| Network-level relation-vector dissociation | `M9_relation_vector_abs` 在多个 network 中呈 `KJ > YY` 条件差，但 planned condition × network contrast 不显著；不支持语义网络 vs 空间网络的强分工 |
 | Item-level 脑-行为 | memory accuracy 的局部候选主要集中在 `Spatial/KJ`；没有形成强 YY item-level accuracy coupling |
 | S1 机制预测行为 | 无 FDR 校正后显著结果；最佳候选为 `literature_spatial` 左 RSC 的 `M8_reverse_pair` 预测 `YY - KJ` retrieval efficiency |
 | Searchlight | pair-similarity searchlight 中 `YY` 有 FWE 显著下降；`KJ` 无 FWE 显著；RD searchlight 阴性 |
 | Representational connectivity | 六个 planned scope 均不显著 |
 | gPPI | 六个 planned `yy_minus_kj` scope 主检验均不显著 |
 | Robustness / ceiling | Step 5C 主 RSA 效应 bootstrap、LOSO、split-half 支持方向稳定；noise ceiling 处于可解释范围 |
+| Learning trajectory / retrieval | run3/run4 relation-vector trajectory 未通过 FDR；run7 retrieval 神经 pattern 尚未定位，当前只能使用 run7 行为，不能做 retrieval-stage RSA |

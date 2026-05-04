@@ -2,24 +2,104 @@
 
 最后更新：2026-05-03
 
-本文档是在当前 `result_new.md` 阶段性结果基础上，为冲击 PNAS 目标制定的新分析路线。核心判断是：当前结果已经形成稳定主线，但还缺少一个足够有解释力的计算机制。下一步不应继续单纯围绕 `post - pre pair similarity` 下降重复扩展，而应把主效应升级为“创造性关系学习如何重塑语义关系几何”的机制故事。
+本文档是在当前 `result_new.md` 阶段性结果基础上，为冲击 PNAS 目标制定的新分析路线。2026-05-03 与老师沟通后，总路线需要做一次关键修正：后续不再使用学习阶段 GLM 定位出的 `main_functional` ROI 作为重点研究对象，也不再把结果写成三层 ROI 分析。主分析应直接参考外部元分析网站/数据库定义隐喻与空间的先验脑区，建立独立 meta-analysis masks，并用这套 meta ROI 贯穿后续全部 RSA、edge specificity、Model-RSA、脑-行为和连接分析。
 
 ## 0. 当前出发点
 
-当前最稳的结果链条：
+当前最稳的结果链条需要重新表述为“待用独立 meta ROI 验证的候选结果”，而不是直接作为最终主结论：
 
 - 行为层：`YY` 相比 `KJ` 有更好的最终记忆/提取表现，且正确 trial 反应更快。
-- 神经表征层：三套 ROI 中 `YY/Metaphor` 均表现出稳定的 pre-to-post pair similarity 下降，`KJ` 与 baseline 不呈现同等下降。
+- 神经表征层：旧三套 ROI 中 `YY/Metaphor` 均表现出稳定的 pre-to-post pair similarity 下降，`KJ` 与 baseline 不呈现同等下降；但其中 `main_functional` 来自本数据学习阶段 GLM，不能继续作为主分析 ROI。
 - 稳健性层：bootstrap、LOSO、split-half 与 noise ceiling 支持 Step 5C 主效应方向稳定。
 - 边界层：Model-RSA、item-level 脑-行为、S1、representational connectivity、gPPI 当前较弱或阴性。
 
 当前主要限制：
 
+- ROI 选择需要独立化：`main_functional` 由本数据 `Metaphor > Spatial` / `Spatial > Metaphor` 学习阶段 GLM 得到，存在 circularity/双重使用风险，应从主文 ROI 体系中移出。
+- 结果结构需要简化：不再写 `main_functional`、`literature`、`literature_spatial` 三层并列。主文改成一套外部 meta-analysis ROI library，内部区分 `meta_metaphor` 与 `meta_spatial` 两个 domain/network。
 - Model-RSA 主要只有 `M3_embedding` 与 `M8_reverse_pair` 两类核心模型，机制空间偏窄。
 - 后续脑-行为与网络分析过度围绕 `post - pre similarity` 下降展开，容易只重复主效应，而不是发现新的机制。
 - 当前故事可以支持“隐喻学习诱发表征重组/分化”，但还不足以强写“发现了隐喻学习的计算机制”。
 
-## 1. 推荐总路线
+## 1. 老师沟通后的 ROI 总原则：Meta-ROI first
+
+新的分析优先级是：
+
+```text
+外部元分析网站/数据库定义 ROI
+-> 建立 meta_metaphor 与 meta_spatial masks
+-> 用同一套 meta ROI 重跑所有主分析
+-> 学习阶段 GLM 只保留为定位描述或 sensitivity，不再作为主 ROI
+```
+
+推荐外部来源：
+
+- `Neurosynth` term/topic meta-analysis：优先下载 association test map，因为它更偏“该 term 特异相关”的区域，而不是所有任务都常见激活的区域。2026-05-03 实际检查发现 Neurosynth 没有可用的 `metaphor` / `figurative` term analysis，因此不能把 `meta_metaphor` 写成“Neurosynth metaphor map”；当前采用 `semantic`、`semantics`、`semantic memory`、`language comprehension`、`abstract` 的 association maps 作为隐喻语义-语言网络先验，再与当前显著 ROI 取交集。
+- `NeuroQuery`：作为第二来源或交叉验证，可用于更自然的 query，例如 `metaphor comprehension`、`spatial navigation`、`spatial memory`。
+- 发表过的 metaphor ALE/MACM 或空间认知 meta-analysis：作为人工核对和命名依据，不直接用本数据结果决定 ROI。
+
+主 ROI set 建议改为：
+
+| 新 ROI set | 来源 | 角色 |
+| --- | --- | --- |
+| `meta_metaphor` | Neurosynth/NeuroQuery/metaphor meta-analysis | 主文隐喻/语义先验 ROI |
+| `meta_spatial` | Neurosynth/NeuroQuery/spatial/navigation meta-analysis | 主文空间/情境先验 ROI |
+| `main_functional` | 本数据学习阶段 GLM | 保留为本数据参考 / historical sensitivity，不进入主文主 ROI 结论 |
+
+海马不再单独写成第三套主 ROI set，而是作为 `meta_spatial` 内部的高优先级 hippocampal-binding subfamily：它的来源仍应是 external spatial memory / navigation / hippocampus meta-analysis 或解剖 atlas；当前结果只用于证明它值得被重点汇总。
+
+2026-05-03 已完成第一版交集筛选并生成 masks：
+- `meta_metaphor`：L/R IFG、L/R temporal pole/ATL、L/R AG、L/R pMTG/pSTS，共 8 个 ROI。
+- `meta_spatial`：L/R hippocampus、L/R PPA/PHG、L/R RSC/PCC、L/R PPC/SPL、L/R precuneus，共 10 个 ROI。
+- OPA/LOC、dmPFC/MFG 暂不进主 mask，保留为 backup/SI；原因是它们容易扩大视觉或抽象控制范围，且不是当前 learned-edge 主故事的必要节点。
+- 正式 peak 表：`E:/python_metaphor/roi_library/meta_sources/meta_roi_peaks.tsv`；可追踪副本：`roi_management/meta_roi_peaks_curated.tsv`。
+
+mask 构建原则：
+
+- 优先使用元分析 association map 的阈值化连通簇或 peak sphere，记录 term/query、map 类型、阈值、peak 坐标、cluster 大小和下载日期。
+- 若网站只提供图或 peak table，则用 MNI peak 建 `6-8 mm` sphere；相邻 sphere 重叠时合并或按最近 peak 分配。
+- 每个 ROI 必须有外部来源字段：`meta_source`、`term_or_query`、`map_type`、`peak_mni`、`threshold`、`source_url`、`download_date`。
+- 同一分析只在 meta ROI 内做 FDR；不要再把 GLM ROI 与 meta ROI 混在同一个主 family 中。
+
+### 1.1 ROI 取交集原则：外部先验 × 当前可检测信号
+
+老师的新建议不是“把 Neurosynth/NeuroQuery 所有区域都加进来”，也不是“只保留当前显著 ROI”。更稳妥的 planned ROI 定义应是二者交集：
+
+```text
+planned ROI = external_meta_supported_region ∩ current_effect_supported_region
+```
+
+其中：
+
+- `external_meta_supported_region`：来自 Neurosynth/NeuroQuery/published meta-analysis 的隐喻或空间脑区。
+- `current_effect_supported_region`：当前 Step5C、learned-edge specificity、word stability、relation-vector 或 searchlight 中有稳定方向/显著信号，或旧师兄结果提供强 hypothesis 的脑区。
+- `intersection` 不一定要求 voxel-level 重叠；更实际的单位是 anatomical/theoretical region，例如 left IFG、temporal pole、AG、hippocampus、PPC。
+
+推荐先建一个 ROI 证据矩阵：
+
+| Region | External metaphor | External spatial | Current Step5C | Current edge | Current relation/RDM | Theory role | Decision |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| L/R temporal pole / ATL | high | low | high | high | medium | semantic hub / metaphor integration | planned metaphor |
+| L/R IFG | high | low | high | high | low-medium | semantic control / selection | planned metaphor |
+| L/R AG / IPL | high-medium | medium | high | high | low | combinatorial semantics / integration | planned metaphor, watch spatial overlap |
+| pMTG / pSTS | high-medium | low | high | medium | medium | lexical-semantic / discourse interface | planned metaphor or backup |
+| Hippocampus | low for metaphor, high for spatial memory/navigation | high | high | high | weak-medium | relational binding / memory map | planned hippocampal-binding |
+| PPC / superior parietal | medium | high | high | high | weak | spatial attention / relation layout | planned spatial |
+| PPA/PHG | low-medium | high | high | medium | medium | scene/context representation | planned spatial/binding |
+| RSC/PCC/precuneus | medium | high | high | mixed | weak-medium | context / default-memory / reference frame | planned spatial/binding or backup |
+| OPA/LOC | low | high | medium | medium | medium | environmental boundary / visual-spatial | backup unless external peak strong |
+| dmPFC/MFG | possible in metaphor meta | low | not well covered/current weak | weak | weak | abstract integration/control | backup, add only if external map strongly supports |
+
+Decision 规则：
+
+- `planned`：外部元分析支持强，当前结果至少一个主机制表有方向一致信号。
+- `backup`：外部支持强但当前信号弱，或当前强但外部支持不够特异。
+- `drop/defer`：外部和当前结果都弱，或只由本数据 GLM 支持。
+- 海马应作为 `meta_spatial` 中的 planned hippocampal-binding subfamily，而不是另起第三套主 ROI：它外部空间/记忆支持强，当前 learned-edge specificity 也已经靠前。
+
+这样能避免 ROI 太大、FDR 太重、叙事发散；主文只写 6-10 个 planned ROI/subfamily，backup ROI 放 SI 或 sensitivity。
+
+## 2. 推荐总路线
 
 主攻方案：
 
@@ -48,19 +128,20 @@ PNAS 目标叙事：
 - 新增工程量可控：可复用现有 `pattern_root`、ROI masks、`model_rdm_comparison.py`、`brain_behavior` 与 learning dynamics 框架。
 - 比“语义认知地图”方案更高效，不需要立刻重建完整 manifold / graph / community 分析。
 
-## 2. 分析包结构
+## 3. 分析包结构
 
-推荐把下一轮分析拆成三个相互支撑的核心包，并把师兄旧探索中可参考的方法收敛为两个 legacy-informed 补充包：
+三层分析取消。下一轮不再把 `main_functional`、`literature`、`literature_spatial` 作为并列层级，而是围绕一套独立 meta ROI 做同一组分析。推荐把分析拆成以下包：
 
 | 包 | 目标 | 论文角色 |
 | --- | --- | --- |
-| A. Relation-vector Model-RSA | 检验神经 RDM 是否编码 cue-to-target 关系方向 | 主机制 |
-| B. Relation geometry -> behavior | 检验关系几何是否预测最终记忆或 YY-KJ 行为差异 | 脑-行为桥接 |
-| C. Learning-stage trajectory | 检验关系几何是否在学习阶段逐步形成 | 过程证据 |
-| D. Cross-stage reinstatement / RDM stability | 吸收师兄 `cross_similarity` / `cross_RDM` 思路，检验学习期表征是否延续到 post/retrieval | 过程与稳健性补充 |
-| E. Legacy network confirmation | 吸收师兄 whole-brain gPPI / beta-series connectivity 的强线索，聚焦左海马-PCC/Precuneus/AG-IFG 网络 | 探索性网络补充 |
+| P0. Meta-ROI library | 从元分析网站/论文建立 `meta_metaphor`、`meta_spatial` masks | 新主分析前提 |
+| A. Learned-edge specificity | 在 meta ROI 中检验 trained edge 是否相对 non-edge / baseline 更强分化 | 当前最强主机制 |
+| B. Step5C ROI-level RSA | 在 meta ROI 中逐 ROI 验证 `YY/Metaphor` pre-post pair similarity 下降 | 主效应 |
+| C. Relation-vector Model-RSA | 检验神经 RDM 是否编码或脱耦 cue-to-target 关系方向 | 机制补充 |
+| D. Behavior bridge | 检验 edge/relation 指标是否预测最终记忆或 YY-KJ 行为差异 | 脑-行为桥接 |
+| E. Cross-stage / network supplements | 吸收师兄 cross-stage similarity/RDM 与 left-HPC network 线索 | SI/探索性补充 |
 
-原始最小可行版本设想为完成 A + B；若 C 也支持，PNAS 叙事会明显增强。基于 2026-05-02 的实际执行结果，A 已经提供新增机制线索，但 B/C 未形成强支持，因此当前优先级已调整为 A+ 深挖。
+最小可行版本应是：先完成 P0 meta ROI library，再在 `meta_metaphor + meta_spatial` 上重跑 Step5C 与 learned-edge specificity。只有 meta ROI 复现了 learned-edge differentiation，relation-vector、network 和 legacy analyses 才有主文价值。
 
 ### 2.1 2026-05-02 执行后修订判断
 
@@ -85,10 +166,10 @@ A 已成立但需解释清楚
 - YY 相对 KJ 的 relation decoupling 是否更强？
 - 哪些 ROI 同时表现出 Step5C pair differentiation 和 A relation decoupling？
 - relation decoupling 是否呈现 semantic/metaphor network 与 spatial/context network 的分工？
-- hippocampus 是否作为 relation binding / memory-binding 节点参与 YY 的 learned-edge differentiation 与 retrieval reinstatement？当前 `literature_spatial` 已含左右 hippocampus，应优先单独汇总，而不是先盲目新增 mask。
+- hippocampus 是否作为 relation binding / memory-binding 节点参与 YY 的 learned-edge differentiation 与 retrieval reinstatement？新版应把左右 hippocampus 放入 `meta_spatial` 的 planned subfamily 中单独汇总；旧 `literature_spatial` 结果只作为参考线索。
 - 师兄旧结果中较好的 left hippocampus gPPI 与 cross-stage similarity 是否能在当前 QC/FDR 口径下作为 SI 机制补充，而不是另起一条主线？
 
-## 3. 分析 A：Relation-vector Model-RSA
+## 4. 分析 A：Relation-vector Model-RSA
 
 ### 3.1 理论问题
 
@@ -670,7 +751,7 @@ paper_outputs/figures_si/fig_cross_stage_rdm_stability.png
 - `H:\metaphor\BSC\seed_to_voxel_correlation beta_run34.ipynb`
 - `H:\metaphor\BSC\F_run3\fwe_data_peaks.csv`
 
-师兄最值得保留的网络假设是：学习阶段 `YY > KJ` 时，左海马与 PCC/Precuneus 的 gPPI 耦合增强；旧结果中 run3 left-HPC seed 的主要峰包括 PCC `[6, -38, 6]` 与 Precuneus `[2, -50, 52]`。这条线与“关系学习 / 情景记忆 / 默认网络参与隐喻联结”叙事吻合。由于当前 `literature_spatial` 已经包含 `litspat_L_hippocampus` 和 `litspat_R_hippocampus`，下一步优先不是新增海马 mask，而是把海马从 spatial/context ROI 中单独提升为 hippocampal-binding family 汇总；whole-brain legacy gPPI 仍作为 exploratory confirmation，原因是旧 pipeline seed、contrast、reverse seed 与阈值尝试较多。
+师兄最值得保留的网络假设是：学习阶段 `YY > KJ` 时，左海马与 PCC/Precuneus 的 gPPI 耦合增强；旧结果中 run3 left-HPC seed 的主要峰包括 PCC `[6, -38, 6]` 与 Precuneus `[2, -50, 52]`。这条线与“关系学习 / 情景记忆 / 默认网络参与隐喻联结”叙事吻合。新版不再从旧 `literature_spatial` 直接继承主 ROI，而是在 `meta_spatial` 中用外部 spatial memory / navigation / hippocampus 先验建立左右 hippocampus，并把它单独作为 hippocampal-binding family 汇总；whole-brain legacy gPPI 仍作为 exploratory confirmation，原因是旧 pipeline seed、contrast、reverse seed 与阈值尝试较多。
 
 新版优先做两层：
 
@@ -855,19 +936,32 @@ paper_outputs/figures_main/fig_relation_learning_dynamics.png
 
 ### 第 4 阶段：A+ 深挖 ROI 与网络分工
 
-- [ ] 新增 `rsa_analysis/relation_vector_condition_contrast.py`。
-- [ ] 计算 `YY_minus_KJ_decoupling`，定位 YY 相对 KJ 更强的 relation realignment ROI。
-- [ ] 新增 `rsa_analysis/relation_step5c_conjunction.py`。
-- [ ] 汇合 Step5C pair differentiation 与 relation-vector decoupling，找共同机制 ROI。
-- [ ] 新增 `rsa_analysis/relation_vector_network_lmm.py`。
-- [ ] 检验 semantic/metaphor network 与 spatial/context network 的 condition × network 分工。
+- [x] 新增 `rsa_analysis/relation_vector_condition_contrast.py`。
+- [x] 计算 `YY_minus_KJ_decoupling`，定位 YY 相对 KJ 更强的 relation realignment ROI。
+- [x] 新增 `rsa_analysis/relation_step5c_conjunction.py`。
+- [x] 汇合 Step5C pair differentiation 与 relation-vector decoupling，找共同机制 ROI。
+- [x] 新增 `rsa_analysis/relation_vector_network_lmm.py`。
+- [x] 检验 semantic/metaphor network 与 spatial/context network 的 condition × network 分工。
 
-### 第 5 阶段：P1，run7 回忆阶段几何与预测
+2026-05-03 执行结论：A3 未支持 `YY > KJ` 的 relation decoupling，显著 A3/A4 交叉点主要是 `YY pair differentiation + KJ > YY relation decoupling` 的解离；A5 未发现稳定的 semantic/metaphor vs spatial/context condition × network 分工。当前最稳主线应放在 A++ learned-edge specificity，relation-vector/network 作为 relation realignment 的边界与补充机制。
 
-- [ ] 新增 `rsa_analysis/retrieval_pair_similarity.py`。
-- [ ] 比较 pre、post、retrieval/run7 的 pair similarity trajectory。
-- [ ] 新增 `brain_behavior/retrieval_success_prediction.py`。
-- [ ] 检验 retrieval-stage ROI pattern、cue-target reinstatement 或 post-to-retrieval stability 是否预测回忆成功。
+### 第 5 阶段：P1，run7 回忆阶段几何、预测与分类
+
+- [x] 新增 `rsa_analysis/retrieval_pair_similarity.py`。
+- [x] 比较 pre、post、retrieval/run7 的 pair similarity trajectory。
+- [x] 新增 `brain_behavior/retrieval_success_prediction.py`。
+- [x] 检验 retrieval-stage ROI pattern、cue-target reinstatement 或 post-to-retrieval stability 是否预测回忆成功。
+- [x] 新增 `fmri_mvpa/fmri_mvpa_roi/run7_meta_roi_decoding.py`，检验 run7 rebound ROI 是否能解码 YY/KJ，并确认 cross-role generalization 是否成立。
+
+2026-05-03 数据检查：当前 `pattern_root` 只包含 pre/post/learn patterns，`lss_betas_final/lss_metadata_index_final.csv` 也只包含 run 1/2/5/6 与 Pre/Post；暂未发现 run7/retrieval 神经 pattern。run7 行为表存在，但 retrieval-stage RSA 与 post-to-retrieval stability 需要先生成或定位 run7 LSS/pattern 数据。
+
+2026-05-04 执行结论：run7 retrieval pattern 已生成并完成 meta ROI RSA/MVPA。pair similarity 支持 YY 相对 KJ 的 retrieval-minus-post rebound；MVPA 主 pair-held-out decoding 在右海马、右颞极、右 PPA/PHG、右 PPC/SPL 显著高于 chance。但 `w -> ew` / `ew -> w` cross-role generalization 未通过 FDR，因此该结果应写成 role-dependent retrieval discriminative geometry，而不是角色不变抽象类别码。classifier evidence 行为桥接未通过 FDR，应停止继续扩展为主机制链条。
+
+2026-05-04 learning-stage MVPA 补充：新增 `fmri_mvpa/fmri_mvpa_roi/learning_meta_roi_decoding.py`。run3/run4 within-run pair-held-out YY/KJ decoding 在右 PPA/PHG、右 PPC/SPL、右颞极、右 IFG、右海马均显著高于 chance，说明学习阶段这些 ROI 已有条件区分信息；但 cross-run generalization 和 run4-run3 accuracy 增强均未通过 FDR，因此不能写成分类边界随学习稳定增强。
+
+2026-05-04 pre/post 三分类控制：新增 `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_threeway_decoding.py`。当前数据中 JX 存为 `baseline`；pre 为 run1/2，post 为 run5/6，run3/4 是学习阶段。严格的 phase 内 run-held-out YY/KJ/JX 三分类在 pre 和 post 均未通过 FDR，post-pre 增强也不显著。因此 learning/run7 MVPA 不能解释为简单稳定材料类别码，而应继续写成学习/提取任务阶段的条件相关 discriminative geometry。
+
+2026-05-05 pre/post 二分类控制：新增 `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_binary_decoding.py`，只保留 YY/KJ、排除 JX/baseline。严格的 phase 内 run-held-out 二分类在 pre/post isolated-word 阶段均没有正向高于 chance 的结果；post 右海马显著低于 chance，解释为跨 run 分类边界反向或不稳定，而不是成功分类。这个结果进一步支持 learning-stage 与 run7 MVPA 是任务阶段相关的区分信息。
 
 ### 第 6 阶段：P1，学习阶段 driver 与中介/调节筛选
 
@@ -919,7 +1013,7 @@ paper_outputs/figures_main/fig_relation_learning_dynamics.png
 ### Figure 2：学习后神经表征重组
 
 - Step 5C ROI-level RSA 主效应。
-- 三套 ROI robustness。
+- meta ROI robustness，以及学习阶段 GLM ROI 的 reference/sensitivity。
 
 ### Figure 3：Relation-vector Model-RSA
 
