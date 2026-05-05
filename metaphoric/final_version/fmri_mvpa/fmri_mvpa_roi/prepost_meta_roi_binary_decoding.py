@@ -165,6 +165,7 @@ def _load_condition(subject_dir: Path, phase: str, condition: str) -> tuple[pd.D
     metadata["condition"] = condition
     metadata["label"] = CONDITION_TO_LABEL[condition]
     metadata["run_num"] = pd.to_numeric(metadata["run"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
+    metadata["pair_id"] = pd.to_numeric(metadata.get("pair_id", np.nan), errors="coerce")
     return metadata, data
 
 
@@ -180,8 +181,15 @@ def _make_dataset(subject_dir: Path, mask: np.ndarray, mask_path: Path) -> pd.Da
             metadata["_sample_ref"] = list(samples)
             frames.append(metadata)
     data = pd.concat(frames, ignore_index=True)
-    data = data.dropna(subset=["run_num"]).copy()
+    data = data.dropna(subset=["run_num", "pair_id"]).copy()
     data["run_num"] = data["run_num"].astype(int)
+    data["pair_id"] = data["pair_id"].astype(int)
+    data["condition_pair_index"] = np.nan
+    for (phase, condition), idx in data.groupby(["phase_label", "condition"]).groups.items():
+        pair_ids = sorted(data.loc[idx, "pair_id"].astype(int).unique().tolist())
+        pair_map = {pair_id: rank + 1 for rank, pair_id in enumerate(pair_ids)}
+        data.loc[idx, "condition_pair_index"] = data.loc[idx, "pair_id"].map(pair_map)
+    data["condition_pair_index"] = data["condition_pair_index"].astype(int)
     return data
 
 
@@ -250,6 +258,65 @@ def run_heldout_phase_decoding(data: pd.DataFrame, *, subject: str, roi_set: str
     return rows, direction_rows
 
 
+def phase_combined_pair_heldout(data: pd.DataFrame, *, subject: str, roi_set: str, roi: str, phase: str) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    rows: list[dict[str, object]] = []
+    fold_rows: list[dict[str, object]] = []
+    phase_data = data[data["phase_label"].eq(phase)].copy()
+    yy_pair_idx = set(phase_data.loc[phase_data["condition"].eq("yy"), "condition_pair_index"].dropna().astype(int))
+    kj_pair_idx = set(phase_data.loc[phase_data["condition"].eq("kj"), "condition_pair_index"].dropna().astype(int))
+    pair_indices = sorted(yy_pair_idx & kj_pair_idx)
+    y_true_all: list[int] = []
+    y_pred_all: list[int] = []
+    for pair_index in pair_indices:
+        test = phase_data[phase_data["condition_pair_index"].eq(pair_index)].copy()
+        train = phase_data[~phase_data["condition_pair_index"].eq(pair_index)].copy()
+        if train["label"].nunique() < 2 or test["label"].nunique() < 2:
+            continue
+        clf = _classifier()
+        x_train = _samples(train)
+        y_train = train["label"].to_numpy(dtype=int)
+        x_test = _samples(test)
+        y_test = test["label"].to_numpy(dtype=int)
+        clf.fit(x_train, y_train)
+        pred = clf.predict(x_test).astype(int)
+        acc, bal = _balanced_score(y_test, pred)
+        y_true_all.extend(y_test.tolist())
+        y_pred_all.extend(pred.tolist())
+        fold_rows.append(
+            {
+                "subject": subject,
+                "roi_set": roi_set,
+                "roi": roi,
+                "analysis_type": f"{phase}_pair_heldout_yy_kj_combined",
+                "phase": phase,
+                "heldout_condition_pair_index": int(pair_index),
+                "heldout_pair_ids": ",".join(str(x) for x in sorted(test["pair_id"].astype(int).unique().tolist())),
+                "accuracy": acc,
+                "balanced_accuracy": bal,
+                "n_test": int(len(test)),
+                "n_train": int(len(train)),
+            }
+        )
+    if y_true_all:
+        y_true_arr = np.asarray(y_true_all, dtype=int)
+        y_pred_arr = np.asarray(y_pred_all, dtype=int)
+        acc, bal = _balanced_score(y_true_arr, y_pred_arr)
+        rows.append(
+            {
+                "subject": subject,
+                "roi_set": roi_set,
+                "roi": roi,
+                "analysis_type": f"{phase}_pair_heldout_yy_kj_combined",
+                "phase": phase,
+                "accuracy": acc,
+                "balanced_accuracy": bal,
+                "n_test": int(len(y_true_arr)),
+                "n_folds": int(len(fold_rows)),
+            }
+        )
+    return rows, fold_rows
+
+
 def cross_phase_decoding(data: pd.DataFrame, *, subject: str, roi_set: str, roi: str, train_phase: str, test_phase: str) -> list[dict[str, object]]:
     train = data[data["phase_label"].eq(train_phase)].copy()
     test = data[data["phase_label"].eq(test_phase)].copy()
@@ -293,22 +360,43 @@ def summarize_decoding(subject_metrics: pd.DataFrame) -> pd.DataFrame:
     for _, idx in out.groupby("analysis_type", dropna=False).groups.items():
         idx = list(idx)
         out.loc[idx, "q_bh_within_analysis"] = _bh_fdr(out.loc[idx, "p"])
-    primary = out["analysis_type"].isin(["pre_run_heldout_yy_kj", "post_run_heldout_yy_kj"])
+    primary = out["analysis_type"].isin(
+        [
+            "pre_run_heldout_yy_kj",
+            "post_run_heldout_yy_kj",
+            "pre_pair_heldout_yy_kj_combined",
+            "post_pair_heldout_yy_kj_combined",
+        ]
+    )
     idx = out[primary].index.tolist()
     out.loc[idx, "q_bh_primary_family"] = _bh_fdr(out.loc[idx, "p"])
     return out.sort_values(["q_bh_primary_family", "q_bh_within_analysis", "p"], na_position="last")
 
 
 def summarize_post_minus_pre(subject_metrics: pd.DataFrame) -> pd.DataFrame:
-    phase_rows = subject_metrics[subject_metrics["analysis_type"].isin(["pre_run_heldout_yy_kj", "post_run_heldout_yy_kj"])].copy()
+    phase_rows = subject_metrics[
+        subject_metrics["analysis_type"].isin(
+            [
+                "pre_run_heldout_yy_kj",
+                "post_run_heldout_yy_kj",
+                "pre_pair_heldout_yy_kj_combined",
+                "post_pair_heldout_yy_kj_combined",
+            ]
+        )
+    ].copy()
     rows: list[dict[str, object]] = []
+    contrasts = [
+        ("pre_run_heldout_yy_kj", "post_run_heldout_yy_kj", "post_minus_pre_yy_kj_run_heldout"),
+        ("pre_pair_heldout_yy_kj_combined", "post_pair_heldout_yy_kj_combined", "post_minus_pre_yy_kj_pair_heldout_combined"),
+    ]
     for keys, subset in phase_rows.groupby(["roi_set", "roi"], sort=False):
         roi_set, roi = keys
         pivot = subset.pivot_table(index="subject", columns="analysis_type", values="balanced_accuracy", aggfunc="mean")
-        if {"pre_run_heldout_yy_kj", "post_run_heldout_yy_kj"} - set(pivot.columns):
-            continue
-        summary = _paired_delta(pivot["post_run_heldout_yy_kj"], pivot["pre_run_heldout_yy_kj"])
-        rows.append({"roi_set": roi_set, "roi": roi, "analysis_type": "post_minus_pre_yy_kj", **summary})
+        for pre_col, post_col, analysis_type in contrasts:
+            if {pre_col, post_col} - set(pivot.columns):
+                continue
+            summary = _paired_delta(pivot[post_col], pivot[pre_col])
+            rows.append({"roi_set": roi_set, "roi": roi, "analysis_type": analysis_type, **summary})
     out = pd.DataFrame(rows)
     if out.empty:
         return out
@@ -358,6 +446,9 @@ def main() -> None:
                 for phase in ["pre", "post"]:
                     phase_data = data[data["phase_label"].eq(phase)]
                     qc[f"n_{phase}"] = int(len(phase_data))
+                    yy_pair_idx = set(phase_data.loc[phase_data["condition"].eq("yy"), "condition_pair_index"].dropna().astype(int))
+                    kj_pair_idx = set(phase_data.loc[phase_data["condition"].eq("kj"), "condition_pair_index"].dropna().astype(int))
+                    qc[f"n_{phase}_common_condition_pair_indices"] = int(len(yy_pair_idx & kj_pair_idx))
                     for condition in ["kj", "yy"]:
                         qc[f"n_{phase}_{condition}"] = int(phase_data["condition"].eq(condition).sum())
                     for run_num in PHASE_RUNS[phase]:
@@ -367,6 +458,9 @@ def main() -> None:
                     rows, directions = run_heldout_phase_decoding(data, subject=subject_dir.name, roi_set=roi_set, roi=roi_name, phase=phase)
                     subject_rows.extend(rows)
                     direction_rows.extend(directions)
+                    rows, folds = phase_combined_pair_heldout(data, subject=subject_dir.name, roi_set=roi_set, roi=roi_name, phase=phase)
+                    subject_rows.extend(rows)
+                    direction_rows.extend(folds)
                 subject_rows.extend(cross_phase_decoding(data, subject=subject_dir.name, roi_set=roi_set, roi=roi_name, train_phase="pre", test_phase="post"))
                 subject_rows.extend(cross_phase_decoding(data, subject=subject_dir.name, roi_set=roi_set, roi=roi_name, train_phase="post", test_phase="pre"))
             except Exception as exc:

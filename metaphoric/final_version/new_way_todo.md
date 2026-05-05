@@ -1109,97 +1109,28 @@ run4：
 
 写作建议：learning-stage MVPA 可以作为 run7 MVPA 的前置补充，说明这几个 ROI 在学习阶段已经有 YY/KJ 条件区分信息；但不能写成“分类边界随学习稳定增强”或“跨 run 稳定泛化”。主故事仍应放在 post 的 edge-specific RSA 和 run7 的 retrieval-stage rebound。
 
-## 20. 2026-05-04 执行记录：pre/post YY-KJ-JX 三分类 MVPA
+## 20. 2026-05-05 执行记录：pre/post YY-KJ 二分类 MVPA
 
 ### 20.1 新增脚本
 
-- `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_threeway_decoding.py`
+- `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_binary_decoding.py`
 
 ### 20.2 数据与分析方案
 
-当前文件中 JX 条件存储为 `baseline`，因此脚本将：
-
-```text
-baseline -> jx
-kj -> kj
-yy -> yy
-```
-
-metadata 显示真实 run 编码为：
+只保留 YY 和 KJ，围绕“pre/post 完整词集内是否可分类”来做。metadata 显示真实 run 编码为：
 
 - pre：run1/2。
 - post：run5/6。
 - run3/4 是 learning 阶段，不是 post。
 
-分析采用 phase 内 run-held-out 三分类：
+pre 的 run1+run2、post 的 run5+run6 合起来才覆盖完整 YY/KJ 词集，因此主报告口径使用 phase-combined pair-held-out：
 
-- pre: `run1 -> run2` 和 `run2 -> run1`。
-- post: `run5 -> run6` 和 `run6 -> run5`。
-- chance = 1/3。
-- 使用 balanced accuracy 处理 JX=40、KJ=70、YY=70 的 trial 数不均衡。
+- pre：合并 run1+run2，每折同时留出一个 YY pair 和一个 KJ pair。
+- post：合并 run5+run6，每折同时留出一个 YY pair 和一个 KJ pair。
+- chance = 0.5。
+- 每个 subject x ROI x phase 有 35 个 fold。
 
 ### 20.3 输出与 QC
-
-- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_manifest.json`
-- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_subject_metrics.tsv`
-- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_direction_metrics.tsv`
-- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_group_fdr.tsv`
-- `paper_outputs/qc/prepost_threeway_mvpa_decoding/prepost_threeway_mvpa_post_minus_pre_fdr.tsv`
-- `paper_outputs/tables_main/table_prepost_threeway_mvpa_decoding.tsv`
-- `paper_outputs/tables_main/table_prepost_threeway_mvpa_post_minus_pre.tsv`
-
-QC：
-
-- 被试：28 名。
-- failures：0。
-- subject metric rows：560。
-- direction metric rows：560。
-- 每个 subject x ROI：360 trials；pre = 180，post = 180；每个阶段 JX = 40，KJ = 70，YY = 70。
-
-### 20.4 验收结论
-
-pre 阶段三分类没有任何 ROI 通过 FDR，所有 balanced accuracy 都接近 chance：
-
-| ROI | pre balanced accuracy | p | q_primary |
-| --- | ---: | ---: | ---: |
-| `meta_R_IFG` | 0.338 | 0.462 | 0.898 |
-| `meta_R_temporal_pole` | 0.332 | 0.808 | 0.898 |
-| `meta_R_hippocampus` | 0.330 | 0.585 | 0.898 |
-| `meta_R_PPA_PHG` | 0.327 | 0.238 | 0.898 |
-| `meta_R_PPC_SPL` | 0.327 | 0.374 | 0.898 |
-
-post 阶段同样没有任何 ROI 通过 FDR。最接近的是右颞极，但校正后不显著：
-
-| ROI | post balanced accuracy | p | q_primary |
-| --- | ---: | ---: | ---: |
-| `meta_R_temporal_pole` | 0.342 | 0.0517 | 0.517 |
-| `meta_R_IFG` | 0.337 | 0.524 | 0.898 |
-| `meta_R_PPC_SPL` | 0.336 | 0.720 | 0.898 |
-| `meta_R_hippocampus` | 0.335 | 0.732 | 0.898 |
-| `meta_R_PPA_PHG` | 0.333 | 0.952 | 0.952 |
-
-post-pre 增强也不显著；最大 delta 是右颞极 0.010，p = 0.202，q = 0.740。
-
-cross-phase generalization (`pre -> post`, `post -> pre`) 也没有任何 ROI 通过 FDR。
-
-写作建议：这是一个重要的 negative control。learning-stage MVPA 和 run7 MVPA 的显著结果不能简单解释为这些 ROI 对 YY/KJ/JX 三种材料类别有稳定分类码；pre/post isolated-word 阶段三分类并不稳定。因此主故事仍应集中在学习阶段任务/关系信息、post edge-specific differentiation，以及 run7 retrieval-stage rebound。
-
-## 21. 2026-05-05 执行记录：pre/post YY-KJ 二分类 MVPA
-
-### 21.1 新增脚本
-
-- `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_binary_decoding.py`
-
-### 21.2 分析方案
-
-为了排除三分类中 JX/baseline 的干扰，只保留 YY 和 KJ：
-
-- pre: `run1 -> run2` 和 `run2 -> run1`。
-- post: `run5 -> run6` 和 `run6 -> run5`。
-- excluded condition: `jx/baseline`。
-- chance = 0.5。
-
-### 21.3 输出与 QC
 
 - `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_manifest.json`
 - `paper_outputs/qc/prepost_binary_mvpa_decoding/prepost_binary_mvpa_subject_metrics.tsv`
@@ -1213,32 +1144,31 @@ QC：
 
 - 被试：28 名。
 - failures：0。
-- subject metric rows：560。
-- direction metric rows：560。
+- subject metric rows：840。
+- direction/fold metric rows：10,360。
 - 每个 subject x ROI：280 trials；pre = 140，post = 140；每个阶段 YY = 70，KJ = 70。
+- 每个 phase 有 35 个 common condition-pair indices。
 
-### 21.4 验收结论
+### 20.4 验收结论
 
-排除 JX 后，pre 阶段仍没有任何 ROI 正向高于 chance：
+pre 阶段整体较弱，只有右颞极未校正显著，校正后不稳：
 
-| ROI | pre balanced accuracy | p | q_primary |
+| ROI | pre combined pair-held-out accuracy | p | q_primary |
 | --- | ---: | ---: | ---: |
-| `meta_R_IFG` | 0.511 | 0.213 | 0.494 |
-| `meta_R_temporal_pole` | 0.499 | 0.934 | 0.934 |
-| `meta_R_PPA_PHG` | 0.492 | 0.338 | 0.494 |
-| `meta_R_hippocampus` | 0.485 | 0.0252 | 0.118 |
-| `meta_R_PPC_SPL` | 0.482 | 0.0354 | 0.118 |
+| `meta_R_temporal_pole` | 0.520 | 0.0393 | 0.0983 |
+| `meta_R_PPA_PHG` | 0.514 | 0.244 | 0.443 |
+| `meta_R_PPC_SPL` | 0.511 | 0.307 | 0.453 |
+| `meta_R_hippocampus` | 0.510 | 0.359 | 0.453 |
+| `meta_R_IFG` | 0.504 | 0.571 | 0.635 |
 
-post 阶段也没有任何 ROI 正向高于 chance。右海马显著低于 chance：
+post 阶段出现更清楚的正向分类，右颞极通过 primary-family FDR，其他 ROI 多数为未校正显著或趋势：
 
-| ROI | post balanced accuracy | p | q_primary |
+| ROI | post combined pair-held-out accuracy | p | q_primary |
 | --- | ---: | ---: | ---: |
-| `meta_R_temporal_pole` | 0.504 | 0.662 | 0.735 |
-| `meta_R_IFG` | 0.493 | 0.396 | 0.494 |
-| `meta_R_PPA_PHG` | 0.494 | 0.321 | 0.494 |
-| `meta_R_PPC_SPL` | 0.493 | 0.363 | 0.494 |
-| `meta_R_hippocampus` | 0.478 | 0.00354 | 0.0354 |
+| `meta_R_temporal_pole` | 0.539 | 0.00254 | 0.0354 |
+| `meta_R_hippocampus` | 0.525 | 0.0162 | 0.0983 |
+| `meta_R_PPC_SPL` | 0.516 | 0.0306 | 0.0983 |
+| `meta_R_IFG` | 0.520 | 0.0377 | 0.0983 |
+| `meta_R_PPA_PHG` | 0.520 | 0.0453 | 0.101 |
 
-post-pre 增强没有任何 ROI 通过 FDR；cross-phase generalization 也没有任何 ROI 通过 FDR。
-
-写作建议：二分类控制强化了三分类 negative control。pre/post isolated-word 阶段没有稳定的 YY/KJ 分类；右海马 post 低于 chance 更可能表示跨 run 分类边界反向或不稳定，而不是成功分类。learning-stage 和 run7 MVPA 的显著性更应解释为学习/提取任务阶段特异的 condition-discriminative geometry。
+写作建议：这部分不再要求 post-pre 增强显著。它的作用是把 MVPA 动态串起来：pre 弱，learning 强，post 部分保留，run7 retrieval 再次稳健。post 的右颞极结果说明静态词项阶段已有一部分 YY/KJ condition information；主机制证据仍由 post edge-specific RSA 和 run7 retrieval rebound 承担。

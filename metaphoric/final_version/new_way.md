@@ -959,9 +959,7 @@ paper_outputs/figures_main/fig_relation_learning_dynamics.png
 
 2026-05-04 learning-stage MVPA 补充：新增 `fmri_mvpa/fmri_mvpa_roi/learning_meta_roi_decoding.py`。run3/run4 within-run pair-held-out YY/KJ decoding 在右 PPA/PHG、右 PPC/SPL、右颞极、右 IFG、右海马均显著高于 chance，说明学习阶段这些 ROI 已有条件区分信息；但 cross-run generalization 和 run4-run3 accuracy 增强均未通过 FDR，因此不能写成分类边界随学习稳定增强。
 
-2026-05-04 pre/post 三分类控制：新增 `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_threeway_decoding.py`。当前数据中 JX 存为 `baseline`；pre 为 run1/2，post 为 run5/6，run3/4 是学习阶段。严格的 phase 内 run-held-out YY/KJ/JX 三分类在 pre 和 post 均未通过 FDR，post-pre 增强也不显著。因此 learning/run7 MVPA 不能解释为简单稳定材料类别码，而应继续写成学习/提取任务阶段的条件相关 discriminative geometry。
-
-2026-05-05 pre/post 二分类控制：新增 `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_binary_decoding.py`，只保留 YY/KJ、排除 JX/baseline。严格的 phase 内 run-held-out 二分类在 pre/post isolated-word 阶段均没有正向高于 chance 的结果；post 右海马显著低于 chance，解释为跨 run 分类边界反向或不稳定，而不是成功分类。这个结果进一步支持 learning-stage 与 run7 MVPA 是任务阶段相关的区分信息。
+2026-05-05 pre/post 二分类控制：新增 `fmri_mvpa/fmri_mvpa_roi/prepost_meta_roi_binary_decoding.py`，只保留 YY/KJ。考虑到 run1+run2、run5+run6 合起来才覆盖完整词集，主口径使用 phase-combined pair-held-out。四阶段 MVPA 动态为：pre 弱，learning 强，post 部分保留，run7 retrieval 再次稳健。post 阶段右颞极可解码 YY/KJ，balanced accuracy = 0.539, p = 0.00254, q_primary = 0.0354；右海马、右 PPC/SPL、右 IFG、右 PPA/PHG 为未校正显著或趋势。这说明 post 静态词项阶段已有一定 condition information，但 MVPA 主要作为阶段状态证据，主机制仍由 edge-specific RSA 承担。
 
 ### 第 6 阶段：P1，学习阶段 driver 与中介/调节筛选
 
