@@ -468,3 +468,78 @@ Noise ceiling 表中已有 meta model-RSA neural RDM 行，整体显示 ROI 内 
 - pre/post isolated-word 的主报告口径应使用 phase-combined pair-held-out；跨 run held-out 结果不再作为这部分主叙述。
 - post 右颞极 YY/KJ 分类显著可作为静态阶段部分保留的证据，但 MVPA 不承担主机制增强证明，主机制仍是 edge-specific RSA。
 - 所有 ROI-level 神经结果应继续逐 ROI 汇报，不建议再做“同类 ROI 合并”的主统计。
+
+## 16. Learning-phase RSA & four-phase trajectory (pre → run3 → run4 → post → retrieval)
+
+### Analysis overview
+
+这一节补上 learning 阶段（run3 / run4）本身的 RSA 证据，并把它与 pre、post、retrieval 串成一条 5 点 trajectory，完善前述“pre 弱 → learning 强 → post 保留 → retrieval 再稳健”的故事线。新增三类分析：(i) learning condition-level RDM：对每个 subject × ROI × run (3 / 4) 计算 `between_minus_within`，与 pre / post / retrieval 用同一公式组成 5 点 trajectory；(ii) constituent-to-sentence reinstatement：用 `word_label` / `pair_id` 对齐 learning 句子 pattern 与 pre / post / retrieval 的单词 / pair pattern，测量 learning 表征中对成分词 / pair 信息的激活程度；(iii) learning within-item reliability：用 run3 ↔ run4 同句 beta 相关衡量 learning pattern 的重测稳定度。
+
+**注意：用户本机没有原始 fMRI 数据，本节结果为占位。实际组水平 summary 需要在有原始数据与 LSS / stacking 产物的机器上，按 `rerun_list.md` 的 `Learning-phase RSA & four-phase trajectory (extend-learning-rsa-trajectory)` 章节依次执行后回填。**
+
+### Primary: Condition-level RDM trajectory
+
+指标定义：`between_minus_within = mean(cross-condition RDM) − mean(within-condition RDM)`，距离算子为相关距离（复用 `common/pattern_metrics.correlation_distance_rdm`）。同一公式在 pre / run3 / run4 / post / retrieval 重算，以保证 5 点 trajectory 同构、可直接比较。组水平对每个 phase 做 one-sample paired-t vs 0 + BH-FDR（在 ROI set family 内校正）。
+
+| ROI set | ROI | phase | n | mean | t | p | q_bh |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| TODO | TODO | pre | — | — | — | — | — |
+| TODO | TODO | run3 | — | — | — | — | — |
+| TODO | TODO | run4 | — | — | — | — | — |
+| TODO | TODO | post | — | — | — | — | — |
+| TODO | TODO | retrieval | — | — | — | — | — |
+
+解读方向：
+- learning 阶段（run3 → run4）**上升**：YY/KJ condition geometry 在学习任务中被放大；与 MVPA 中学习 run 内 YY/KJ within-run 可解码对应。
+- learning 阶段**稳定**：condition-level geometry 已经在 run3 就建立，run4 没有进一步扩张，但也未衰退。
+- learning 阶段**下降**：可能反映 run4 内部开始从纯 condition 区分转向 pair / item 级区分（differentiation），此时应结合 reinstatement 和 edge specificity 解读，不要当作条件信息消失。
+- trajectory 整体走向 pre → run3/run4 上升、post 回落、retrieval 再升，与 Section 11/12 的 MVPA 阶段模式相互印证。
+
+### Secondary: Constituent-to-sentence reinstatement (learning → pre / post / retrieval)
+
+指标定义：对每个 learning 句子 `L_i`（run3 或 run4 的 LSS beta），
+- `match = mean( corr(L_i, P_{w_i}), corr(L_i, P_{ew_i}) )`，其中 `P_{w_i}` 与 `P_{ew_i}` 为本 pair 的两个成分词 pattern（或 retrieval 阶段的 pair pattern `R_{pair_i}`）。
+- `mismatch = mean_{j ≠ i, same condition}( corr(L_i, P_{w_j}), corr(L_i, P_{ew_j}) )`，即同 condition 内其它 pair 的成分词 pattern 的平均相关。
+- `reinstatement = match − mismatch`。
+
+分别对 pre、post、retrieval 三个外部 phase 重复同一模板，得到 3 条 reinstatement 曲线；并进一步按 run3 / run4 拆分重算，取 `run4 − run3` paired-t + BH-FDR。run4 > run3 的上升被解释为学习过程中 constituent-to-sentence binding 的强化，即 learning 句子 pattern 越来越像"本 pair 的两个成分词"（而非同 condition 的其它 pair）。
+
+| ROI set | ROI | target phase | contrast | n | mean | t | p | q_bh |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| TODO | TODO | pre | match − mismatch | — | — | — | — | — |
+| TODO | TODO | post | match − mismatch | — | — | — | — | — |
+| TODO | TODO | retrieval | match − mismatch | — | — | — | — | — |
+| TODO | TODO | pre | run4 − run3 | — | — | — | — | — |
+| TODO | TODO | post | run4 − run3 | — | — | — | — | — |
+| TODO | TODO | retrieval | run4 − run3 | — | — | — | — | — |
+
+### Supplementary: Learning within-item reliability (run3 ↔ run4)
+
+指标定义：对每个 subject × ROI × sentence `i`，计算 `corr(L_i^{run3}, L_i^{run4})`，即同一 learning 句子在 run3 与 run4 的 pattern 相关。组水平对每个 condition 做 one-sample t vs 0，并对 `metaphor − spatial` 做 paired-t + BH-FDR。metaphor > spatial 的差异意味着 metaphor 句 pattern 在两次学习中更稳定（学习到的 relation 结构更固化）；若 spatial ≥ metaphor，则说明 metaphor 句 pattern 仍在发生 reorganization，与 post edge-specific differentiation 方向一致。
+
+| ROI set | ROI | contrast | n | mean | t | p | q_bh |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| TODO | TODO | metaphor vs 0 | — | — | — | — | — |
+| TODO | TODO | spatial vs 0 | — | — | — | — | — |
+| TODO | TODO | metaphor − spatial | — | — | — | — | — |
+
+### Interpretation: why post < pre and learning reinstatement ↑ can coexist
+
+需要在 discussion 中明确区分两类几何属性，避免被误读为自相矛盾：
+
+- **post < pre 的 constituent pair similarity**（Section 3 / 4 的主机制）反映两个成分词**作为独立词**在 post isolated-word 阶段被 differentiation：它们在 `meta_R_temporal_pole`、`meta_R_hippocampus` 等 ROI 中 pre-post similarity 下降，这是 learned-edge differentiation / relation-edge reorganization 的表现。
+- **learning reinstatement ↑**（本节 Secondary）反映 learning 句子 pattern 中**包含了两个成分词 / pair 的 binding 信号**——learning 句 pattern 越来越接近 `(w_i, ew_i)` 而非同 condition 的其它 pair。这度量的是 learning context 里的 binding 强度。
+
+二者分别测量 **(i) 两个成分词之间的 word-level pair similarity** 与 **(ii) learning 句子对成分词的 constituent-to-sentence binding**，是不同几何属性上的不同算子；在 integration / differentiation 并存的记忆系统文献中本就有先例（e.g., Schlichting & Preston differentiation，Tompary & Davachi integration / reinstatement）。因此"post < pre 的 pair similarity 下降"与"learning → retrieval reinstatement 上升"可以**独立并存**，不构成方向冲突。论文 discussion 需明写这一点，防止审稿人把两者当作矛盾结论。
+
+### Scripts producing this section
+
+- `rsa_analysis/learning_condition_rdm.py`
+- `rsa_analysis/cross_phase_reinstatement.py`
+- `rsa_analysis/learning_within_item_reliability.py`
+- `figures/plot_four_phase_trajectory.py`
+- `figures/plot_learning_reinstatement.py`
+
+### Run instructions
+
+本节所有命令、输入依赖与默认产物路径汇总在 `metaphoric/final_version/rerun_list.md` 的 `Learning-phase RSA & four-phase trajectory (extend-learning-rsa-trajectory)` 章节；在有原始数据的机器上按该章节顺序执行后，把结果回填进上述占位表即可。

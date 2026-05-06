@@ -483,3 +483,364 @@ foreach ($roi in $glmReferenceRois) {
 11. P9 gPPI summary。
 12. P10 literature / main_functional sensitivity。
 13. 更新 `result_new.md`，按 meta ROI 主线重写结果与图表引用。
+
+
+---
+
+## P11: Learning-phase RSA & four-phase trajectory (extend-learning-rsa-trajectory)
+
+> Spec id: `extend-learning-rsa-trajectory`
+> **注意：本章节仅记录命令，不在本机执行。**用户本机无原始数据，所有命令需在有 `${PYTHON_METAPHOR_ROOT}/pattern_root/` 与 `roi_library/manifest.tsv` 的机器上顺序跑。
+
+原因：
+- pre / post / retrieval 已有 RSA 指标，唯独 learning (run3/run4) 缺一条同构的 RSA 曲线；本章节补齐 learning 阶段的 condition-level RDM (Primary)、constituent-to-sentence reinstatement (Secondary)、within-item reliability (Supplementary)，并把 5 个阶段（pre / run3 / run4 / post / retrieval）拼成一张 trajectory 主图。
+- 所有新脚本都复用 `stack_patterns.py` 已产出的 `pattern_root/sub-XX/{phase}_{yy,kj}.nii.gz + *_metadata.tsv`（含 `run / word_label / pair_id`）；**无需**再跑 LSS 与 stacking。
+
+ROI family 口径（沿用第 0 节定义）：
+- 主 family 仍是 `$primaryRois = @("meta_metaphor", "meta_spatial")`，主文 FDR 与主图都基于这两组。
+- `$literatureSensitivityRois = @("literature", "literature_spatial")` 作为文献 sensitivity，进入 SI。
+- `$glmReferenceRois = @("main_functional")` 仅作学习阶段 GLM 参考，不入主 FDR family，不出主图，仅生成表格。
+
+依赖（输入）：
+- `${PYTHON_METAPHOR_ROOT}/pattern_root/sub-XX/learn_yy.nii.gz`、`learn_kj.nii.gz` + `learn_{yy,kj}_metadata.tsv`（含 `run ∈ {3,4}`、`word_label`、`pair_id`）
+- `${PYTHON_METAPHOR_ROOT}/pattern_root/sub-XX/{pre,post,retrieval}_{yy,kj}.nii.gz` + 对应 metadata
+- `$manifest`（`include_in_rsa=true` 的 ROI manifest）
+
+推荐运行顺序与依赖：
+- 先跑 1）Primary condition-level RDM + 4-phase trajectory（生成 5 点 tidy CSV 与组水平统计）。
+- 2）与 3）可与 1）并行（读取相同 pattern，互不写入同一目录）。
+- 最后跑 4）、5）绘图（依赖前三步产物）。
+
+### P11.1 Primary: Learning condition-level RDM + four-phase trajectory
+
+```powershell
+foreach ($roi in $primaryRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/rsa_analysis/learning_condition_rdm.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets meta_metaphor meta_spatial `
+    --paper-output-root $paper
+}
+```
+
+默认产物（`{roi_tag}` 由 `METAPHOR_ROI_SET` 决定；主 family 会得到 `meta_metaphor` 与 `meta_spatial` 两套）：
+
+- `$paper/qc/learning_condition_rdm_{roi_tag}/learning_condition_rdm_subject.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_{roi_tag}.csv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_one_sample.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_pairwise.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/learning_condition_rdm_qc.tsv`
+- `$paper/tables_si/table_four_phase_trajectory_{roi_tag}.tsv`
+
+### P11.2 Secondary: Cross-phase constituent-to-sentence reinstatement
+
+```powershell
+foreach ($roi in $primaryRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/rsa_analysis/cross_phase_reinstatement.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets meta_metaphor meta_spatial `
+    --paper-output-root $paper
+}
+```
+
+默认产物：
+
+- `$paper/qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_item.tsv`
+- `$paper/qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_subject.tsv`
+- `$paper/qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_group_one_sample.tsv`
+- `$paper/qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_group_run_contrast.tsv`
+- `$paper/qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_qc.tsv`
+- `$paper/tables_si/table_cross_phase_reinstatement_{roi_tag}.tsv`
+
+### P11.3 Supplementary: Learning within-item reliability (run3 ↔ run4)
+
+```powershell
+foreach ($roi in $primaryRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/rsa_analysis/learning_within_item_reliability.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets meta_metaphor meta_spatial `
+    --paper-output-root $paper
+}
+```
+
+默认产物：
+
+- `$paper/qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_item.tsv`
+- `$paper/qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_subject.tsv`
+- `$paper/qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_group_one_sample.tsv`
+- `$paper/qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_group_yy_vs_kj.tsv`
+- `$paper/qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_qc.tsv`
+- `$paper/tables_si/table_learning_within_item_reliability_{roi_tag}.tsv`
+
+### P11.4 Figure: Four-phase trajectory (主图, 仅 primary family)
+
+依赖：P11.1 在 `$primaryRois` 下产出的 `four_phase_trajectory_{roi_tag}.csv` 与 `four_phase_trajectory_group_one_sample.tsv`。
+
+```powershell
+foreach ($roi in $primaryRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/figures/plot_four_phase_trajectory.py `
+    --paper-output-root $paper
+}
+```
+
+默认产物：
+
+- `$paper/figures_main/fig_four_phase_trajectory_{roi_tag}.png`
+- `$paper/figures_main/fig_four_phase_trajectory_{roi_tag}.pdf`
+
+### P11.5 Figure: Reinstatement + within-item reliability (SI 附图, 仅 primary family)
+
+依赖：P11.2 与 P11.3 在 `$primaryRois` 下的 subject 与 group 产物。
+
+```powershell
+foreach ($roi in $primaryRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/figures/plot_learning_reinstatement.py `
+    --paper-output-root $paper
+}
+```
+
+默认产物：
+
+- `$paper/figures_si/fig_learning_reinstatement_{roi_tag}.png`
+- `$paper/figures_si/fig_learning_reinstatement_{roi_tag}.pdf`
+
+### P11.6 Literature sensitivity (SI 表, 不进主图)
+
+仅在需要回答"换成旧文献/atlas ROI 是否同向"时运行；**不生成主图**、**不与 primary 放在同一 FDR family**。
+
+```powershell
+foreach ($roi in $literatureSensitivityRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/rsa_analysis/learning_condition_rdm.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets literature literature_spatial `
+    --paper-output-root $paper
+
+  & $py metaphoric/final_version/rsa_analysis/cross_phase_reinstatement.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets literature literature_spatial `
+    --paper-output-root $paper
+
+  & $py metaphoric/final_version/rsa_analysis/learning_within_item_reliability.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets literature literature_spatial `
+    --paper-output-root $paper
+}
+```
+
+产物落在同样的 `$paper/qc/<analysis>_{roi_tag}/` 和 `$paper/tables_si/` 下，`{roi_tag}` 为 `literature` / `literature_spatial`。
+
+### P11.7 Main-functional GLM reference (仅表, 不进主 family)
+
+仅用于报告"本数据学习阶段 GLM ROI 是否参考性支持"。建议只跑 Primary condition-level RDM 即可，不跑图脚本。
+
+```powershell
+foreach ($roi in $glmReferenceRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/rsa_analysis/learning_condition_rdm.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets main_functional `
+    --paper-output-root $paper
+}
+```
+
+产物 `{roi_tag} = main_functional`，写入 `$paper/qc/learning_condition_rdm_main_functional/` 与 `$paper/tables_si/table_four_phase_trajectory_main_functional.tsv`；**不得**进入主文 FDR family 或主图。
+
+### 依赖关系一览
+
+- P11.1 是 P11.4 的前置。
+- P11.2 与 P11.3 互不依赖，可与 P11.1 并行。
+- P11.5 依赖 P11.2 + P11.3。
+- P11.6 / P11.7 只产表，不生成 `figures_main/`；**不得**与 `$primaryRois` 合并到同一 FDR family。
+- 本章节所有脚本**不会**修改 `stack_patterns.py` 与 LSS 产物，也**不会**改写 pre/post/retrieval 已有 RSA primary 结果。
+
+## P12 Metaphor × Learning × Memory 桥接（extend-metaphor-learning-memory-bridge）
+
+> **重要**：本机仅记录命令，不在本机执行。以下脚本必须在已完成 P1–P11 的机器上运行。`$py / $paper / $patternRoot / $manifest / $primaryRois / $literatureSensitivityRois / $glmReferenceRois` 沿用第 0 节定义。
+
+本章节的主线：**隐喻 × 学习 × 记忆**。在 primary ROI family (`meta_metaphor + meta_spatial`) 维持不变的前提下：
+- **A1**：加入 Language / ToM network 作为 SI sensitivity（不进主 FDR family）。
+- **B1/B2**：**必做** — item-level ERS 与 hippocampal-binding subfamily 汇总。
+- **C1/C2**：**gated** — 只有当上游 gate 通过才跑。
+
+### P12.A1.1 构建 Language / ToM network 新 ROI mask
+
+先用既有 `build_meta_roi_library.py` 把 Language / ToM network 的 peak TSV 编译成 6mm 球 mask，并更新 `manifest.tsv`。
+
+```powershell
+& $py metaphoric/final_version/roi_management/build_meta_roi_library.py `
+  --peaks metaphoric/final_version/roi_management/language_network_peaks.tsv `
+          metaphoric/final_version/roi_management/tom_network_peaks.tsv `
+  --roi-library-root "$env:PYTHON_METAPHOR_ROOT/roi_library" `
+  --reference-image "$patternRoot/sub-01/pre_yy.nii.gz" `
+  --append-manifest
+```
+
+> 如果 `build_meta_roi_library.py` 的 CLI 与上述有差异，按实际参数调整；目标等价：为 `roi_set ∈ {language_network, tom_network}` 的每条 peak 生成 6mm 球 NIfTI，并追加到 `$manifest` 中（`include_in_rsa=true`）。
+
+### P12.A1.2 Overlap QC（Language/ToM × Primary meta ROI）
+
+```powershell
+& $py metaphoric/final_version/roi_management/network_overlap_qc.py `
+  --primary-peaks metaphoric/final_version/roi_management/meta_roi_peaks_curated.tsv `
+  --network-peaks metaphoric/final_version/roi_management/language_network_peaks.tsv `
+                  metaphoric/final_version/roi_management/tom_network_peaks.tsv `
+  --reference-image "$patternRoot/sub-01/pre_yy.nii.gz" `
+  --output "$paper/qc/roi_library/network_overlap_qc.tsv"
+```
+
+输出 `$paper/qc/roi_library/network_overlap_qc.tsv` + `.json`，含每对 peak 的 Euclidean 距离与 6mm 球 IoU。
+
+### P12.A1.3 在 Language / ToM ROI 上重跑 4 套主 RSA 脚本
+
+ROI 换了，RSA 必须重算。对 `{language_network, tom_network}` 各自驱动 `METAPHOR_ROI_SET` 跑 4 个主脚本：
+
+```powershell
+$networkRois = @("language_network", "tom_network")
+
+foreach ($roi in $networkRois) {
+  $env:METAPHOR_ROI_SET = $roi
+
+  & $py metaphoric/final_version/rsa_analysis/step5c_rsa.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets $roi `
+    --paper-output-root $paper
+
+  & $py metaphoric/final_version/rsa_analysis/edge_specificity_rsa.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets $roi `
+    --paper-output-root $paper
+
+  & $py metaphoric/final_version/rsa_analysis/learning_condition_rdm.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets $roi `
+    --paper-output-root $paper
+
+  & $py metaphoric/final_version/rsa_analysis/retrieval_pair_similarity.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets $roi `
+    --paper-output-root $paper
+}
+```
+
+产物落在 `$paper/qc/<analysis>_{roi_tag}/`，`{roi_tag} ∈ {language_network, tom_network}`；**不进入**主 FDR family。
+
+### P12.A1.4 Language / ToM sensitivity 汇总（仅汇总，不重算 RSA）
+
+```powershell
+& $py metaphoric/final_version/rsa_analysis/language_tom_network_sensitivity.py `
+  --paper-output-root $paper `
+  --roi-sets language_network tom_network
+```
+
+产物：
+- `$paper/qc/language_tom_network_sensitivity_{roi_tag}/step5c_summary.tsv / edge_summary.tsv / trajectory_summary.tsv / retrieval_summary.tsv / missing_sources.tsv / sensitivity_manifest.json`
+- `$paper/tables_si/table_language_tom_network_sensitivity_{roi_tag}.tsv`
+
+所有行带 `family="SI_sensitivity"`、`in_main_fdr_family=false`。
+
+### P12.B1 Encoding-Retrieval Similarity（必做，primary ROI family）
+
+```powershell
+foreach ($roi in $primaryRois) {
+  $env:METAPHOR_ROI_SET = $roi
+  & $py metaphoric/final_version/brain_behavior/encoding_retrieval_similarity.py `
+    --pattern-root $patternRoot `
+    --roi-manifest $manifest `
+    --roi-sets meta_metaphor meta_spatial `
+    --paper-output-root $paper
+}
+```
+
+产物：
+- `$paper/qc/encoding_retrieval_similarity_{roi_tag}/ers_item.tsv`
+- `$paper/qc/encoding_retrieval_similarity_{roi_tag}/ers_group_one_sample.tsv`（BH-FDR within ROI set × variant × analysis_type）
+- `$paper/qc/encoding_retrieval_similarity_{roi_tag}/ers_itemlevel_gee.tsv`（GEE: memory/log_rt_correct ~ ERS × condition）
+- `$paper/qc/encoding_retrieval_similarity_{roi_tag}/ers_qc.tsv / ers_failures.tsv / ers_manifest.json`
+- `$paper/tables_main/table_encoding_retrieval_similarity_{roi_tag}.tsv`
+
+Variants：`run3_to_retrieval`、`run4_to_retrieval`、`max_run_to_retrieval`。该表同时是 C1 的 Gate G1 依据。
+
+### P12.B2 Hippocampal-binding subfamily 汇总（必做，仅汇总）
+
+```powershell
+& $py metaphoric/final_version/rsa_analysis/hippocampal_binding_summary.py `
+  --roi-manifest $manifest `
+  --roi-sets meta_metaphor meta_spatial `
+  --paper-output-root $paper
+```
+
+产物：
+- `$paper/qc/hippocampal_binding_summary_{roi_tag}/subfamily_rois.tsv`
+- `$paper/qc/hippocampal_binding_summary_{roi_tag}/{step5c,edge,trajectory,retrieval,ers}_subfamily_fdr.tsv`（subfamily 内重做 BH-FDR）
+- `$paper/qc/hippocampal_binding_summary_meta_hipp_subfamily/combined_subfamily_fdr.tsv`
+- `$paper/tables_main/table_hippocampal_binding_summary_meta_hipp_subfamily.tsv`
+
+subfamily 定义：`theory_role ∈ {hippocampal_binding, scene_context_binding}` 或 ROI 名命中 `(?i)hippocamp|PPA|PHG`。
+
+### P12.C1 Memory-strength parametric RSA（gated by G1）
+
+**Gate G1**：`ers_group_one_sample.tsv` 中存在至少一行 `analysis_type=ers_one_sample_gt_zero`、`variant ∈ {run3_to_retrieval, run4_to_retrieval}`、`roi_set ∈ {meta_metaphor, meta_spatial}`、`q_bh_within_family < 0.1`。若未通过，脚本只写 `gate_status.tsv` 并退出；若要强制跑，加 `--force-run`（不建议）。
+
+```powershell
+& $py metaphoric/final_version/brain_behavior/memory_strength_parametric.py `
+  --paper-output-root $paper `
+  --roi-sets meta_metaphor meta_spatial
+```
+
+产物（gate 通过时）：
+- `$paper/qc/memory_strength_parametric_meta_mem_strength/gate_status.tsv`
+- `$paper/qc/memory_strength_parametric_meta_mem_strength/memory_weighted_ers_group.tsv`（subject-level Δ = remembered − forgot 的组水平 one-sample t + BH-FDR）
+- `$paper/qc/memory_strength_parametric_meta_mem_strength/memory_strength_parametric.tsv`（item-level MixedLM：memory / log_rt_correct ~ ERS_z × condition + 1|subject）
+- `$paper/tables_main/table_memory_strength_parametric_meta_mem_strength.tsv`
+
+### P12.C2 HPC ↔ vmPFC post-encoding connectivity（gated by G2）
+
+**Gate G2**：`$paper/qc/gppi_results_*/gppi_group_summary.tsv` 中存在 HPC seed（`(?i)hippocamp|HPC`）→ vmPFC target（`(?i)vmPFC|ventromedial|vMPFC|MMPFC`）的行 `p < 0.1`。若未通过，脚本只写 `gate_status.tsv` 并退出；若要强制跑，加 `--force-run`（不建议）。
+
+脚本需要本机的 BOLD 清单（pre/post-encoding TR 窗口）与 HPC / vmPFC mask：
+
+```powershell
+& $py metaphoric/final_version/connectivity_analysis/hpc_vmpfc_post_encoding_ppi.py `
+  --paper-output-root $paper `
+  --bold-manifest "$env:PYTHON_METAPHOR_ROOT/qc/post_encoding_bold_manifest.tsv" `
+  --hpc-masks    "$env:PYTHON_METAPHOR_ROOT/roi_library/meta_L_hippocampus.nii.gz" `
+                 "$env:PYTHON_METAPHOR_ROOT/roi_library/meta_R_hippocampus.nii.gz" `
+  --vmpfc-masks  "$env:PYTHON_METAPHOR_ROOT/roi_library/tom_VMPFC.nii.gz" `
+                 "$env:PYTHON_METAPHOR_ROOT/roi_library/tom_MMPFC.nii.gz"
+```
+
+`--bold-manifest` 必须含列：`subject, run_label, bold_path, confounds_path, pre_encoding_tr_start, pre_encoding_tr_end, post_encoding_tr_start, post_encoding_tr_end, tr`；本机上请先整理一份。
+
+产物（gate 通过 + 参数齐全时）：
+- `$paper/qc/hpc_vmpfc_post_encoding_ppi_meta_hpc_vmpfc_ppi/gate_status.tsv`
+- `$paper/qc/hpc_vmpfc_post_encoding_ppi_meta_hpc_vmpfc_ppi/hpc_vmpfc_subject_delta.tsv`
+- `$paper/qc/hpc_vmpfc_post_encoding_ppi_meta_hpc_vmpfc_ppi/hpc_vmpfc_group_delta.tsv`（one-sample t on Δz = z_post − z_pre + BH-FDR within seed × target）
+- `$paper/tables_main/table_hpc_vmpfc_post_encoding_ppi_meta_hpc_vmpfc_ppi.tsv`
+
+### P12 依赖关系一览
+
+- P12.A1.1 → P12.A1.2、P12.A1.3 → P12.A1.4（A1 内部严格串行：先建 mask 并更新 manifest，再重跑 RSA，最后才能汇总）。
+- P12.B1 与 P12.B2 可并行（均只读 primary ROI 主 RSA 产物 + pattern_root）。
+- P12.C1 依赖 P12.B1 产出的 `ers_group_one_sample.tsv`（Gate G1）。
+- P12.C2 依赖已有的 `$paper/qc/gppi_results_*/gppi_group_summary.tsv`（Gate G2），与 B1/B2 互相独立。
+- A1 的 SI sensitivity 与 B1/B2/C1/C2 之间**不共享 BH-FDR family**；论文 writeup 里分两处报告。
+- 所有 P12 脚本**不修改** `stack_patterns.py` / LSS 产物 / P1–P11 已有 RSA 结果；仅新增 `$paper/qc/<新目录>/` 与 `$paper/tables_main/tables_si/` 下的新表。
+
+
+
