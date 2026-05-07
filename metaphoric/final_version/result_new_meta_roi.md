@@ -469,31 +469,53 @@ Noise ceiling 表中已有 meta model-RSA neural RDM 行，整体显示 ROI 内 
 - post 右颞极 YY/KJ 分类显著可作为静态阶段部分保留的证据，但 MVPA 不承担主机制增强证明，主机制仍是 edge-specific RSA。
 - 所有 ROI-level 神经结果应继续逐 ROI 汇报，不建议再做“同类 ROI 合并”的主统计。
 
-## 16. Learning-phase RSA & four-phase trajectory (pre → run3 → run4 → post → retrieval)
+## 16. Learning-phase RSA split profiles (word-level + learning sentence-level)
 
 ### Analysis overview
 
-这一节补上 learning 阶段（run3 / run4）本身的 RSA 证据，并把它与 pre、post、retrieval 串成一条 5 点 trajectory，完善前述“pre 弱 → learning 强 → post 保留 → retrieval 再稳健”的故事线。新增三类分析：(i) learning condition-level RDM：对每个 subject × ROI × run (3 / 4) 计算 `between_minus_within`，与 pre / post / retrieval 用同一公式组成 5 点 trajectory；(ii) constituent-to-sentence reinstatement：用 `word_label` / `pair_id` 对齐 learning 句子 pattern 与 pre / post / retrieval 的单词 / pair pattern，测量 learning 表征中对成分词 / pair 信息的激活程度；(iii) learning within-item reliability：用 run3 ↔ run4 同句 beta 相关衡量 learning pattern 的重测稳定度。
+这一节补上 learning 阶段（run3 / run4）本身的 RSA 证据，并与 pre、post、retrieval 共同完善“pre 弱 → learning 强 → post 保留 → retrieval 再稳健”的故事线。**但主文不再把 `pre / run3 / run4 / post / retrieval` 串成一条五点 trajectory。** 原因是：`pre/post/retrieval` 是 **word-level**（两个词的比较），而 `run3/run4` 是 **sentence-level**（句子的比较），表征单位不同，直接连成一条连续轨迹不够严谨。新增三类分析：(i) learning condition-level RDM：输出 `word-level profile`（`pre / post / retrieval`）与 `learning sentence-level profile`（`run3 / run4`）两套主表；旧的 5 点总表仅保留为兼容输出 / SI 参考；(ii) constituent-to-sentence reinstatement：用 `word_label` / `pair_id` 对齐 learning 句子 pattern 与 pre / post / retrieval 的单词 / pair pattern，测量 learning 表征中对成分词 / pair 信息的激活程度；(iii) learning within-item reliability：用 run3 ↔ run4 同句 beta 相关衡量 learning pattern 的重测稳定度。
 
-**注意：用户本机没有原始 fMRI 数据，本节结果为占位。实际组水平 summary 需要在有原始数据与 LSS / stacking 产物的机器上，按 `rerun_list.md` 的 `Learning-phase RSA & four-phase trajectory (extend-learning-rsa-trajectory)` 章节依次执行后回填。**
+**注意：用户本机没有原始 fMRI 数据，本节结果为占位。实际组水平 summary 需要在有原始数据与 LSS / stacking 产物的机器上，按 `new_rerun_list.md` 的 P11 章节依次执行后回填。**
 
-### Primary: Condition-level RDM trajectory
+### Primary: Condition-level RDM split profiles
 
-指标定义：`between_minus_within = mean(cross-condition RDM) − mean(within-condition RDM)`，距离算子为相关距离（复用 `common/pattern_metrics.correlation_distance_rdm`）。同一公式在 pre / run3 / run4 / post / retrieval 重算，以保证 5 点 trajectory 同构、可直接比较。组水平对每个 phase 做 one-sample paired-t vs 0 + BH-FDR（在 ROI set family 内校正）。
+指标定义：`between_minus_within = mean(cross-condition RDM) − mean(within-condition RDM)`，距离算子为相关距离（复用 `common/pattern_metrics.correlation_distance_rdm`）。同一公式分别在：
+- **word-level profile**：`pre / post / retrieval`
+- **learning sentence-level profile**：`run3 / run4`
+内重算。组水平对每个 phase 做 one-sample t vs 0 + BH-FDR（在 ROI set family 内校正），并在图示中重点标 phase 间变化是否显著，而不是强调“连续 trajectory”。
+
+### Primary A: Word-level profile (pre → post → retrieval)
 
 | ROI set | ROI | phase | n | mean | t | p | q_bh |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | TODO | TODO | pre | — | — | — | — | — |
-| TODO | TODO | run3 | — | — | — | — | — |
-| TODO | TODO | run4 | — | — | — | — | — |
 | TODO | TODO | post | — | — | — | — | — |
 | TODO | TODO | retrieval | — | — | — | — | — |
 
 解读方向：
-- learning 阶段（run3 → run4）**上升**：YY/KJ condition geometry 在学习任务中被放大；与 MVPA 中学习 run 内 YY/KJ within-run 可解码对应。
-- learning 阶段**稳定**：condition-level geometry 已经在 run3 就建立，run4 没有进一步扩张，但也未衰退。
-- learning 阶段**下降**：可能反映 run4 内部开始从纯 condition 区分转向 pair / item 级区分（differentiation），此时应结合 reinstatement 和 edge specificity 解读，不要当作条件信息消失。
-- trajectory 整体走向 pre → run3/run4 上升、post 回落、retrieval 再升，与 Section 11/12 的 MVPA 阶段模式相互印证。
+- `post vs pre`：对应 isolated-word 学习后 condition geometry 是增强、稳定还是回落。
+- `retrieval vs post`：对应 retrieval 是否重新调动或 rebound。
+- `retrieval vs pre`：对应最终 retrieval 是否高于初始 pre 基线。
+
+### Primary B: Learning sentence-level profile (run3 → run4)
+
+| ROI set | ROI | phase | n | mean | t | p | q_bh |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| TODO | TODO | run3 | — | — | — | — | — |
+| TODO | TODO | run4 | — | — | — | — | — |
+
+解读方向：
+- `run4 > run3`：YY/KJ condition geometry 在学习任务中被进一步放大。
+- `run4 ≈ run3`：condition-level geometry 在 run3 已建立，run4 未进一步扩张。
+- `run4 < run3`：可能反映 run4 开始从纯 condition 区分转向 pair / item 级 differentiation，此时应结合 reinstatement 和 edge specificity 解读，不要当作条件信息消失。
+
+### Figure policy
+
+- 主图不再使用单张五点折线图。
+- 推荐图示是：
+  - `word-level profile`：`pre / post / retrieval` 的柱状图 + 被试散点 + 显著性括号
+  - `learning sentence-level profile`：`run3 / run4` 的柱状图 + 被试散点 + 显著性括号
+- 图上优先标注 **phase 间变化是否显著**，而不是只在单个点上打星。
 
 ### Secondary: Constituent-to-sentence reinstatement (learning → pre / post / retrieval)
 
@@ -542,4 +564,4 @@ Noise ceiling 表中已有 meta model-RSA neural RDM 行，整体显示 ROI 内 
 
 ### Run instructions
 
-本节所有命令、输入依赖与默认产物路径汇总在 `metaphoric/final_version/rerun_list.md` 的 `Learning-phase RSA & four-phase trajectory (extend-learning-rsa-trajectory)` 章节；在有原始数据的机器上按该章节顺序执行后，把结果回填进上述占位表即可。
+本节所有命令、输入依赖与默认产物路径汇总在 `metaphoric/final_version/new_rerun_list.md` 的 **P11** 章节；在有原始数据的机器上按该章节顺序执行后，把结果回填进上述占位表即可。

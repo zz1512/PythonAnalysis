@@ -487,13 +487,15 @@ foreach ($roi in $glmReferenceRois) {
 
 ---
 
-## P11: Learning-phase RSA & four-phase trajectory (extend-learning-rsa-trajectory)
+## P11: Learning-phase RSA split profiles (word-level + learning sentence-level) (extend-learning-rsa-trajectory)
 
 > Spec id: `extend-learning-rsa-trajectory`
 > **注意：本章节仅记录命令，不在本机执行。**用户本机无原始数据，所有命令需在有 `${PYTHON_METAPHOR_ROOT}/pattern_root/` 与 `roi_library/manifest.tsv` 的机器上顺序跑。
 
 原因：
-- pre / post / retrieval 已有 RSA 指标，唯独 learning (run3/run4) 缺一条同构的 RSA 曲线；本章节补齐 learning 阶段的 condition-level RDM (Primary)、constituent-to-sentence reinstatement (Secondary)、within-item reliability (Supplementary)，并把 5 个阶段（pre / run3 / run4 / post / retrieval）拼成一张 trajectory 主图。
+- pre / post / retrieval 已有 word-level RSA 指标，learning (run3/run4) 则是 sentence-level 条件几何；本章节补齐 learning 阶段的 condition-level RDM (Primary)、constituent-to-sentence reinstatement (Secondary)、within-item reliability (Supplementary)。
+- 与老师沟通后，**不再**把 `pre / run3 / run4 / post / retrieval` 串成一条主文 trajectory，因为 `pre/post/retrieval` 是两个词的比较，而 `run3/run4` 是句子的比较，跨格式直接连线容易被审稿人质疑。
+- 主文改为两条线/两个模块：`pre → post → retrieval` 的 **word-level profile**，以及 `run3 → run4` 的 **learning sentence-level profile**。旧的 5 点总表仅保留为兼容输出 / SI 参考，不作主文强解释。
 - 所有新脚本都复用 `stack_patterns.py` 已产出的 `pattern_root/sub-XX/{phase}_{yy,kj}.nii.gz + *_metadata.tsv`（含 `run / word_label / pair_id`）；**无需**再跑 LSS 与 stacking。
 
 ROI family 口径（沿用第 0 节定义）：
@@ -507,11 +509,11 @@ ROI family 口径（沿用第 0 节定义）：
 - `$manifest`（`include_in_rsa=true` 的 ROI manifest）
 
 推荐运行顺序与依赖：
-- 先跑 1）Primary condition-level RDM + 4-phase trajectory（生成 5 点 tidy CSV 与组水平统计）。
+- 先跑 1）Primary condition-level RDM（同时生成兼容用的 5 点总表，以及主文需要的 `word-level` / `learning` 两套拆分表与组水平统计）。
 - 2）与 3）可与 1）并行（读取相同 pattern，互不写入同一目录）。
 - 最后跑 4）、5）绘图（依赖前三步产物）。
 
-### P11.1 Primary: Learning condition-level RDM + four-phase trajectory
+### P11.1 Primary: Learning condition-level RDM + split profiles
 
 ```powershell
 foreach ($roi in $primaryRois) {
@@ -527,10 +529,18 @@ foreach ($roi in $primaryRois) {
 默认产物（`{roi_tag}` 由 `METAPHOR_ROI_SET` 决定；主 family 会得到 `meta_metaphor` 与 `meta_spatial` 两套）：
 
 - `$paper/qc/learning_condition_rdm_{roi_tag}/learning_condition_rdm_subject.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/word_level_profile_{roi_tag}.csv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/word_level_profile_group_one_sample.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/word_level_profile_group_pairwise.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/learning_profile_{roi_tag}.csv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/learning_profile_group_one_sample.tsv`
+- `$paper/qc/learning_condition_rdm_{roi_tag}/learning_profile_group_pairwise.tsv`
 - `$paper/qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_{roi_tag}.csv`
 - `$paper/qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_one_sample.tsv`
 - `$paper/qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_pairwise.tsv`
 - `$paper/qc/learning_condition_rdm_{roi_tag}/learning_condition_rdm_qc.tsv`
+- `$paper/tables_si/table_word_level_profile_{roi_tag}.tsv`
+- `$paper/tables_si/table_learning_profile_{roi_tag}.tsv`
 - `$paper/tables_si/table_four_phase_trajectory_{roi_tag}.tsv`
 
 ### P11.2 Secondary: Cross-phase constituent-to-sentence reinstatement
@@ -577,9 +587,17 @@ foreach ($roi in $primaryRois) {
 - `$paper/qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_qc.tsv`
 - `$paper/tables_si/table_learning_within_item_reliability_{roi_tag}.tsv`
 
-### P11.4 Figure: Four-phase trajectory (主图, 仅 primary family)
+### P11.4 Figure: Split significance profiles (主图, 仅 primary family)
 
-依赖：P11.1 在 `$primaryRois` 下产出的 `four_phase_trajectory_{roi_tag}.csv` 与 `four_phase_trajectory_group_one_sample.tsv`。
+依赖：P11.1 在 `$primaryRois` 下产出的：
+- `word_level_profile_{roi_tag}.csv` + `word_level_profile_group_one_sample.tsv` + `word_level_profile_group_pairwise.tsv`
+- `learning_profile_{roi_tag}.csv` + `learning_profile_group_one_sample.tsv` + `learning_profile_group_pairwise.tsv`
+
+作图口径：
+- **不要求折线图**，默认使用更稳妥的“柱状图 + 被试散点 + phase 间显著性括号”。
+- `word-level` 图展示 `pre / post / retrieval` 三个 phase，并重点标注 `post vs pre`、`retrieval vs post`、`retrieval vs pre` 是否显著。
+- `learning` 图展示 `run3 / run4` 两个 phase，并重点标注 `run4 vs run3` 是否显著。
+- 旧的 `four_phase_trajectory_{roi_tag}.csv` 若存在，会作为兼容输入被脚本内部切分；但**不再**作为主文 trajectory 叙述依据。
 
 ```powershell
 foreach ($roi in $primaryRois) {
@@ -591,8 +609,10 @@ foreach ($roi in $primaryRois) {
 
 默认产物：
 
-- `$paper/figures_main/fig_four_phase_trajectory_{roi_tag}.png`
-- `$paper/figures_main/fig_four_phase_trajectory_{roi_tag}.pdf`
+- `$paper/figures_main/fig_word_level_profile_{roi_tag}.png`
+- `$paper/figures_main/fig_word_level_profile_{roi_tag}.pdf`
+- `$paper/figures_main/fig_learning_profile_{roi_tag}.png`
+- `$paper/figures_main/fig_learning_profile_{roi_tag}.pdf`
 
 ### P11.5 Figure: Reinstatement + within-item reliability (SI 附图, 仅 primary family)
 
@@ -655,13 +675,14 @@ foreach ($roi in $glmReferenceRois) {
 }
 ```
 
-产物 `{roi_tag} = main_functional`，写入 `$paper/qc/learning_condition_rdm_main_functional/` 与 `$paper/tables_si/table_four_phase_trajectory_main_functional.tsv`；**不得**进入主文 FDR family 或主图。
+产物 `{roi_tag} = main_functional`，写入 `$paper/qc/learning_condition_rdm_main_functional/` 与 `$paper/tables_si/table_word_level_profile_main_functional.tsv` / `$paper/tables_si/table_learning_profile_main_functional.tsv` / `$paper/tables_si/table_four_phase_trajectory_main_functional.tsv`；**不得**进入主文 FDR family 或主图。
 
 ### 依赖关系一览
 
 - P11.1 是 P11.4 的前置。
 - P11.2 与 P11.3 互不依赖，可与 P11.1 并行。
 - P11.5 依赖 P11.2 + P11.3。
+- P11.4 主文图现在拆成两个模块：`word-level profile` 与 `learning sentence-level profile`；不再输出单张五点 trajectory 主图。
 - P11.6 / P11.7 只产表，不生成 `figures_main/`；**不得**与 `$primaryRois` 合并到同一 FDR family。
 - 本章节所有脚本**不会**修改 `stack_patterns.py` 与 LSS 产物，也**不会**改写 pre/post/retrieval 已有 RSA primary 结果。
 
@@ -749,7 +770,7 @@ foreach ($roi in $networkRois) {
 ```
 
 产物：
-- `$paper/qc/language_tom_network_sensitivity_{roi_tag}/step5c_summary.tsv / edge_summary.tsv / trajectory_summary.tsv / retrieval_summary.tsv / missing_sources.tsv / sensitivity_manifest.json`
+- `$paper/qc/language_tom_network_sensitivity_{roi_tag}/step5c_summary.tsv / edge_summary.tsv / word_level_profile_summary.tsv / learning_profile_summary.tsv / trajectory_compatibility_summary.tsv / retrieval_summary.tsv / missing_sources.tsv / sensitivity_manifest.json`
 - `$paper/tables_si/table_language_tom_network_sensitivity_{roi_tag}.tsv`
 
 所有行带 `family="SI_sensitivity"`、`in_main_fdr_family=false`。
@@ -787,11 +808,12 @@ Variants：`run3_to_retrieval`、`run4_to_retrieval`、`max_run_to_retrieval`。
 
 产物：
 - `$paper/qc/hippocampal_binding_summary_{roi_tag}/subfamily_rois.tsv`
-- `$paper/qc/hippocampal_binding_summary_{roi_tag}/{step5c,edge,trajectory,retrieval,ers}_subfamily_fdr.tsv`（subfamily 内重做 BH-FDR）
+- `$paper/qc/hippocampal_binding_summary_{roi_tag}/{step5c,edge,word_level_profile,learning_profile,trajectory_compatibility,reinstatement,reliability,retrieval,ers}_subfamily_fdr.tsv`（subfamily 内重做 BH-FDR）
 - `$paper/qc/hippocampal_binding_summary_meta_hipp_subfamily/combined_subfamily_fdr.tsv`
 - `$paper/tables_main/table_hippocampal_binding_summary_meta_hipp_subfamily.tsv`
 
 subfamily 定义：`theory_role ∈ {hippocampal_binding, scene_context_binding}` 或 ROI 名命中 `(?i)hippocamp|PPA|PHG`。
+依赖提醒：B2 依赖 Step5C + edge + retrieval + 本轮 split profiles + reinstatement + reliability + ERS（若已有）结果文件都已存在；脚本本身不重算任何 RSA。
 
 ### P12.C1 Memory-strength parametric RSA（gated by G1）
 
@@ -841,6 +863,4 @@ subfamily 定义：`theory_role ∈ {hippocampal_binding, scene_context_binding}
 - P12.C2 依赖已有的 `$paper/qc/gppi_results_*/gppi_group_summary.tsv`（Gate G2），与 B1/B2 互相独立。
 - A1 的 SI sensitivity 与 B1/B2/C1/C2 之间**不共享 BH-FDR family**；论文 writeup 里分两处报告。
 - 所有 P12 脚本**不修改** `stack_patterns.py` / LSS 产物 / P1–P11 已有 RSA 结果；仅新增 `$paper/qc/<新目录>/` 与 `$paper/tables_main/tables_si/` 下的新表。
-
-
 

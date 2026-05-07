@@ -84,13 +84,15 @@ from common.roi_library import (  # noqa: E402
 CONDITIONS = ["yy", "kj"]
 LEARNING_RUNS = [3, 4]
 PHASE_ORDER = ["pre", "run3", "run4", "post", "retrieval"]
-PAIRWISE_CONTRASTS = [
-    ("run3", "run4"),
-    ("run3", "pre"),
-    ("run4", "post"),
-    ("post", "retrieval"),
-    ("pre", "post"),
-    ("pre", "retrieval"),
+WORD_LEVEL_PHASES = ["pre", "post", "retrieval"]
+LEARNING_PHASES = ["run3", "run4"]
+WORD_LEVEL_CONTRASTS = [
+    ("post", "pre"),
+    ("retrieval", "post"),
+    ("retrieval", "pre"),
+]
+LEARNING_CONTRASTS = [
+    ("run4", "run3"),
 ]
 
 
@@ -448,11 +450,21 @@ def build_four_phase_trajectory(
     return trajectory_rows, qc_rows
 
 
-def _group_one_sample_table(trajectory: pd.DataFrame) -> pd.DataFrame:
-    if trajectory.empty:
+def _subset_phase_frame(frame: pd.DataFrame, phases: list[str]) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    out = frame[frame["phase"].astype(str).isin(phases)].copy()
+    if out.empty:
+        return out
+    out["phase"] = pd.Categorical(out["phase"], categories=phases, ordered=True)
+    return out.sort_values(["roi_set", "roi", "subject", "phase"]).reset_index(drop=True)
+
+
+def _group_one_sample_table(frame: pd.DataFrame, *, phases: list[str]) -> pd.DataFrame:
+    if frame.empty:
         return pd.DataFrame()
     rows: list[dict[str, object]] = []
-    for keys, subset in trajectory.groupby(["roi_set", "roi", "phase"], sort=False):
+    for keys, subset in frame.groupby(["roi_set", "roi", "phase"], sort=False):
         roi_set, roi, phase = keys
         summary = _one_sample(subset["between_minus_within"].to_numpy(dtype=float))
         rows.append(
@@ -472,13 +484,20 @@ def _group_one_sample_table(trajectory: pd.DataFrame) -> pd.DataFrame:
     for _, idx in frame.groupby(["roi_set"], dropna=False).groups.items():
         idx = list(idx)
         frame.loc[idx, "q_bh_within_roi_set"] = _bh_fdr(frame.loc[idx, "p"])
+    frame["phase"] = pd.Categorical(frame["phase"], categories=phases, ordered=True)
     return frame.sort_values(["roi_set", "phase", "q_bh_within_roi_set", "p"], na_position="last")
 
 
-def _group_pairwise_table(trajectory: pd.DataFrame) -> pd.DataFrame:
-    if trajectory.empty:
+def _group_pairwise_table(
+    frame: pd.DataFrame,
+    *,
+    phases: list[str],
+    pairwise_contrasts: list[tuple[str, str]],
+    module_label: str,
+) -> pd.DataFrame:
+    if frame.empty:
         return pd.DataFrame()
-    pivot = trajectory.pivot_table(
+    pivot = frame.pivot_table(
         index=["roi_set", "roi", "subject"],
         columns="phase",
         values="between_minus_within",
@@ -486,7 +505,7 @@ def _group_pairwise_table(trajectory: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
     rows: list[dict[str, object]] = []
     for (roi_set, roi), subset in pivot.groupby(["roi_set", "roi"], sort=False):
-        for phase_a, phase_b in PAIRWISE_CONTRASTS:
+        for phase_a, phase_b in pairwise_contrasts:
             if phase_a not in subset.columns or phase_b not in subset.columns:
                 continue
             a_values = pd.to_numeric(subset[phase_a], errors="coerce").to_numpy(dtype=float)
@@ -495,6 +514,7 @@ def _group_pairwise_table(trajectory: pd.DataFrame) -> pd.DataFrame:
             rows.append(
                 {
                     "analysis_type": "paired_t",
+                    "module": module_label,
                     "roi_set": roi_set,
                     "roi": roi,
                     "metric": "between_minus_within",
@@ -522,10 +542,13 @@ def _group_pairwise_table(trajectory: pd.DataFrame) -> pd.DataFrame:
     for _, idx in frame.groupby(["roi_set"], dropna=False).groups.items():
         idx = list(idx)
         frame.loc[idx, "q_bh_within_roi_set"] = _bh_fdr(frame.loc[idx, "p"])
+    phase_rank = {phase: idx for idx, phase in enumerate(phases)}
+    frame["phase_a_order"] = frame["phase_a"].map(phase_rank)
+    frame["phase_b_order"] = frame["phase_b"].map(phase_rank)
     return frame.sort_values(
-        ["roi_set", "roi", "phase_a", "phase_b", "q_bh_within_roi_set", "p"],
+        ["roi_set", "roi", "phase_a_order", "phase_b_order", "q_bh_within_roi_set", "p"],
         na_position="last",
-    )
+    ).drop(columns=["phase_a_order", "phase_b_order"])
 
 
 def main() -> None:
@@ -645,17 +668,76 @@ def main() -> None:
         tables_si / f"table_four_phase_trajectory_{roi_tag}.tsv",
     )
 
+    # -------- 主文拆成两个模块：word-level / learning-level --------
+    word_level_frame = _subset_phase_frame(trajectory_frame, WORD_LEVEL_PHASES)
+    learning_profile_frame = _subset_phase_frame(trajectory_frame, LEARNING_PHASES)
+
+    write_table(word_level_frame, output_dir / f"word_level_profile_{roi_tag}.csv")
+    write_table(
+        word_level_frame,
+        tables_si / f"table_word_level_profile_{roi_tag}.tsv",
+    )
+    write_table(
+        learning_profile_frame,
+        output_dir / f"learning_profile_{roi_tag}.csv",
+    )
+    write_table(
+        learning_profile_frame,
+        tables_si / f"table_learning_profile_{roi_tag}.tsv",
+    )
+
     if trajectory_qc:
         write_table(
             pd.DataFrame(trajectory_qc),
             output_dir / "four_phase_trajectory_qc.tsv",
         )
 
-    one_sample_frame = _group_one_sample_table(trajectory_frame)
+    one_sample_frame = _group_one_sample_table(trajectory_frame, phases=PHASE_ORDER)
     write_table(one_sample_frame, output_dir / "four_phase_trajectory_group_one_sample.tsv")
 
-    pairwise_frame = _group_pairwise_table(trajectory_frame)
+    pairwise_frame = _group_pairwise_table(
+        trajectory_frame,
+        phases=PHASE_ORDER,
+        pairwise_contrasts=WORD_LEVEL_CONTRASTS + LEARNING_CONTRASTS,
+        module_label="combined_compatibility",
+    )
     write_table(pairwise_frame, output_dir / "four_phase_trajectory_group_pairwise.tsv")
+
+    word_level_one_sample = _group_one_sample_table(
+        word_level_frame, phases=WORD_LEVEL_PHASES
+    )
+    write_table(
+        word_level_one_sample,
+        output_dir / "word_level_profile_group_one_sample.tsv",
+    )
+    word_level_pairwise = _group_pairwise_table(
+        word_level_frame,
+        phases=WORD_LEVEL_PHASES,
+        pairwise_contrasts=WORD_LEVEL_CONTRASTS,
+        module_label="word_level",
+    )
+    write_table(
+        word_level_pairwise,
+        output_dir / "word_level_profile_group_pairwise.tsv",
+    )
+
+    learning_one_sample = _group_one_sample_table(
+        learning_profile_frame, phases=LEARNING_PHASES
+    )
+    write_table(
+        learning_one_sample,
+        output_dir / "learning_profile_group_one_sample.tsv",
+    )
+    learning_pairwise = _group_pairwise_table(
+        learning_profile_frame,
+        phases=LEARNING_PHASES,
+        pairwise_contrasts=LEARNING_CONTRASTS,
+        module_label="learning_sentence_level",
+    )
+    write_table(
+        learning_pairwise,
+        output_dir / "learning_profile_group_pairwise.tsv",
+    )
 
     save_json(
         {
@@ -668,10 +750,15 @@ def main() -> None:
             "n_trajectory_subjects": len(traj_subjects),
             "n_learning_rows": int(len(learning_frame)),
             "n_trajectory_rows": int(len(trajectory_frame)),
+            "n_word_level_rows": int(len(word_level_frame)),
+            "n_learning_profile_rows": int(len(learning_profile_frame)),
             "n_qc_rows": int(len(qc_frame)),
             "n_failures": int(len(failures_frame)),
             "phases": PHASE_ORDER,
-            "pairwise_contrasts": [list(pair) for pair in PAIRWISE_CONTRASTS],
+            "word_level_phases": WORD_LEVEL_PHASES,
+            "learning_phases": LEARNING_PHASES,
+            "word_level_contrasts": [list(pair) for pair in WORD_LEVEL_CONTRASTS],
+            "learning_contrasts": [list(pair) for pair in LEARNING_CONTRASTS],
             "outputs": {
                 "learning_subject_tsv": str(
                     output_dir / "learning_condition_rdm_subject.tsv"
@@ -685,6 +772,22 @@ def main() -> None:
                 ),
                 "pairwise_tsv": str(
                     output_dir / "four_phase_trajectory_group_pairwise.tsv"
+                ),
+                "word_level_csv": str(output_dir / f"word_level_profile_{roi_tag}.csv"),
+                "word_level_one_sample_tsv": str(
+                    output_dir / "word_level_profile_group_one_sample.tsv"
+                ),
+                "word_level_pairwise_tsv": str(
+                    output_dir / "word_level_profile_group_pairwise.tsv"
+                ),
+                "learning_profile_csv": str(
+                    output_dir / f"learning_profile_{roi_tag}.csv"
+                ),
+                "learning_profile_one_sample_tsv": str(
+                    output_dir / "learning_profile_group_one_sample.tsv"
+                ),
+                "learning_profile_pairwise_tsv": str(
+                    output_dir / "learning_profile_group_pairwise.tsv"
                 ),
                 "qc_tsv": str(output_dir / "learning_condition_rdm_qc.tsv"),
             },

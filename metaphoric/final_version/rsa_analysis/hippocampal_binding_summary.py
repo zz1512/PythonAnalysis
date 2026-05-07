@@ -8,8 +8,10 @@
 本脚本**不重新计算 RSA**；它只做：
 
 1. 用 ROI manifest 的 ``theory_role`` 或 ROI 命名规则筛出 subfamily ROI。
-2. 读取 4 个主 RSA 脚本已经产出的 group/subject 级表格
-   （step5c / edge / trajectory / retrieval / ERS if present）。
+2. 读取已有 RSA 脚本已经产出的 group/subject 级表格
+   （step5c / edge / word-level profile / learning profile /
+    constituent-to-sentence reinstatement / within-item reliability /
+    retrieval / ERS if present）。
 3. 在 subfamily 内部重新做 BH-FDR，输出 tidy 表。
 
 subfamily 定义（默认）：
@@ -62,9 +64,25 @@ CANDIDATE_SOURCES: dict[str, list[str]] = {
     "edge": [
         "qc/edge_specificity_{roi_tag}/edge_specificity_group.tsv",
     ],
-    "trajectory": [
+    "word_level_profile": [
+        "qc/learning_condition_rdm_{roi_tag}/word_level_profile_group_one_sample.tsv",
+        "qc/learning_condition_rdm_{roi_tag}/word_level_profile_group_pairwise.tsv",
+    ],
+    "learning_profile": [
+        "qc/learning_condition_rdm_{roi_tag}/learning_profile_group_one_sample.tsv",
+        "qc/learning_condition_rdm_{roi_tag}/learning_profile_group_pairwise.tsv",
+    ],
+    "trajectory_compatibility": [
         "qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_one_sample.tsv",
         "qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_pairwise.tsv",
+    ],
+    "reinstatement": [
+        "qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_group_one_sample.tsv",
+        "qc/cross_phase_reinstatement_{roi_tag}/cross_phase_reinstatement_group_run_contrast.tsv",
+    ],
+    "reliability": [
+        "qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_group_one_sample.tsv",
+        "qc/learning_within_item_reliability_{roi_tag}/learning_within_item_reliability_group_yy_vs_kj.tsv",
     ],
     "retrieval": [
         "qc/retrieval_geometry_{roi_tag}/retrieval_geometry_group_fdr.tsv",

@@ -26,7 +26,9 @@ Outputs (per ``roi_tag``):
 
   $paper/qc/language_tom_network_sensitivity_{roi_tag}/step5c_summary.tsv
   $paper/qc/language_tom_network_sensitivity_{roi_tag}/edge_summary.tsv
-  $paper/qc/language_tom_network_sensitivity_{roi_tag}/trajectory_summary.tsv
+  $paper/qc/language_tom_network_sensitivity_{roi_tag}/word_level_profile_summary.tsv
+  $paper/qc/language_tom_network_sensitivity_{roi_tag}/learning_profile_summary.tsv
+  $paper/qc/language_tom_network_sensitivity_{roi_tag}/trajectory_compatibility_summary.tsv
   $paper/qc/language_tom_network_sensitivity_{roi_tag}/retrieval_summary.tsv
   $paper/qc/language_tom_network_sensitivity_{roi_tag}/missing_sources.tsv
   $paper/qc/language_tom_network_sensitivity_{roi_tag}/sensitivity_manifest.json
@@ -67,8 +69,8 @@ def _default_base_dir() -> Path:
 
 
 # Per-analysis candidate source files, written by existing primary scripts.
-# The keys are the "source" labels; values are a list of candidate relative
-# paths (first existing one wins). ``{roi_tag}`` is substituted at runtime.
+# The keys are the analysis labels; values are candidate relative paths
+# (first existing one wins). ``{roi_tag}`` is substituted at runtime.
 CANDIDATE_SOURCES: dict[str, list[str]] = {
     "step5c": [
         "qc/step5c_rsa_{roi_tag}/step5c_group_summary.tsv",
@@ -79,7 +81,15 @@ CANDIDATE_SOURCES: dict[str, list[str]] = {
         "qc/edge_specificity_{roi_tag}/edge_specificity_group.tsv",
         "qc/edge_specificity_{roi_tag}/edge_specificity_group_fdr.tsv",
     ],
-    "trajectory": [
+    "word_level_profile": [
+        "qc/learning_condition_rdm_{roi_tag}/word_level_profile_group_one_sample.tsv",
+        "qc/learning_condition_rdm_{roi_tag}/word_level_profile_group_pairwise.tsv",
+    ],
+    "learning_profile": [
+        "qc/learning_condition_rdm_{roi_tag}/learning_profile_group_one_sample.tsv",
+        "qc/learning_condition_rdm_{roi_tag}/learning_profile_group_pairwise.tsv",
+    ],
+    "trajectory_compatibility": [
         "qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_one_sample.tsv",
         "qc/learning_condition_rdm_{roi_tag}/four_phase_trajectory_group_pairwise.tsv",
     ],
