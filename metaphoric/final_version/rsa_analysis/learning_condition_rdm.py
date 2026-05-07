@@ -573,18 +573,27 @@ def main() -> None:
         type=Path,
         default=base_dir / "paper_outputs",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Override output directory. If not set, uses default ROI-tagged path.",
+    )
     args = parser.parse_args()
 
     roi_set_env = current_roi_set()
     roi_tag = sanitize_roi_tag(roi_set_env)
 
-    output_dir = ensure_dir(
-        default_roi_tagged_out_dir(
-            args.paper_output_root / "qc",
-            "learning_condition_rdm",
-            roi_set=roi_set_env,
+    if args.output_dir:
+        output_dir = ensure_dir(args.output_dir)
+    else:
+        output_dir = ensure_dir(
+            default_roi_tagged_out_dir(
+                args.paper_output_root / "qc",
+                "learning_condition_rdm",
+                roi_set=roi_set_env,
+            )
         )
-    )
     tables_si = ensure_dir(args.paper_output_root / "tables_si")
 
     roi_masks_by_set: dict[str, dict[str, Path]] = {}

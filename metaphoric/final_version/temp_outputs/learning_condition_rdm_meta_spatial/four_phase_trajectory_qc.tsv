@@ -1,0 +1,21 @@
+subject	roi_set	roi	phase	ok	fail_reason
+sub-12	meta_spatial	meta_L_PPA_PHG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_L_PPC_SPL	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_L_RSC_PCC	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_L_hippocampus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_L_precuneus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_R_PPA_PHG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_R_PPC_SPL	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_R_RSC_PCC	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_R_hippocampus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_spatial	meta_R_precuneus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-23	meta_spatial	meta_L_PPA_PHG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_L_PPC_SPL	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_L_RSC_PCC	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_L_hippocampus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_L_precuneus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_R_PPA_PHG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_R_PPC_SPL	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_R_RSC_PCC	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_R_hippocampus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_spatial	meta_R_precuneus	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23

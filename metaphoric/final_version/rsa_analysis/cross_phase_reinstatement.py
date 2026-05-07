@@ -471,12 +471,21 @@ def main() -> None:
     parser.add_argument(
         "--paper-output-root", type=Path, default=base_dir / "paper_outputs"
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Override output directory. If not set, uses default ROI-tagged path.",
+    )
     args = parser.parse_args()
 
     roi_tag = sanitize_roi_tag(current_roi_set())
-    output_dir = ensure_dir(
-        args.paper_output_root / "qc" / f"cross_phase_reinstatement_{roi_tag}"
-    )
+    if args.output_dir:
+        output_dir = ensure_dir(args.output_dir)
+    else:
+        output_dir = ensure_dir(
+            args.paper_output_root / "qc" / f"cross_phase_reinstatement_{roi_tag}"
+        )
     tables_si = ensure_dir(args.paper_output_root / "tables_si")
 
     subjects_all = sorted(

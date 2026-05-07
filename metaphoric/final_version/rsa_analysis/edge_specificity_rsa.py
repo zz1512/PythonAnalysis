@@ -43,7 +43,7 @@ if str(FINAL_ROOT) not in sys.path:
     sys.path.append(str(FINAL_ROOT))
 
 from common.final_utils import ensure_dir, read_table, save_json, write_table  # noqa: E402
-from common.roi_library import select_roi_masks  # noqa: E402
+from common.roi_library import sanitize_roi_tag, select_roi_masks  # noqa: E402
 
 
 CONDITION_ALIASES = {
@@ -679,6 +679,8 @@ def main() -> None:
 
     args.conditions = [str(item).strip().lower() for item in args.conditions]
     output_dir = ensure_dir(args.output_dir or (args.paper_output_root / "qc" / "edge_specificity"))
+    tagged_si_outputs = args.output_dir is not None and len(args.roi_sets) == 1
+    table_suffix = f"_{sanitize_roi_tag(args.roi_sets[0])}" if tagged_si_outputs else ""
     tables_main = ensure_dir(args.paper_output_root / "tables_main")
     tables_si = ensure_dir(args.paper_output_root / "tables_si")
 
@@ -712,11 +714,14 @@ def main() -> None:
     write_table(process, output_dir / "edge_process_group.tsv")
     write_table(contrast_process, output_dir / "edge_contrast_process_components.tsv")
     write_table(summary, output_dir / "edge_specificity_group_fdr.tsv")
-    write_table(summary, tables_si / "table_edge_specificity_full.tsv")
-    write_table(process, tables_si / "table_edge_process_group.tsv")
-    write_table(contrast_process, tables_si / "table_edge_contrast_process_components.tsv")
+    write_table(summary, tables_si / f"table_edge_specificity_full{table_suffix}.tsv")
+    write_table(process, tables_si / f"table_edge_process_group{table_suffix}.tsv")
+    write_table(contrast_process, tables_si / f"table_edge_contrast_process_components{table_suffix}.tsv")
     main_table = summary[summary["is_primary_contrast"].astype(bool)].copy() if not summary.empty else summary
-    write_table(main_table, tables_main / "table_edge_specificity.tsv")
+    if tagged_si_outputs:
+        write_table(main_table, tables_si / f"table_edge_specificity{table_suffix}.tsv")
+    else:
+        write_table(main_table, tables_main / "table_edge_specificity.tsv")
 
     save_json(
         {

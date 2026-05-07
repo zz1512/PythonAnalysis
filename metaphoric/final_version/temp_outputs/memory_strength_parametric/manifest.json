@@ -1,0 +1,12 @@
+{
+  "gate": "G1_ers_one_sample",
+  "gate_pass": true,
+  "roi_sets": [
+    "meta_metaphor",
+    "meta_spatial"
+  ],
+  "n_parametric_rows": 108,
+  "n_delta_rows": 2808,
+  "output_dir": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\memory_strength_parametric",
+  "force_run": true
+}

@@ -1,0 +1,96 @@
+{
+  "spec_id": "extend-learning-rsa-trajectory",
+  "metaphor_roi_set": "meta_metaphor",
+  "roi_tag": "meta_metaphor",
+  "roi_sets": [
+    "meta_metaphor"
+  ],
+  "n_learning_subjects": 28,
+  "learning_subjects": [
+    "sub-01",
+    "sub-02",
+    "sub-03",
+    "sub-04",
+    "sub-05",
+    "sub-06",
+    "sub-07",
+    "sub-08",
+    "sub-09",
+    "sub-10",
+    "sub-11",
+    "sub-12",
+    "sub-13",
+    "sub-14",
+    "sub-15",
+    "sub-16",
+    "sub-17",
+    "sub-18",
+    "sub-19",
+    "sub-20",
+    "sub-21",
+    "sub-22",
+    "sub-23",
+    "sub-24",
+    "sub-25",
+    "sub-26",
+    "sub-27",
+    "sub-28"
+  ],
+  "n_trajectory_subjects": 28,
+  "n_learning_rows": 448,
+  "n_trajectory_rows": 1104,
+  "n_word_level_rows": 656,
+  "n_learning_profile_rows": 448,
+  "n_qc_rows": 448,
+  "n_failures": 0,
+  "phases": [
+    "pre",
+    "run3",
+    "run4",
+    "post",
+    "retrieval"
+  ],
+  "word_level_phases": [
+    "pre",
+    "post",
+    "retrieval"
+  ],
+  "learning_phases": [
+    "run3",
+    "run4"
+  ],
+  "word_level_contrasts": [
+    [
+      "post",
+      "pre"
+    ],
+    [
+      "retrieval",
+      "post"
+    ],
+    [
+      "retrieval",
+      "pre"
+    ]
+  ],
+  "learning_contrasts": [
+    [
+      "run4",
+      "run3"
+    ]
+  ],
+  "outputs": {
+    "learning_subject_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\learning_condition_rdm_subject.tsv",
+    "trajectory_csv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\four_phase_trajectory_meta_metaphor.csv",
+    "trajectory_table_si": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\tables_si\\table_four_phase_trajectory_meta_metaphor.tsv",
+    "one_sample_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\four_phase_trajectory_group_one_sample.tsv",
+    "pairwise_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\four_phase_trajectory_group_pairwise.tsv",
+    "word_level_csv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\word_level_profile_meta_metaphor.csv",
+    "word_level_one_sample_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\word_level_profile_group_one_sample.tsv",
+    "word_level_pairwise_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\word_level_profile_group_pairwise.tsv",
+    "learning_profile_csv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\learning_profile_meta_metaphor.csv",
+    "learning_profile_one_sample_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\learning_profile_group_one_sample.tsv",
+    "learning_profile_pairwise_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\learning_profile_group_pairwise.tsv",
+    "qc_tsv": "e:\\PythonAnalysis\\metaphoric\\final_version\\temp_outputs\\learning_condition_rdm_meta_metaphor\\learning_condition_rdm_qc.tsv"
+  }
+}

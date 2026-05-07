@@ -1,0 +1,15 @@
+subject	roi_set	roi	error	traceback
+sub-12	all	all	Missing retrieval_yy image or metadata for sub-12	"Traceback (most recent call last):
+  File ""e:\PythonAnalysis\metaphoric\final_version\rsa_analysis\cross_phase_reinstatement.py"", line 522, in main
+    phase_cache[condition][target_phase] = _load_stage(
+  File ""e:\PythonAnalysis\metaphoric\final_version\rsa_analysis\cross_phase_reinstatement.py"", line 136, in _load_stage
+    raise FileNotFoundError(f""Missing {stage}_{condition} image or metadata for {subject_dir.name}"")
+FileNotFoundError: Missing retrieval_yy image or metadata for sub-12
+"
+sub-23	all	all	Missing retrieval_yy image or metadata for sub-23	"Traceback (most recent call last):
+  File ""e:\PythonAnalysis\metaphoric\final_version\rsa_analysis\cross_phase_reinstatement.py"", line 522, in main
+    phase_cache[condition][target_phase] = _load_stage(
+  File ""e:\PythonAnalysis\metaphoric\final_version\rsa_analysis\cross_phase_reinstatement.py"", line 136, in _load_stage
+    raise FileNotFoundError(f""Missing {stage}_{condition} image or metadata for {subject_dir.name}"")
+FileNotFoundError: Missing retrieval_yy image or metadata for sub-23
+"

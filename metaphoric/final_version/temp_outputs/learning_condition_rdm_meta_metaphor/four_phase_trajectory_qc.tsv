@@ -1,0 +1,17 @@
+subject	roi_set	roi	phase	ok	fail_reason
+sub-12	meta_metaphor	meta_L_AG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_L_IFG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_L_pMTG_pSTS	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_L_temporal_pole	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_R_AG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_R_IFG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_R_pMTG_pSTS	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-12	meta_metaphor	meta_R_temporal_pole	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-12
+sub-23	meta_metaphor	meta_L_AG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_L_IFG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_L_pMTG_pSTS	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_L_temporal_pole	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_R_AG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_R_IFG	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_R_pMTG_pSTS	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23
+sub-23	meta_metaphor	meta_R_temporal_pole	retrieval	False	missing: Missing retrieval_yy image or metadata for sub-23

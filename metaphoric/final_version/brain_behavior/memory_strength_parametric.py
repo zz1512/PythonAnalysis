@@ -164,6 +164,72 @@ def _check_gate_g1(ers_group: pd.DataFrame) -> tuple[bool, pd.DataFrame]:
     return bool(not passing.empty), report
 
 
+def _memory_weighted_ers(items: pd.DataFrame) -> pd.DataFrame:
+    """Compute memory-weighted ERS: remembered - forgot for each subject × ROI × condition."""
+    if items.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    for keys, subset in items.groupby(
+        ["_source_roi_tag", "roi_set", "roi", "condition", "variant"], sort=False
+    ):
+        source_tag, roi_set, roi, condition, variant = keys
+        for subj, ssubset in subset.groupby("subject", sort=False):
+            mem_vals = ssubset.loc[ssubset["memory"].eq(1), "ers"]
+            forget_vals = ssubset.loc[ssubset["memory"].eq(0), "ers"]
+            mean_mem = mem_vals.mean() if not mem_vals.empty else np.nan
+            mean_forget = forget_vals.mean() if not forget_vals.empty else np.nan
+            delta = mean_mem - mean_forget
+            rows.append(
+                {
+                    "_source_roi_tag": source_tag,
+                    "roi_set": roi_set,
+                    "roi": roi,
+                    "condition": condition,
+                    "variant": variant,
+                    "subject": subj,
+                    "mean_remembered": mean_mem,
+                    "mean_forgotten": mean_forget,
+                    "delta": delta,
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(rows)
+
+    # Subject-level one-sample t on delta
+    t_rows: list[dict[str, object]] = []
+    for keys, subset in frame.groupby(
+        ["roi_set", "roi", "condition", "variant"], sort=False
+    ):
+        vals = subset["delta"].dropna()
+        if len(vals) < 5:
+            continue
+        t_stat, p_val = stats.ttest_1samp(vals, 0)
+        t_rows.append(
+            {
+                "roi_set": keys[0],
+                "roi": keys[1],
+                "condition": keys[2],
+                "variant": keys[3],
+                "n_subjects": int(len(vals)),
+                "mean_delta": float(vals.mean()),
+                "std_delta": float(vals.std(ddof=1)),
+                "t": float(t_stat),
+                "p": float(p_val),
+            }
+        )
+
+    if not t_rows:
+        return frame
+
+    t_frame = pd.DataFrame(t_rows)
+    t_frame["q_bh"] = _bh_fdr(t_frame["p"])
+    return frame.merge(t_frame, how="left", on=["roi_set", "roi", "condition", "variant"])
+
+
 def _fit_mixed_gaussian(
     frame: pd.DataFrame, response: str
 ) -> dict[str, object] | None:
@@ -358,6 +424,18 @@ def main() -> None:
         action="store_true",
         help="忽略 Gate G1，无论 B1 结果如何都运行回归（不建议）。",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Override output directory. If not set, uses default ROI-tagged path.",
+    )
+    parser.add_argument(
+        "--ers-root",
+        type=Path,
+        default=None,
+        help="Override ERS results root directory. If not set, uses paper-output-root/qc.",
+    )
     args = parser.parse_args()
 
     tables_main = ensure_dir(args.paper_output_root / "tables_main")
@@ -365,13 +443,10 @@ def main() -> None:
     # 收集 B1 item-level 与 group-level 表
     item_frames: list[pd.DataFrame] = []
     group_frames: list[pd.DataFrame] = []
+    ers_root = args.ers_root or (args.paper_output_root / "qc")
     for roi_set in args.roi_sets:
         roi_tag = sanitize_roi_tag(roi_set)
-        ers_dir = (
-            args.paper_output_root
-            / "qc"
-            / f"encoding_retrieval_similarity_{roi_tag}"
-        )
+        ers_dir = ers_root / f"encoding_retrieval_similarity_{roi_tag}"
         item_path = ers_dir / "ers_item.tsv"
         group_path = ers_dir / "ers_group_one_sample.tsv"
         if item_path.exists():
@@ -398,9 +473,12 @@ def main() -> None:
     # Gate G1 check
     gate_pass, gate_report = _check_gate_g1(group)
     combined_tag = sanitize_roi_tag("meta_mem_strength")
-    out_dir = ensure_dir(
-        args.paper_output_root / "qc" / f"memory_strength_parametric_{combined_tag}"
-    )
+    if args.output_dir:
+        out_dir = ensure_dir(args.output_dir)
+    else:
+        out_dir = ensure_dir(
+            args.paper_output_root / "qc" / f"memory_strength_parametric_{combined_tag}"
+        )
     write_table(gate_report, out_dir / "gate_status.tsv")
 
     if not gate_pass and not args.force_run:
