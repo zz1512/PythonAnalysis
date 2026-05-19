@@ -1,0 +1,187 @@
+metaphoric/final_version/nc_converge/d3_encoding_retrieval_similarity_revived.py
+  4918feced1028f34 1-464 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0b0da76d64a2d74dd38404","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[1,464]}]}]}
+metaphoric/final_version/nc_converge/a4c_multinetwork_composite.py
+  4918feced1028f34 1-290 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0b0da76d64a2d74dd38404","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[1,290]}]}]}
+metaphoric/final_version/nc_converge/voxel_pattern_export.py
+  4918feced1028f34 1-302 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0b0da76d64a2d74dd38404","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[1,302]}]}]}
+metaphoric/final_version/nc_converge/d5_run_level_trajectory_dm.py
+  4918feced1028f34 1-288 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0b0da76d64a2d74dd38404","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[1,288]}]}]}
+metaphoric/final_version/nc_converge/d4_subfield_dm.py
+  4918feced1028f34 1-351 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0b0da76d64a2d74dd38404","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[1,351]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1b9c7336fffa04092f59fb8af8d40e65751f4d45",
+  "prompts": {
+    "4918feced1028f34": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a017d4c5f41188cc77c9b41",
+        "model": "openrouter-2o__dev"
+      },
+      "human_author": "zhangzhi.duole <zhangzhi.duole@bytedance.com>",
+      "messages": [],
+      "total_additions": 1811,
+      "total_deletions": 0,
+      "accepted_lines": 2187,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "metaphoric/final_version/nc_converge/a4c_multinetwork_composite.py": [
+      {
+        "hash": "4918feced1028f34",
+        "line_ranges": [
+          {
+            "Range": [
+              1,
+              290
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0b0da76d64a2d74dd38404",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  1,
+                  290
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "metaphoric/final_version/nc_converge/d3_encoding_retrieval_similarity_revived.py": [
+      {
+        "hash": "4918feced1028f34",
+        "line_ranges": [
+          {
+            "Range": [
+              1,
+              464
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0b0da76d64a2d74dd38404",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  1,
+                  464
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "metaphoric/final_version/nc_converge/d4_subfield_dm.py": [
+      {
+        "hash": "4918feced1028f34",
+        "line_ranges": [
+          {
+            "Range": [
+              1,
+              351
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0b0da76d64a2d74dd38404",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  1,
+                  351
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "metaphoric/final_version/nc_converge/d5_run_level_trajectory_dm.py": [
+      {
+        "hash": "4918feced1028f34",
+        "line_ranges": [
+          {
+            "Range": [
+              1,
+              288
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0b0da76d64a2d74dd38404",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  1,
+                  288
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "metaphoric/final_version/nc_converge/voxel_pattern_export.py": [
+      {
+        "hash": "4918feced1028f34",
+        "line_ranges": [
+          {
+            "Range": [
+              1,
+              302
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0b0da76d64a2d74dd38404",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  1,
+                  302
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "4918feced1028f34": {
+      "tool": "trae",
+      "conversation_id": "6a017d4c5f41188cc77c9b41",
+      "session_id": "6a017d4c5f41188cc77c9b41",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
