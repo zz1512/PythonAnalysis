@@ -1,0 +1,17 @@
+{
+  "t1w": {
+    "datatype": "anat",
+    "suffix": "T1w",
+    "extension": [
+      ".nii.gz"
+    ]
+  },
+  "dwi": {
+    "datatype": "dwi",
+    "suffix": "dwi",
+    "extension": [
+      ".nii.gz"
+    ]
+  }
+}
+

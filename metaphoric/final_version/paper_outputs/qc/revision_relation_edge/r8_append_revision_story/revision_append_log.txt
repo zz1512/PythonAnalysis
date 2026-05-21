@@ -1,0 +1,6 @@
+dry_run=False
+replace_section=False
+skip_if_exists=False
+preview=E:\PythonAnalysis\metaphoric\final_version\paper_outputs\qc\revision_relation_edge\r8_append_revision_story\revision_story_preview.md
+wrote: E:\PythonAnalysis\metaphoric\final_version\result_story_revision.md
+wrote: E:\PythonAnalysis\metaphoric\final_version\result_final_revision.md

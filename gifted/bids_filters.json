@@ -1,0 +1,12 @@
+{
+    "t1w": {
+        "datatype": "anat",
+        "suffix": "T1w",
+        "extension": [".nii.gz"]
+    },
+    "bold": {
+        "datatype": "func",
+        "suffix": "bold",
+        "extension": [".nii.gz"]
+    }
+}

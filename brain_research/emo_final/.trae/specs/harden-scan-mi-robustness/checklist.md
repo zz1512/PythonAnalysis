@@ -1,0 +1,12 @@
+- [x] `utils_network_assignment.py` 支持离线 atlas/centroid 输入，不依赖在线下载即可生成 SCAN 映射表
+- [x] SCAN 映射 QC 输出包含：每个 SCAN 区域最近 ROI、距离（mm）、网络归属、阈值命中，并有距离分布摘要
+- [x] SCAN 阈值敏感性分析（10/15/20/25mm）可一键生成结果表，且结论对阈值变化具有可解释的稳定性描述
+- [x] 至少一种负对照（随机 parcel 或随机 MNI 点）可运行，输出基线分布与经验 p 值，seed 固定可复现
+- [x] Step1/Step2 中 SCAN 标注失败不会静默：会打印 warning，且主流程不中断
+- [x] `step4_maturity_index.py` 支持 bootstrap 模板稳定性输出（MI 的 CI/SD/CV）与成熟阈值敏感性对照表
+- [x] `step4_maturity_index.py` 的新增参数默认不改变旧结果（向后兼容）
+- [x] 行为 success 指标可在数据允许时生成，并能用于 MI 的 partial 关联分析（缺失时提示清晰）
+- [x] 表征复杂性/区分度补充分析可运行，并能用于解释 ISC 上升的性质（至少 ROI 或网络级一种）
+- [x] 所有新增输出均写入 `matrix_dir/gradient_analysis/`，不污染 Phase 1 目录
+- [x] `readall.md` 已同步更新：新增参数/输出/解释（负对照、模板稳定性、确认性 vs 探索性）
+- [x] 语法验证通过：`python -m py_compile` 覆盖所有改动脚本

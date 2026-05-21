@@ -1,0 +1,163 @@
+{
+  "lss_config": {
+    "data_dir": "/path/to/your/fmri/data",
+    "output_dir": "./lss_results",
+    "subjects": [
+      "sub-01",
+      "sub-02",
+      "sub-03",
+      "sub-04",
+      "sub-05"
+    ],
+    "runs": [
+      "run-1",
+      "run-2"
+    ],
+    "task_name": "metaphor",
+    "space": "MNI152NLin2009cAsym",
+    "tr": 2.0,
+    "high_pass_filter": 0.01,
+    "smoothing_fwhm": 6.0,
+    "standardize": true,
+    "detrend": true,
+    "confounds_strategy": [
+      "motion",
+      "high_pass",
+      "wm_csf"
+    ],
+    "n_jobs": -1,
+    "memory_limit": "8GB",
+    "chunk_size": 1000,
+    "enable_validation": true,
+    "save_residuals": false,
+    "save_design_matrices": true
+  },
+  "roi_config": {
+    "output_dir": "./roi_masks",
+    "mni_template_path": "/path/to/mni/template.nii.gz",
+    "sphere_rois": [
+      {
+        "name": "left_IFG",
+        "coordinates": [-45, 20, 10],
+        "radius": 8
+      },
+      {
+        "name": "right_IFG",
+        "coordinates": [45, 20, 10],
+        "radius": 8
+      },
+      {
+        "name": "left_MTG",
+        "coordinates": [-55, -40, 0],
+        "radius": 8
+      },
+      {
+        "name": "right_MTG",
+        "coordinates": [55, -40, 0],
+        "radius": 8
+      }
+    ],
+    "anatomical_rois": [
+      {
+        "name": "left_frontal_pole",
+        "atlas": "Harvard-Oxford",
+        "region": "Frontal Pole",
+        "hemisphere": "left",
+        "threshold": 0.25
+      },
+      {
+        "name": "right_frontal_pole",
+        "atlas": "Harvard-Oxford",
+        "region": "Frontal Pole",
+        "hemisphere": "right",
+        "threshold": 0.25
+      }
+    ],
+    "activation_rois": {
+      "csv_file": "/path/to/activation/coordinates.csv",
+      "radius": 6,
+      "min_cluster_size": 10
+    },
+    "network_rois": [
+      {
+        "name": "default_mode_network",
+        "type": "dmn",
+        "threshold": 0.3
+      },
+      {
+        "name": "language_network",
+        "type": "language",
+        "threshold": 0.3
+      }
+    ],
+    "quality_control": {
+      "min_voxels": 50,
+      "max_voxels": 5000,
+      "check_overlap": true,
+      "overlap_threshold": 0.1,
+      "validate_connectivity": true
+    }
+  },
+  "mvpa_config": {
+    "results_dir": "./mvpa_results",
+    "roi_masks_dir": "./roi_masks",
+    "lss_dir": "./lss_results",
+    "subjects": [
+      "sub-01",
+      "sub-02",
+      "sub-03",
+      "sub-04",
+      "sub-05"
+    ],
+    "runs": [
+      "run-1",
+      "run-2"
+    ],
+    "conditions": {
+      "literal": {
+        "label": 0,
+        "description": "Literal sentences"
+      },
+      "metaphor": {
+        "label": 1,
+        "description": "Metaphorical sentences"
+      }
+    },
+    "svm_params": {
+      "C": 1.0,
+      "kernel": "linear",
+      "class_weight": "balanced",
+      "random_state": 42
+    },
+    "cv_params": {
+      "cv_folds": 5,
+      "stratify": true,
+      "shuffle": true,
+      "random_state": 42
+    },
+    "permutation_params": {
+      "n_permutations": 1000,
+      "random_state": 42,
+      "n_jobs": -1
+    },
+    "correction_params": {
+      "method": "fdr_bh",
+      "alpha": 0.05
+    },
+    "parallel_params": {
+      "n_jobs": -1,
+      "backend": "loky",
+      "batch_size": "auto"
+    },
+    "feature_selection": {
+      "method": "univariate",
+      "k_best": 1000,
+      "score_func": "f_classif"
+    },
+    "preprocessing": {
+      "standardize": true,
+      "detrend": false,
+      "high_pass_filter": null
+    }
+  }
+}

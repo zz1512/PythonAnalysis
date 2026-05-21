@@ -1,0 +1,348 @@
+"""
+stack_patterns.py
+
+用途
+- 将 LSS 产生的单 trial beta maps，按 `phase x condition` 堆叠为 4D NIfTI（最后一维是 trials）。
+- 这是 final_version 里“主线粘合点”：下游 RD/GPS/RSA/MVPA 依赖这里生成的固定文件名。
+
+输入
+- metadata_path: TSV/CSV（默认 `${PYTHON_METAPHOR_ROOT}/lss_betas_final/lss_metadata_index_final.csv`）
+  必需字段（列名可有别名，会在 normalize_metadata 中统一）：
+  - subject: `sub-01` 形式
+  - beta_path 或 beta_file: 单 trial beta 的路径
+  - condition: 原始 trial_type（支持 yyw/yyew/kjw/kjew 等，会归并到 yy/kj）
+  - phase/time: pre/post/learn（可由 run 推断或直接给）
+  - run, trial_id: 用于排序与追溯（推荐有）
+
+输出（output_root/sub-xx/）
+- `{phase}_{condition}.nii.gz`：4D patterns，例如 `pre_yy.nii.gz`、`post_kj.nii.gz`
+- `{phase}_{condition}_metadata.tsv`：与 4D patterns 对齐的 trial 元数据（用于 debug/追溯）
+
+关键约定
+- 会把 `yyw/yyew -> yy`、`kjw/kjew -> kj`，避免生成下游找不到的文件名（如 pre_yyw）。
+- 会把前后测中的 `jx -> baseline`、`jc -> fake`，以支持 baseline 控制验证。
+- 默认排除 `fake`（可用 `--exclude-conditions` 调整）。
+"""
+
+from __future__ import annotations
+
+
+
+import argparse
+import os
+from pathlib import Path
+import sys
+
+import pandas as pd
+
+
+def _final_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in [current.parent, *current.parents]:
+        if parent.name == "final_version":
+            return parent
+    return current.parent
+
+
+FINAL_ROOT = _final_root()
+if str(FINAL_ROOT) not in sys.path:
+    sys.path.append(str(FINAL_ROOT))
+
+from common.final_utils import ensure_dir, read_table, write_table
+from common.pattern_metrics import concat_images
+from common.stimulus_text_mapping import attach_real_word_columns
+
+
+PYTHON_METAPHOR_ROOT = Path(os.environ.get("PYTHON_METAPHOR_ROOT", r"E:\python_metaphor"))
+DEFAULT_METADATA_PATH = PYTHON_METAPHOR_ROOT / "lss_betas_final" / "lss_metadata_index_final.csv"
+DEFAULT_OUTPUT_ROOT = PYTHON_METAPHOR_ROOT / "pattern_root"
+
+
+CONDITION_MAP = {
+    "metaphor": "yy",
+    "yy": "yy",
+    "yyw": "yy",
+    "yyew": "yy",
+    "spatial": "kj",
+    "kj": "kj",
+    "kjw": "kj",
+    "kjew": "kj",
+    "hsc": "yy",
+    "lsc": "kj",
+    "baseline": "baseline",
+    "base": "baseline",
+    "bl": "baseline",
+    "nonlink": "baseline",
+    "no_link": "baseline",
+    "unlinked": "baseline",
+    "jx": "baseline",
+    "fake": "fake",
+    "jc": "fake",
+    "pseudoword": "fake",
+    "pseudo": "fake",
+    "nonword": "fake",
+}
+
+PHASE_MAP = {
+    "pre": "pre",
+    "pre-test": "pre",
+    "post": "post",
+    "post-test": "post",
+    "learn": "learn",
+    "learning": "learn",
+}
+
+
+def normalize_label(value: str, mapping: dict[str, str], default: str | None = None) -> str:
+    text = str(value).strip().lower()
+    mapped = mapping.get(text)
+    if mapped is not None:
+        return mapped
+
+    # Heuristic normalization for common trial_type variants.
+    if text.startswith("yy"):
+        return "yy"
+    if text.startswith("kj"):
+        return "kj"
+    if text == "jx":
+        return "baseline"
+    if "base" in text or text.startswith("bl"):
+        return "baseline"
+    if text == "jc":
+        return "fake"
+    if "fake" in text or "pseudo" in text or "nonword" in text or "jia" in text:
+        return "fake"
+
+    return default if default is not None else text
+
+
+def resolve_beta_path(beta_value: str, metadata_path: Path, subject: str, run: int) -> str:
+    beta_text = str(beta_value).strip()
+    beta_path = Path(beta_text)
+    if beta_path.is_absolute():
+        return str(beta_path.resolve())
+
+    candidates = []
+    if beta_path.parent == Path("."):
+        candidates.append(metadata_path.parent / subject / f"run-{run}" / beta_path.name)
+    candidates.append(metadata_path.parent / beta_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate.resolve())
+
+    # Fall back to the most likely layout used by lss_betas_final.
+    if beta_path.parent == Path("."):
+        return str((metadata_path.parent / subject / f"run-{run}" / beta_path.name).resolve())
+    return str((metadata_path.parent / beta_path).resolve())
+
+
+def normalize_metadata(frame: pd.DataFrame, metadata_path: Path) -> pd.DataFrame:
+    frame = frame.copy()
+    rename_candidates = {
+        "beta_file": "beta_path",
+        "output_map": "beta_path",
+        "map_path": "beta_path",
+        "trial_phase": "phase",
+        "stage": "phase",
+        "analysis_group": "condition",
+    }
+    for source, target in rename_candidates.items():
+        if source in frame.columns and target not in frame.columns:
+            frame[target] = frame[source]
+    if "phase" not in frame.columns and "run" in frame.columns:
+        run_to_phase = {
+            1: "pre", 2: "pre",
+            3: "learn", 4: "learn",
+            5: "post", 6: "post",
+        }
+        inferred = pd.to_numeric(frame["run"], errors="coerce").map(run_to_phase)
+        if inferred.notna().all():
+            frame["phase"] = inferred
+    required = {"subject", "run", "condition", "phase", "beta_path"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"Metadata missing columns: {sorted(missing)}")
+
+    frame["subject"] = frame["subject"].astype(str)
+    frame["run"] = frame["run"].astype(int)
+    frame["condition"] = frame["condition"].map(lambda item: normalize_label(item, CONDITION_MAP))
+    frame["phase"] = frame["phase"].map(lambda item: normalize_label(item, PHASE_MAP))
+    frame["beta_path"] = [
+        resolve_beta_path(beta_value, metadata_path, subject, run)
+        for beta_value, subject, run in zip(frame["beta_path"], frame["subject"], frame["run"])
+    ]
+    if "trial_id" not in frame.columns:
+        frame["trial_id"] = range(1, len(frame) + 1)
+    return frame
+
+
+def augment_with_stimuli_template(frame: pd.DataFrame, stimuli_template: Path | None) -> pd.DataFrame:
+    """
+    Ensure trial metadata contains `word_label` and `pair_id`.
+
+    Rationale:
+    - M3 (embedding) and M7 (memory) require `word_label`.
+    - M2 (pair identity) should use an explicit `pair_id` instead of falling back to `pic_num`.
+    """
+    out = attach_real_word_columns(frame, column_map={"unique_label": "real_word", "word_label": "real_word"})
+    if "word_label" not in out.columns and "unique_label" in out.columns:
+        out["word_label"] = out["unique_label"].astype(str).str.strip()
+    elif "word_label" in out.columns:
+        out["word_label"] = out["word_label"].astype(str).str.strip()
+
+    template_df: pd.DataFrame | None = None
+    if stimuli_template is not None and Path(stimuli_template).exists():
+        try:
+            template_df = read_table(Path(stimuli_template))
+        except Exception:
+            template_df = None
+
+    if template_df is not None and not template_df.empty:
+        template_df = attach_real_word_columns(template_df, column_map={"word_label": "real_word"})
+        # Normalize common string columns.
+        for col in ["unique_label", "word_label", "real_word", "condition", "type"]:
+            if col in template_df.columns:
+                template_df[col] = template_df[col].astype(str).str.strip()
+
+        join_key = None
+        for key in ["word_label", "unique_label", "pic_num"]:
+            if key in out.columns and key in template_df.columns:
+                join_key = key
+                break
+
+        if join_key is not None:
+            cols: list[str] = []
+            for col in [join_key, "word_label", "real_word", "pair_id"]:
+                if col in template_df.columns and col not in cols:
+                    cols.append(col)
+            tpl = template_df[cols].drop_duplicates(subset=[join_key], keep="first")
+            out = out.merge(tpl, on=join_key, how="left", suffixes=("", "_tpl"))
+            if "real_word_tpl" in out.columns:
+                if "real_word" not in out.columns:
+                    out["real_word"] = out["real_word_tpl"]
+                else:
+                    current = out["real_word"].astype(str).str.strip()
+                    mask = out["real_word"].isna() | current.eq("") | current.eq("nan") | current.eq("<NA>")
+                    out.loc[mask, "real_word"] = out.loc[mask, "real_word_tpl"]
+                out = out.drop(columns=["real_word_tpl"])
+            if "pair_id_tpl" in out.columns:
+                tpl_pair = out["pair_id_tpl"].astype(str).str.strip()
+                mask = tpl_pair.ne("") & tpl_pair.ne("nan") & tpl_pair.ne("<NA>")
+                out.loc[mask, "pair_id"] = out.loc[mask, "pair_id_tpl"]
+                out = out.drop(columns=["pair_id_tpl"])
+
+    # Fallbacks (still make the pipeline usable even when template is missing).
+    if "word_label" not in out.columns:
+        if "unique_label" in out.columns:
+            out["word_label"] = out["unique_label"].astype(str).str.strip()
+        else:
+            raise ValueError("Cannot derive `word_label`: missing both `word_label` and `unique_label`.")
+    else:
+        out["word_label"] = out["word_label"].astype(str).str.strip()
+
+    out = attach_real_word_columns(out, column_map={"word_label": "real_word", "unique_label": "real_word"})
+    if "real_word" in out.columns:
+        out["real_word"] = out["real_word"].astype(str).str.strip()
+
+    if "pair_id" not in out.columns:
+        # Use pic_num as best-effort pair identifier; baseline is forced unique to avoid fake pairing.
+        if "pic_num" in out.columns:
+            out["pair_id"] = out["pic_num"].astype(str)
+        elif "unique_label" in out.columns:
+            out["pair_id"] = out["unique_label"].astype(str)
+        else:
+            out["pair_id"] = out["trial_id"].astype(str)
+
+    baseline_mask = out["condition"].astype(str).eq("baseline")
+    if baseline_mask.any():
+        # Make baseline items unique so M2 does not impose pairing structure on baseline.
+        out.loc[baseline_mask, "pair_id"] = (
+            "baseline_" + out.loc[baseline_mask, "word_label"].astype(str)
+        )
+
+    return out
+
+
+def stack_subject(frame: pd.DataFrame, output_dir: Path, exclude_conditions: set[str]) -> None:
+    output_dir = ensure_dir(output_dir)
+    for (phase, condition), cell in frame.groupby(["phase", "condition"]):
+        if cell.empty:
+            continue
+        if condition in exclude_conditions:
+            continue
+        output_image = output_dir / f"{phase}_{condition}.nii.gz"
+        output_meta = output_dir / f"{phase}_{condition}_metadata.tsv"
+        concat_images(cell["beta_path"].tolist(), output_image)
+        # Hard assertion: 4D volume count must match metadata rows.
+        try:
+            import nibabel as nib  # type: ignore
+            img = nib.load(str(output_image))
+            n_vols = int(img.shape[3]) if len(img.shape) >= 4 else int(img.shape[-1])
+            if n_vols != len(cell):
+                raise AssertionError(
+                    f"Stacked image/metadata mismatch at {output_image}: "
+                    f"n_vols={n_vols} vs meta_rows={len(cell)}"
+                )
+        except ImportError:
+            # nibabel is expected in the analysis environment; warn loudly if missing.
+            raise RuntimeError("nibabel is required to validate stacked 4D outputs.")
+        write_table(cell.reset_index(drop=True), output_meta)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Stack single-trial beta maps into phase x condition 4D images.")
+    parser.add_argument(
+        "metadata_path",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_METADATA_PATH,
+        help=f"Trial-level metadata TSV/CSV with beta map paths (default: {DEFAULT_METADATA_PATH}).",
+    )
+    parser.add_argument(
+        "output_root",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT,
+        help=f"Output root, one folder per subject (default: {DEFAULT_OUTPUT_ROOT}).",
+    )
+    parser.add_argument(
+        "--exclude-conditions",
+        nargs="*",
+        default=["fake"],
+        help="Condition labels to exclude from stacking (default: fake).",
+    )
+    parser.add_argument(
+        "--stimuli-template",
+        type=Path,
+        default=None,
+        help="Optional stimuli template (csv/tsv) to add word_label/pair_id into *_metadata.tsv. "
+             "Defaults to rsa_analysis.rsa_config.STIMULI_TEMPLATE when available.",
+    )
+    args = parser.parse_args()
+
+    if not args.metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {args.metadata_path}")
+
+    metadata = normalize_metadata(read_table(args.metadata_path), args.metadata_path)
+
+    stimuli_template = args.stimuli_template
+    if stimuli_template is None:
+        try:
+            from rsa_analysis.rsa_config import STIMULI_TEMPLATE  # type: ignore
+            stimuli_template = Path(STIMULI_TEMPLATE)
+        except Exception:
+            stimuli_template = None
+    metadata = augment_with_stimuli_template(metadata, stimuli_template)
+
+    exclude_conditions = {str(item).strip().lower() for item in args.exclude_conditions if str(item).strip()}
+    for subject, subject_frame in metadata.groupby("subject"):
+        stack_subject(
+            subject_frame.sort_values(["phase", "condition", "run", "trial_id"]),
+            args.output_root / subject,
+            exclude_conditions=exclude_conditions,
+        )
+
+
+if __name__ == "__main__":
+    main()

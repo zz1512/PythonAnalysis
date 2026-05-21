@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "old_locked_path": "E:\\python_metaphor\\paper_outputs\\qc\\retrieval_geometry\\retrieval_pair_metrics.tsv",
+  "new_source_recompute_path": "E:\\PythonAnalysis\\metaphoric\\final_version\\paper_outputs\\source_recompute\\qc\\retrieval_geometry\\retrieval_pair_metrics.tsv",
+  "old_shape": [
+    32760,
+    24
+  ],
+  "new_shape": [
+    32760,
+    24
+  ],
+  "all_key_rows_match": true,
+  "all_values_identical_at_1e_12": true
+}

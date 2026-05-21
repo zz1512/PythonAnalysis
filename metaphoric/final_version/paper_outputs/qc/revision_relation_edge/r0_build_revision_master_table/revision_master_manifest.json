@@ -1,0 +1,6 @@
+{
+  "status": "ok",
+  "source": "E:\\python_metaphor\\paper_outputs\\qc\\final_nc_converge\\s0_build_master_long_table",
+  "learning_behavior_source": "E:\\python_metaphor\\paper_outputs\\qc\\learning_reactivation_mapping\\learning_behavior_item.tsv",
+  "note": "Neural metrics are read from the locked nc_converge master; run3/run4 behavioral fields are source-derived from raw E-Prime CSV files via build_learning_behavior_table.py."
+}
